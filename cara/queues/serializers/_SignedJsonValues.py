@@ -200,22 +200,40 @@ class _SignedJsonValues:
         default: int | None = None,
         default_now: bool = False,
     ) -> int:
+        """The whole second holding this instant (``issued_at``, ``now``)."""
         if value is None:
             if default_now:
                 return int(time.time())
             if default is not None:
                 return default
             raise QueueException("AMQP job timestamp is required.")
+        return int(_SignedJsonValues._instant(value))
+
+    @staticmethod
+    def epoch_at_or_after(value: Any, *, default: int) -> int:
+        """The first whole second at or after this instant (``not_before``).
+
+        The ledger's ``available_at`` is this number, so a floor releases a
+        delayed job up to a second before it was asked for (2026-11-09: all
+        23,064 delayed deliveries of two days), and a retry due now whose two
+        clock reads straddle a second encodes ``not_before`` < ``issued_at``,
+        which the envelope then refuses.
+        """
+        return default if value is None else math.ceil(_SignedJsonValues._instant(value))
+
+    @staticmethod
+    def _instant(value: Any) -> int | float:
+        """A timezone-aware instant, or an epoch number, as an epoch number."""
         if isinstance(value, bool):
             raise QueueException("AMQP job timestamp must be an epoch integer.")
         if isinstance(value, (int, float)):
-            parsed = int(value)
+            parsed = value
         elif isinstance(value, datetime):
             if value.tzinfo is None:
                 raise QueueException("AMQP job timestamps must include a timezone.")
-            parsed = int(value.timestamp())
+            parsed = value.timestamp()
         elif hasattr(value, "timestamp") and callable(value.timestamp):
-            parsed = int(value.timestamp())
+            parsed = value.timestamp()
         else:
             raise QueueException("AMQP job timestamp must be timezone-aware.")
         if parsed < 0:

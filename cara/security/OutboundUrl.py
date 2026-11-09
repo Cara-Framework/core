@@ -51,6 +51,16 @@ DNS_RESOLUTION_TIMEOUT_SECONDS = 3
 
 _Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 
+#: RFC 6052's well-known NAT64 prefix: the low 32 bits are the IPv4 a gateway
+#: would reach, so the address is exactly as public as that IPv4.
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+#: IPv4-compatible (deprecated by RFC 4291) and SIIT IPv4-translated (RFC 6145)
+#: ranges. ``is_global`` calls both public; no public host is addressed by them.
+_RETIRED_IPV4_EMBEDDINGS = (
+    ipaddress.ip_network("::/96"),
+    ipaddress.ip_network("::ffff:0:0:0/96"),
+)
+
 #: Hostnames that reach the loopback interface without ever touching a
 #: resolver, so a structural (DNS-free) gate must reject them by name.
 LOOPBACK_HOSTNAMES = frozenset(
@@ -110,12 +120,14 @@ def decode_obfuscated_ipv4(host: str) -> ipaddress.IPv4Address | None:
 
 
 def _unwrap(ip: _Address) -> _Address:
-    """Follow IPv4-mapped and 6to4 IPv6 forms down to their IPv4."""
+    """Follow IPv4-mapped, 6to4 and NAT64 IPv6 forms down to their IPv4."""
     if isinstance(ip, ipaddress.IPv6Address):
         if ip.ipv4_mapped is not None:
             return ip.ipv4_mapped
         if ip.sixtofour is not None:
             return ip.sixtofour
+        if ip in _NAT64_PREFIX:
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return ip
 
 
@@ -142,6 +154,10 @@ def is_non_public_address(addr: str | _Address) -> bool:
     else:
         ip = addr
     ip = _unwrap(ip)
+    if isinstance(ip, ipaddress.IPv6Address) and any(
+        ip in network for network in _RETIRED_IPV4_EMBEDDINGS
+    ):
+        return True
     return not ip.is_global or ip.is_multicast
 
 

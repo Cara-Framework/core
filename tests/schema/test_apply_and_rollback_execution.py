@@ -43,6 +43,10 @@ class _DB:
         finally:
             self.depth -= 1
 
+    @contextmanager
+    def advisory_session(self, key, connection=None):
+        yield True
+
     def statement(self, query, bindings=(), connection=None):
         self.calls.append((self.depth, query))
         return 1

@@ -40,6 +40,17 @@ _CREATES_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CREATES_FUNCTION_RE = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b", re.IGNORECASE
+)
+_BUILDS_INDEX_RE = re.compile(r"\bCREATE\s+(?:UNIQUE\s+)?INDEX\b", re.IGNORECASE)
+#: An entry carrying a function AND one of these still locks its table.
+_TAKES_TABLE_LOCK_RE = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b"
+    r"|\bCREATE\s+(?:UNIQUE\s+)?INDEX\b|\bALTER\s+TABLE\b",
+    re.IGNORECASE,
+)
+
 #: Extensions live in a schema-wide catalogue, not the table's namespace, and
 #: the entry that installs one is conventionally labelled after the entry
 #: (``ext_pg_trgm``) rather than after the extension.
@@ -287,6 +298,7 @@ def missing_foreign_keys(model: dict, table: str, live: LiveSchema) -> list[Oper
     """
     from cara.schema.ConstraintDrift import (  # local: cycle with ConstraintDrift
         changed_foreign_key,
+        left_not_valid,
         raw_foreign_keys,
     )
 
@@ -300,7 +312,11 @@ def missing_foreign_keys(model: dict, table: str, live: LiveSchema) -> list[Oper
     for key in declared_foreign_keys(model, table):
         name = key["name"]
         if name in live_keys:
-            operations.extend(changed_foreign_key(table, key, live))
+            changed = changed_foreign_key(table, key, live)
+            if not changed and left_not_valid(live, table, name):
+                undone_by = "the ADD CONSTRAINT's reverse removes the constraint"
+                changed = [_validate_foreign_key(table, key, undone_by)]
+            operations.extend(changed)
             continue
         if key["on"] not in live.tables:
             # Nothing to point at yet. The table this key references is itself
@@ -528,9 +544,19 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
         if created <= present:
             continue
         concurrent = "CONCURRENTLY" in up.upper()
-        # An extension install locks no table: additive, no CONCURRENTLY advice.
-        lock_free = concurrent or all(n.startswith("extension:") for n in created)
-        lock_note = ("builds with a write lock; declare it CONCURRENTLY to avoid that",)
+        # An extension install or a stand-alone function locks no table.
+        lock_free = (
+            concurrent
+            or all(n.startswith("extension:") for n in created)
+            or (_CREATES_FUNCTION_RE.search(up) and not _TAKES_TABLE_LOCK_RE.search(up))
+        )
+        # Only an index has a concurrent form: a trigger or a constraint told
+        # to "declare it CONCURRENTLY" could only act on it by deleting it.
+        lock_note = (
+            ("builds with a write lock; declare it CONCURRENTLY to avoid that",)
+            if not lock_free and _BUILDS_INDEX_RE.search(up)
+            else ()
+        )
         preflight_sql, preflight_failure = _unique_index_preflight(up, table, name)
         operations.append(
             Operation(
@@ -544,7 +570,7 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
                 transactional=not concurrent,
                 preflight_sql=preflight_sql,
                 preflight_failure=preflight_failure,
-                notes=() if lock_free else lock_note,
+                notes=lock_note,
             )
         )
     return operations

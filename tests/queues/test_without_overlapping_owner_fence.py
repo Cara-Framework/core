@@ -184,6 +184,9 @@ def test_acquire_fault_throttles_and_never_runs_the_body(monkeypatch, cache) -> 
     assert ran == []
     assert raised.value.key == "sweep"
     assert raised.value.retry_after == mw._effective_ttl(_Job(timeout=60))
+    # Its own words: no peer was seen, so the triage can replay what an outage
+    # dead-lettered, and only a real peer's lock reads as held.
+    assert str(raised.value).startswith(WithoutOverlapping.BACKEND_FAULT_REASON)
 
 
 def test_absent_container_uses_the_process_local_lock(monkeypatch) -> None:

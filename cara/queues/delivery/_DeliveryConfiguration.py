@@ -9,6 +9,8 @@ import pendulum
 
 from cara.exceptions import QueueException
 from cara.facades import Log
+from cara.queues.contracts import UniqueJob
+from cara.queues.JobClassResolver import JobClassResolver
 from cara.queues.serializers import SignedJsonJobSerializer
 
 from .DeliveryEnvelopeExpired import DeliveryEnvelopeExpired
@@ -181,7 +183,44 @@ def _delivery_replay_from_ledger(
     operator: str,
     reason: str,
 ) -> str:
-    """Create an audited immutable replay without requiring a DLQ copy."""
+    """Create an audited immutable replay without requiring a DLQ copy.
+
+    The replay is one more dispatch to the open-row index: when a delivery of
+    the same unique job is already waiting it folds into that row, whose id it
+    returns, and the source stays awaiting replay for a later pass.
+    """
+    try:
+        return _open_replay(self, source_job_id, operator=operator, reason=reason)
+    except UniqueDeliveryConflict as conflict:
+        return conflict.job_id
+
+
+def _replay_unique_key(self, payload: dict[str, Any]) -> str | None:
+    """The ``unique_key`` the worker's read of this job's class needs TODAY.
+
+    The source row may predate the class's current contract, and a replay is
+    signed fresh, so the two are reconciled here: copied, the key of a job that
+    has since become unique was refused at read by every worker (live,
+    2026-11-09, 20 rows of ``PullReceivedFeedbackJob``). A process that cannot
+    import the class (the API holds no services jobs) keeps what was signed.
+    """
+    signed = payload.get("unique_key")
+    descriptor = payload["job"]
+    try:
+        job_class = JobClassResolver.resolve(
+            descriptor["module"],
+            descriptor["class"],
+            allowed_prefixes=self.options.get("allowed_job_prefixes"),
+        )
+    except QueueException:
+        return signed
+    if not issubclass(job_class, UniqueJob):
+        return None
+    return signed if signed is not None else job_class(**descriptor["kwargs"]).unique_id()
+
+
+def _open_replay(self, source_job_id: str, *, operator: str, reason: str) -> str:
+    """Insert the replay child, or return the one already accepted."""
     actor = self._bounded_text(operator, "operator", 200)
     audit_reason = self._safe_persisted_text(
         self._bounded_text(reason, "reason", 1000),
@@ -281,7 +320,7 @@ def _delivery_replay_from_ledger(
                 "JobTracker did not persist a positive replay db_job_id."
             )
         replay_body = SignedJsonJobSerializer.serialize_replay(
-            source_payload,
+            {**source_payload, "unique_key": _replay_unique_key(self, source_payload)},
             new_job_id=replay_job_id,
             new_db_job_id=replay_db_job_id,
             signing_key_id=self.options.get("signing_key_id", ""),

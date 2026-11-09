@@ -17,9 +17,18 @@ Three properties make it safe to run against production:
 
 * **Idempotent by ledger.** Every operation is recorded with its plan id and
   its stable key before the next one starts — for a transactional statement
-  in the same transaction as the statement itself. A re-run after a crash
-  skips what is already ``applied`` and continues — so the answer to "did it
-  get halfway?" is a query, not an inspection of the schema.
+  in the same transaction as the statement itself. An applied operation stops
+  deriving, so a plan stopped partway derives a smaller plan with a different
+  id. Its artifact resumes when the ledger explains that difference exactly:
+  the reviewed operations minus those applied under the reviewed id are the
+  operations that derive now. The work continues under the reviewed id, so one
+  rollback still reverses all of it. The answer to "did it get halfway?" is a
+  query, not an inspection of the schema.
+
+* **One at a time.** A session advisory lock serializes this command and
+  ``schema:rollback`` per database. A second run is refused at once rather
+  than queued, and the lock is taken before the plan is derived, so no run can
+  act on a schema another one is still changing.
 
 * **Lock timeout.** Every transactional statement runs in its own
   transaction under ``SET LOCAL lock_timeout``, so an operation that would
@@ -61,8 +70,10 @@ from cara.facades import DB
 from cara.schema import (
     DESTRUCTIVE,
     LEDGER_TABLE,
+    SCHEMA_CHANGE_LOCK,
     STATUS_APPLIED,
     STATUS_FAILED,
+    from_dict,
     migration_to_run,
     plan_id,
 )
@@ -70,6 +81,12 @@ from cara.support import paths
 
 #: Short on purpose — see the module docstring.
 DEFAULT_LOCK_TIMEOUT_MS = 5000
+
+#: Key range of one backfill transaction. About 0.2 s of a writer's wait at the
+#: measured 39 microseconds per row, on a table where every key needs a fill.
+_BACKFILL_BATCH_KEYS = 5000
+
+_FILL_KIND = "backfill_column"
 
 
 @command(
@@ -131,6 +148,20 @@ DEFAULT_LOCK_TIMEOUT_MS = 5000
 )
 class SchemaApplyCommand(CommandBase):
     def handle(self):
+        """Run the plan, one schema change at a time on this database."""
+        if self.option("dry_run"):
+            return self._apply()
+        with DB.advisory_session(SCHEMA_CHANGE_LOCK) as held:
+            if not held:
+                self.error(
+                    "Another schema:apply or schema:rollback is running on this "
+                    "database. Nothing was applied; run it again when that one "
+                    "has finished."
+                )
+                return 1
+            return self._apply()
+
+    def _apply(self):
         """Re-derive, then execute and record operation by operation."""
         planner = SchemaPlanCommand(self.application)
         planner.set_parsed_options(
@@ -157,11 +188,22 @@ class SchemaApplyCommand(CommandBase):
         # placed after the empty-plan return would report a cheerful "nothing
         # to apply" for a database somebody changed behind the deploy's back.
         artifact = self.option("plan")
+        ledger_explained = False
         if artifact:
-            approved = self._approved_plan_id(artifact)
-            if approved is None:
+            reviewed = self._reviewed_plan(artifact)
+            if reviewed is None:
                 return 2
-            if approved != identifier:
+            approved, reviewed_operations = reviewed
+            ledger_explained = approved != identifier and self._ledger_explains(
+                approved, reviewed_operations, operations
+            )
+            if ledger_explained:
+                identifier = approved
+                self.info(
+                    f"Artifact {artifact}: what the ledger has not applied still "
+                    f"matches the database."
+                )
+            elif approved != identifier:
                 self.error(
                     f"The database has MOVED since {artifact} was reviewed.\n"
                     f"   approved plan: {approved}\n"
@@ -172,7 +214,8 @@ class SchemaApplyCommand(CommandBase):
                     f"'schema:plan --out {artifact}', review it again, redeploy."
                 )
                 return 1
-            self.info(f"Artifact {artifact} still matches the database.")
+            else:
+                self.info(f"Artifact {artifact} still matches the database.")
 
         if refusals:
             self.error(
@@ -183,7 +226,11 @@ class SchemaApplyCommand(CommandBase):
             return 1
 
         if not operations:
-            self.success("Nothing to apply — the deployed schema matches the models.")
+            self.success(
+                f"Already applied: every operation of plan {identifier} is in the ledger."
+                if ledger_explained
+                else "Nothing to apply — the deployed schema matches the models."
+            )
             return 0
 
         destructive = [op for op in operations if op.safety == DESTRUCTIVE]
@@ -210,7 +257,10 @@ class SchemaApplyCommand(CommandBase):
         lock_timeout = int(self.option("lock_timeout") or DEFAULT_LOCK_TIMEOUT_MS)
         done = 0
         for operation in operations:
-            if operation.key in applied:
+            # A fill that still derives runs again: its own IS NULL makes that
+            # safe, and a row written NULL since would stop the SET NOT NULL
+            # behind it on every re-run.
+            if operation.key in applied and operation.kind != _FILL_KIND:
                 continue
             self.info(f"   {operation.describe()}")
             blocker = self._preflight(operation)
@@ -240,10 +290,11 @@ class SchemaApplyCommand(CommandBase):
 
     # ── seams ───────────────────────────────────────────────────────────────
 
-    def _approved_plan_id(self, path: str) -> str | None:
-        """The plan id recorded in a reviewed artifact, or None if unreadable."""
+    def _reviewed_plan(self, path: str) -> tuple[str, list] | None:
+        """The plan id and operations of a reviewed artifact, or None if unreadable."""
         try:
             document = json.loads(Path(path).read_text(encoding="utf-8"))
+            operations = [from_dict(data) for data in document.get("operations") or []]
         except Exception as exc:
             self.error(f"Could not read the plan artifact {path}: {exc}")
             return None
@@ -251,7 +302,31 @@ class SchemaApplyCommand(CommandBase):
         if not approved:
             self.error(f"{path} carries no plan_id — it is not a plan artifact.")
             return None
-        return approved
+        return approved, operations
+
+    def _ledger_explains(self, approved: str, reviewed: list, derived: list) -> bool:
+        """Whether the ledger accounts for all of the artifact's difference.
+
+        The derived plan must be exactly the reviewed one minus the operations
+        recorded under its id. Anything else, including an empty derivation the
+        ledger does not account for, is a schema that moved some other way: an
+        empty plan is what a hand-applied hotfix looks like. A fill the reviewed
+        plan named is the one exception: it still derives after it ran, because
+        a column that is still nullable cannot show it.
+        """
+        applied = self._already_applied(approved)
+        if not applied:
+            return False
+        named = {(op.key, op.forward_sql) for op in reviewed}
+        ran_fill = {
+            (op.key, op.forward_sql)
+            for op in derived
+            if op.kind == _FILL_KIND and op.key in applied
+        }
+        if not ran_fill <= named:
+            return False
+        remaining = {pair for pair in named if pair[0] not in applied}
+        return remaining == {(op.key, op.forward_sql) for op in derived} - ran_fill
 
     def _already_applied(self, plan_id: str) -> set[str]:
         """Operation keys of this plan already recorded as applied.
@@ -310,6 +385,11 @@ class SchemaApplyCommand(CommandBase):
             self._record(plan_id, operation, status=STATUS_APPLIED)
             return
 
+        if operation.batch_column:
+            self._run_in_batches(operation, lock_timeout)
+            self._record(plan_id, operation, status=STATUS_APPLIED)
+            return
+
         if operation.transactional:
             with DB.transaction():
                 DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
@@ -323,6 +403,28 @@ class SchemaApplyCommand(CommandBase):
         # and leak into the next borrower of the pooled connection.
         DB.statement(operation.forward_sql)
         self._record(plan_id, operation, status=STATUS_APPLIED)
+
+    def _run_in_batches(self, operation, lock_timeout: int) -> None:
+        """Run a backfill over its key in short transactions.
+
+        The range is walked rather than "the next rows still NULL", because a
+        row a trigger keeps NULL would come back forever. Rows inserted after
+        the upper bound is read are not walked: they are born under the column.
+        """
+        column = operation.batch_column
+        bounds = DB.select(
+            f'SELECT MIN("{column}") AS low, MAX("{column}") AS high '
+            f'FROM "{operation.table}"'
+        )
+        if not bounds or bounds[0]["low"] is None:
+            return
+        for start in range(bounds[0]["low"] - 1, bounds[0]["high"], _BACKFILL_BATCH_KEYS):
+            with DB.transaction():
+                DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
+                DB.statement(
+                    f'{operation.forward_sql} AND "{column}" > {start} '
+                    f'AND "{column}" <= {start + _BACKFILL_BATCH_KEYS}'
+                )
 
     def _run_generated_migration(self, slug: str) -> None:
         """Execute the generated creator for a table the database lacks.
@@ -366,6 +468,10 @@ class SchemaApplyCommand(CommandBase):
     def _record(
         self, plan_id: str, operation, status: str, error: str | None = None
     ) -> None:
+        """Write one ledger row; a failure never overwrites an ``applied`` one.
+
+        A re-applied row sheds the ``reversed_at`` of the undo it no longer is.
+        """
         DB.statement(
             "INSERT INTO schema_operation "
             "(plan_id, operation_key, kind, table_name, safety, forward_sql, "
@@ -374,7 +480,11 @@ class SchemaApplyCommand(CommandBase):
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW()) "
             "ON CONFLICT (plan_id, operation_key) DO UPDATE SET "
             "status = EXCLUDED.status, error = EXCLUDED.error, "
-            "applied_at = EXCLUDED.applied_at, updated_at = NOW()",
+            "applied_at = EXCLUDED.applied_at, "
+            f"reversed_at = CASE WHEN EXCLUDED.status = '{STATUS_APPLIED}' THEN NULL "
+            "ELSE schema_operation.reversed_at END, updated_at = NOW() "
+            f"WHERE EXCLUDED.status = '{STATUS_APPLIED}' "
+            f"OR schema_operation.status <> '{STATUS_APPLIED}'",
             [
                 plan_id,
                 operation.key,

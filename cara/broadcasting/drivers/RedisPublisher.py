@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 try:
@@ -34,6 +35,8 @@ except ImportError:
     redis_sync = None  # type: ignore[assignment]
 
 from cara.exceptions import BroadcastingConfigurationException
+
+_MAX_CONNECTIONS = 16
 
 
 class RedisPublisher:
@@ -50,6 +53,10 @@ class RedisPublisher:
         self._pool: Any | None = None
         # The first publishes can race here from several executor threads.
         self._lock = threading.Lock()
+        # One thread per pooled socket; threads start only as they are needed.
+        self._executor = ThreadPoolExecutor(
+            max_workers=_MAX_CONNECTIONS, thread_name_prefix="cara-broadcast-publish"
+        )
 
     def client(self) -> Any:
         """Return the shared client, building its pool on first use."""
@@ -64,8 +71,17 @@ class RedisPublisher:
         return self._client
 
     async def publish(self, channel: str, payload: str) -> None:
-        """PUBLISH off the event loop thread."""
-        await asyncio.to_thread(self.client().publish, channel, payload)
+        """PUBLISH off the event loop thread, on this publisher's own threads.
+
+        Not the loop's default executor: ``asyncio.run`` joins that one before
+        it returns, so a publish stuck on a slow Redis would hold a finished
+        job for a full socket timeout, past the drain's bound and into the
+        worker's hard-kill window.
+        """
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            self._executor, self.client().publish, channel, payload
+        )
 
     def close(self) -> None:
         """Release every pooled connection; the next publish rebuilds the pool."""
@@ -88,7 +104,7 @@ class RedisPublisher:
         kwargs: dict[str, Any] = {
             # Sixteen sockets at most; a publish waits up to five seconds for
             # one, then fails like any other Redis error.
-            "max_connections": 16,
+            "max_connections": _MAX_CONNECTIONS,
             "timeout": 5,
             "decode_responses": True,
             # Bounded socket timeouts: without them a black-holed Redis stalls

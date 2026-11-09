@@ -7,12 +7,13 @@ release."* The framework's own tests pin ``VendorCommonsCommand``'s behaviour
 against synthetic trees; only a dry-run over the REAL tree can prove that
 *this product's* kernel still vendors into an importable image.
 
-The gap this closes is not hypothetical. The vendor step folds deep
-``commons.models`` imports onto the ``app.models`` barrel, so a kernel helper
-that the barrel never re-exported resolves fine in development — where the
-deep path still exists — and raises ``ImportError`` at image import. Unit
+The gap this closes is not hypothetical. The vendor step flattens
+``commons.models``, so a deep import that resolves fine in development — where
+the deep path still exists — can raise ``ImportError`` at image import. Unit
 suites, ``arch:check`` and a successful ``docker build`` all stayed green
-while the image was dead on boot.
+while the image was dead on boot. It happened through a kernel helper nothing
+but a submodule of ``shared`` and ``gates`` imported, under barrels too thin to
+reach it — which is why step 5 walks every kernel module, not the barrels.
 
 Staging mirrors the Dockerfile's source stage exactly, including reading each
 repository's ``.dockerignore`` for what the build context excludes (§5: read
@@ -27,16 +28,19 @@ Five steps, each a hard gate:
 2. **vendor** — run ``build:vendor-commons`` boot-free in the sandbox.
 3. **verify** — ``commons/`` is gone and no ``commons.<pkg>`` reference survives.
 4. **compile** — ``compileall`` over the shipped trees.
-5. **import** — import every kernel barrel and prove ``commons`` is unimportable.
+5. **import** — import every module under the kernel packages and prove
+   ``commons`` is unimportable.
 """
 
 from __future__ import annotations
 
 import fnmatch
+import importlib
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Collection
 from pathlib import Path
 
 from cara.architecture.Manifest import Manifest
@@ -101,6 +105,49 @@ def _run(python: str, args: list[str], cwd: Path) -> subprocess.CompletedProcess
 
 class VendorDryRun:
     """Copy → vendor → compile → import, over the product's real tree."""
+
+    @staticmethod
+    def walk_kernel_modules(packages: Collection[str] | None = None) -> int:
+        """Import every module under ``app/<kernel package>`` of the tree in the
+        working directory; print each one that raises ``ImportError``, return 1.
+
+        Step 5 runs this inside the sandbox and CI inside the built image, so
+        both prove the same thing. ``ImportError`` only: a module that needs the
+        booted container raises something else, and that is not what vendoring
+        can break, but it is named and left out of the count because the imports
+        below the raise never ran. A tree with no kernel modules at all is the
+        wrong working directory, never a pass.
+        """
+        if packages is None:
+            packages = Manifest.__dataclass_fields__["kernel_packages"].default
+        modules = sorted(
+            ".".join(
+                path.parent.parts
+                if path.stem == "__init__"
+                else path.with_suffix("").parts
+            )
+            for package in sorted(packages)
+            for path in Path("app", package).rglob("*.py")
+        )
+        if not modules:
+            print(f"no kernel modules under {Path.cwd() / 'app'}")
+            return 1
+        broken: dict[str, str] = {}
+        unverified: dict[str, str] = {}
+        for module in modules:
+            try:
+                importlib.import_module(module)
+            except ImportError as error:
+                broken[module] = f"{type(error).__name__}: {error}"
+            except Exception as error:
+                unverified[module] = type(error).__name__
+        for module, error in broken.items():
+            print(f"{module}: {error}")
+        for module, error in unverified.items():
+            print(f"{module}: not verified, raised {error} without a booted app")
+        imported = len(modules) - len(broken) - len(unverified)
+        print(f"{imported} of {len(modules)} kernel modules import")
+        return 1 if broken else 0
 
     @staticmethod
     def run(manifest: Manifest, python: str | None = None) -> DryRunResult:
@@ -171,20 +218,20 @@ class VendorDryRun:
             result.steps.append(f"compiled {', '.join(targets)}")
 
             # 5) import — the proof the other four steps cannot give.
-            barrels = sorted(f"app.{pkg}" for pkg in manifest.kernel_packages)
             script = (
-                "import importlib, importlib.util as u\n"
-                f"for name in {barrels!r}:\n"
-                "    importlib.import_module(name)\n"
+                "import importlib.util as u\n"
+                "from cara.architecture.VendorDryRun import VendorDryRun as v\n"
+                f"code = v.walk_kernel_modules({sorted(manifest.kernel_packages)!r})\n"
                 "assert u.find_spec('commons') is None, 'commons is still importable'\n"
+                "raise SystemExit(code)\n"
             )
             imported = _run(python, ["-c", script], box)
             if imported.returncode != 0:
                 result.failures.append(
                     "the vendored image does not import:\n"
-                    + (imported.stderr or imported.stdout).strip()[-4000:]
+                    + (imported.stdout + imported.stderr).strip()[-4000:]
                 )
                 return result
-            result.steps.append(f"imported {', '.join(barrels)}")
+            result.steps.append(imported.stdout.strip().splitlines()[-1])
 
         return result

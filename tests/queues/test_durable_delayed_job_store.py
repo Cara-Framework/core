@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import math
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -187,7 +188,7 @@ def test_schedule_registers_future_v2_delivery_and_settles_source_atomically():
         signing_keys={_KID: _KEY},
         allow_not_before=True,
     )
-    assert envelope["not_before"] == int(available.timestamp())
+    assert envelope["not_before"] == math.ceil(available.timestamp())
     decoded = SignedJsonJobSerializer.deserialize(
         registered["body"],
         signing_keys={_KID: _KEY},

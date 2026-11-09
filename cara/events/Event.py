@@ -23,6 +23,7 @@ import time
 from collections.abc import Callable
 from threading import RLock
 
+from cara.broadcasting import drained, pending_listener_tasks
 from cara.context import ExecutionContext
 from cara.events.contracts import Listener
 from cara.exceptions import EventDispatchCycleException, EventNameConflictException
@@ -566,8 +567,9 @@ class Event:
     # only weakly tracks tasks in the loop registry; without an extra
     # strong ref the GC can collect a Task whose owning code went
     # out of scope, and the coroutine simply vanishes mid-flight.
-    # Tasks remove themselves from this set when done.
-    _pending_tasks: set[asyncio.Task] = set()
+    # Tasks remove themselves from this set when done. The set is the one
+    # ``drain_detached_tasks`` waits on before a job's loop ends.
+    _pending_tasks: set[asyncio.Task] = pending_listener_tasks
 
     @classmethod
     def _track(cls, task: asyncio.Task) -> None:
@@ -656,6 +658,8 @@ class Event:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(coro)
+            # This loop ends with the dispatch; a listener's sync broadcast
+            # is only scheduled on it.
+            asyncio.run(drained(coro))
         else:
             Event._track(asyncio.create_task(coro))

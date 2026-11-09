@@ -19,6 +19,7 @@ from typing import get_type_hints as _get_type_hints
 import typer
 from rich import print as rprint
 
+from cara.broadcasting import drained
 from cara.observability import MetricsBase
 
 
@@ -352,7 +353,7 @@ class CommandRunner:
             try:
                 result = self.application.call(inst.handle, **filtered_cli)
                 if inspect.isawaitable(result):
-                    result = asyncio.run(result)
+                    result = asyncio.run(drained(result))
             except Exception as e:
                 _cmd_outcome = "failure"
                 traceback.print_exc()

@@ -34,6 +34,11 @@ from cara.schema.ConstraintDrift import changed_checks, orphaned_unique_constrai
 from cara.schema.Defaults import declared_default_sql, defaults_match, live_default_sql
 from cara.schema.IndexDrift import changed_indexes
 from cara.schema.LiveSchema import LiveSchema, declared_columns
+from cara.schema.NullableBackfill import (
+    batched_backfill,
+    fills_nullable,
+    refuse_partial_fill,
+)
 from cara.schema.Objects import (
     missing_checks,
     missing_foreign_keys,
@@ -65,9 +70,16 @@ _UNBOUNDED_TEXT_TYPES = frozenset({"text", "tiny_text", "long_text"})
 
 
 def plan(
-    models: list[dict], live: LiveSchema
+    models: list[dict],
+    live: LiveSchema,
+    owed_backfills: frozenset[str] = frozenset(),
 ) -> tuple[list[Operation], list[str], list[str]]:
     """Operations to move ``live`` to what ``models`` declare, plus findings.
+
+    ``owed_backfills`` names the ``table.column`` keys the ledger shows added
+    and not yet filled. A nullable column's fill cannot be derived from the
+    schema, where NULL is a legal state and the column already exists, so an
+    apply stopped between the two would otherwise lose the fill for good.
 
     Returns ``(operations, refusals, notices)``, three deliberately different
     things:
@@ -159,7 +171,7 @@ def plan(
 
         for name in sorted(set(declared) - set(live_columns) - set(renames)):
             try:
-                operations.extend(_add_column(table, name, declared[name]))
+                operations.extend(_add_column(table, name, declared))
             except SchemaPlanRefused as refusal:
                 refusals.append(f"{table}.{name}: {refusal}")
 
@@ -191,6 +203,8 @@ def plan(
                 operations.extend(
                     _alter_column(table, name, declared[name], live_columns[name])
                 )
+                if f"{table}.{name}" in owed_backfills and fills_nullable(declared[name]):
+                    operations.append(batched_backfill(table, name, declared))
             except SchemaPlanRefused as refusal:
                 refusals.append(f"{table}.{name}: {refusal}")
 
@@ -222,7 +236,8 @@ def plan(
 # ── column operations ───────────────────────────────────────────────────────
 
 
-def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
+def _add_column(table: str, name: str, columns: dict[str, dict]) -> list[Operation]:
+    declared = columns[name]
     if declared["type"] == "__raw__":
         raise SchemaPlanRefused(
             "declared through raw __indexes__ SQL — apply that entry's own "
@@ -241,24 +256,26 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
     reverse = f'ALTER TABLE "{table}" DROP COLUMN "{name}"'
 
     if declared["nullable"]:
-        return [
-            Operation(
-                kind="add_column",
-                table=table,
-                key=f"{table}.{name}",
-                # The declared default rides on the ADD, so existing rows get
-                # it the way a hand-written migration would give it to them —
-                # in place, without a rewrite, for a constant or now().
-                forward_sql=added if default is None else f"{added} DEFAULT {default}",
-                reverse_sql=reverse,
-                safety=ADDITIVE,
-                reason="nullable column declared by the model",
-                # The column comes back empty; anything written into it since
-                # the add is gone.
-                restores_data=False,
-            )
-        ]
+        add = Operation(
+            kind="add_column",
+            table=table,
+            key=f"{table}.{name}",
+            # The declared default rides on the ADD, so existing rows get
+            # it the way a hand-written migration would give it to them —
+            # in place, without a rewrite, for a constant or now().
+            forward_sql=added if default is None else f"{added} DEFAULT {default}",
+            reverse_sql=reverse,
+            safety=ADDITIVE,
+            reason="nullable column declared by the model",
+            # The column comes back empty; anything written into it since
+            # the add is gone.
+            restores_data=False,
+        )
+        if fills_nullable(declared):
+            return [add, batched_backfill(table, name, columns)]
+        return [add]
 
+    refuse_partial_fill(params)
     backfill = params.get("backfill_from")
     if default is None and backfill is None:
         raise SchemaPlanRefused(
@@ -424,6 +441,7 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
         # exactly as the NOT NULL recipe derives it. That is also what makes
         # the recipe resumable: interrupted after step 1, the re-derived plan
         # is this branch, and it still carries the backfill.
+        refuse_partial_fill(params)
         backfill = params.get("backfill_from")
         fill = backfill if backfill is not None else default
         if fill is not None:

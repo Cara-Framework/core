@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import cara.facades as facades
+from cara.broadcasting import drained
 from cara.commands.CommandBase import CommandBase
 from cara.commands.MakesAutoReload import MakesAutoReload
 from cara.configuration import config
@@ -434,7 +435,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         # Inline, so a concurrency-gate refusal is retried here — no queue
         # runner exists to requeue it (``_ScheduledThrottle``).
         _ScheduledThrottle._run_with_throttle_retry(
-            job_target.__name__, lambda: asyncio.run(_run())
+            job_target.__name__, lambda: asyncio.run(drained(_run()))
         )
 
     def _queue_command(self, command_target: Any, driver_name: str | None = None):

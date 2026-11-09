@@ -31,11 +31,11 @@ from __future__ import annotations
 from typing import Any
 
 # Excel / Sheets / Numbers all treat these as formula-start triggers
-# when they appear as the first character of a cell. TAB and CR are
+# when they appear as the first character of a cell. TAB, CR and LF are
 # themselves OWASP-listed triggers; they are neutralized regardless of the
 # following byte because spreadsheet importers may discard them first.
 _FORMULA_TRIGGERS: tuple[str, ...] = ("=", "+", "-", "@")
-_WHITESPACE_TRIGGERS: tuple[str, ...] = ("\t", "\r")
+_WHITESPACE_TRIGGERS: tuple[str, ...] = ("\t", "\r", "\n")
 
 
 def defuse_csv_cell(value: Any) -> Any:
@@ -49,7 +49,7 @@ def defuse_csv_cell(value: Any) -> Any:
       * strings whose first character is NOT a formula trigger.
 
     For a string whose first character IS a trigger (including
-    when the cell begins with TAB / CR followed by a trigger),
+    when the cell begins with TAB / CR / LF followed by a trigger),
     returns the value with a single apostrophe prefixed. The
     apostrophe is rendered by Excel as a text qualifier — invisible
     in the cell view, present in the file bytes.

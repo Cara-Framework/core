@@ -67,7 +67,9 @@ from cara.facades import DB
 from cara.schema import (
     ADDITIVE,
     DESTRUCTIVE,
+    LEDGER_TABLE,
     LOCKING,
+    STATUS_APPLIED,
     as_dict,
     declared_checks_by_table,
     declared_indexes_by_table,
@@ -135,6 +137,8 @@ from cara.support import base_path
     ],
 )
 class SchemaPlanCommand(CommandBase):
+    _owed_backfills: frozenset[str] = frozenset()
+
     def handle(self):
         """Print the derived, classified plan; never touch the database."""
         try:
@@ -286,6 +290,17 @@ class SchemaPlanCommand(CommandBase):
         self.info("")
         self.info(f"── rehearsal (scratch: {name})")
 
+        # A clone has the deployed shape and no ledger, so it cannot owe a
+        # fill; left in, its own derivation would disagree with this artifact.
+        operations = [
+            op
+            for op in operations
+            if not (
+                op.batch_column
+                and op.key.removesuffix(":backfill") in self._owed_backfills
+            )
+        ]
+        identifier = plan_id(operations)
         artifact = Path(tempfile.gettempdir()) / f"cara-rehearsal-{identifier}.json"
         self._write_artifact(artifact, identifier, operations, notices)
 
@@ -390,4 +405,25 @@ class SchemaPlanCommand(CommandBase):
         live = normalize_declared_indexes(
             live_schema, live, declared_indexes_by_table(models), schema_name
         )
-        return plan(models, live)
+        self._owed_backfills = self._read_owed_backfills()
+        return plan(models, live, self._owed_backfills)
+
+    def _read_owed_backfills(self) -> frozenset[str]:
+        """Columns the ledger records as added and not filled since.
+
+        Since the add, not ever: a fill can sit under a plan other than the
+        column's, so a rollback of the column's plan leaves its row ``applied``
+        and the column that comes back empty would read as filled.
+        """
+        exists = DB.select(f"SELECT to_regclass('{LEDGER_TABLE}') AS oid")
+        if not exists or exists[0]["oid"] is None:
+            return frozenset()
+        rows = DB.select(
+            f"SELECT added.operation_key FROM {LEDGER_TABLE} added "
+            f"WHERE added.kind = 'add_column' AND added.status = '{STATUS_APPLIED}' "
+            f"AND NOT EXISTS (SELECT 1 FROM {LEDGER_TABLE} filled "
+            "WHERE filled.operation_key = added.operation_key || ':backfill' "
+            "AND filled.applied_at >= added.applied_at "
+            f"AND filled.status = '{STATUS_APPLIED}')"
+        )
+        return frozenset(row["operation_key"] for row in rows or [])

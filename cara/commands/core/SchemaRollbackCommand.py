@@ -33,7 +33,12 @@ from __future__ import annotations
 from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.facades import DB
-from cara.schema import LEDGER_TABLE, STATUS_APPLIED, STATUS_REVERSED
+from cara.schema import (
+    LEDGER_TABLE,
+    SCHEMA_CHANGE_LOCK,
+    STATUS_APPLIED,
+    STATUS_REVERSED,
+)
 
 _APPLY_LOCK_TIMEOUT_MS = 5000
 
@@ -73,6 +78,20 @@ _APPLY_LOCK_TIMEOUT_MS = 5000
 )
 class SchemaRollbackCommand(CommandBase):
     def handle(self):
+        """Replay the ledger's reverse statements, one change at a time."""
+        if self.option("dry_run"):
+            return self._rollback()
+        with DB.advisory_session(SCHEMA_CHANGE_LOCK) as held:
+            if not held:
+                self.error(
+                    "Another schema:apply or schema:rollback is running on this "
+                    "database. Nothing was reversed; run it again when that "
+                    "one has finished."
+                )
+                return 1
+            return self._rollback()
+
+    def _rollback(self):
         """Replay the ledger's reverse statements for one plan."""
         plan_id = self.option("plan") or self._latest_plan()
         if not plan_id:
@@ -182,9 +201,15 @@ class SchemaRollbackCommand(CommandBase):
             self._mark_reversed(plan_id, row["operation_key"])
 
     def _mark_reversed(self, plan_id: str, operation_key: str) -> None:
+        """Mark a row reversed, and with a column the fill written into it.
+
+        A backfill has no reverse of its own, so it was skipped and stayed
+        ``applied``: a re-apply of the plan re-added the column and then
+        skipped the fill as already done.
+        """
         DB.statement(
             f"UPDATE {LEDGER_TABLE} SET status = '{STATUS_REVERSED}', "
             "reversed_at = NOW(), updated_at = NOW() "
-            "WHERE plan_id = %s AND operation_key = %s",
-            [plan_id, operation_key],
+            "WHERE plan_id = %s AND operation_key IN (%s, %s)",
+            [plan_id, operation_key, f"{operation_key}:backfill"],
         )

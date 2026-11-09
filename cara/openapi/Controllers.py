@@ -28,6 +28,9 @@ _DECLARED_META = re.compile(r"@meta\(\s*(\w+)\s*\)")
 # The response method that frames a payload as a page rather than a row. It is
 # framework-owned, so it means the same thing in every application.
 _PAGE_RESPONSE_METHOD = "paginated"
+# The resource-layer way to name a success status: ``.with_status(201)``, ahead
+# of the ``.to_response(...)`` that then sends it.
+_RESOURCE_STATUS_METHOD = "with_status"
 _RESPONSE_METHODS = frozenset(
     {
         "download",
@@ -189,7 +192,9 @@ def _request_name(call: ast.Call) -> str | None:
     return None
 
 
-def _status_values(node: ast.AST) -> set[int]:
+def _status_values(
+    node: ast.AST, bindings: dict[str, set[int]] | None = None
+) -> set[int]:
     if isinstance(node, ast.Constant) and isinstance(node.value, int):
         return {node.value}
     if (
@@ -200,8 +205,74 @@ def _status_values(node: ast.AST) -> set[int]:
     ):
         return {int(HTTPStatus[node.attr])}
     if isinstance(node, ast.IfExp):
-        return _status_values(node.body) | _status_values(node.orelse)
+        return _status_values(node.body, bindings) | _status_values(node.orelse, bindings)
+    if isinstance(node, ast.Name) and bindings:
+        return set(bindings.get(node.id, ()))
     return set()
+
+
+def _status_bindings(
+    function: ast.FunctionDef | ast.AsyncFunctionDef, functions: _ACTION_FUNCTIONS
+) -> dict[str, set[int]]:
+    """The statuses each name in ``function`` can hold: its parameter defaults,
+    what the action's own calls pass it, and its local assignments. A status
+    is often one argument of a shared ``_respond(..., status=201)`` helper."""
+    bindings: dict[str, set[int]] = {}
+
+    def bind(name: str, value: ast.AST | None) -> None:
+        if value is not None and (found := _status_values(value)):
+            bindings.setdefault(name, set()).update(found)
+
+    arguments = function.args
+    positional = [*arguments.posonlyargs, *arguments.args]
+    defaulted = positional[len(positional) - len(arguments.defaults) :]
+    for parameter, default in zip(defaulted, arguments.defaults, strict=True):
+        bind(parameter.arg, default)
+    for parameter, default in zip(
+        arguments.kwonlyargs, arguments.kw_defaults, strict=True
+    ):
+        bind(parameter.arg, default)
+
+    for caller in functions:
+        for call in (item for item in ast.walk(caller) if isinstance(item, ast.Call)):
+            target = call.func
+            if not (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+                and target.attr == function.name
+            ):
+                continue
+            for keyword in call.keywords:
+                if keyword.arg is not None:
+                    bind(keyword.arg, keyword.value)
+            for parameter, value in zip(positional[1:], call.args, strict=False):
+                bind(parameter.arg, value)
+
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            bind(node.targets[0].id, node.value)
+    return bindings
+
+
+def _chained_with_status(func: ast.Attribute) -> bool:
+    """Whether a ``.to_response`` call is chained straight onto ``.with_status``:
+    the status that call names is then the one this response answers."""
+    receiver = func.value
+    while isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute):
+        if receiver.func.attr == _RESOURCE_STATUS_METHOD:
+            return func.attr == "to_response"
+        receiver = receiver.func.value
+    return False
+
+
+def _resource_statuses(call: ast.Call, bindings: dict[str, set[int]]) -> set[int]:
+    """The statuses a ``resource.with_status(...)`` call can set."""
+    return _status_values(call.args[0], bindings) or {200} if call.args else {200}
 
 
 def _response_kind(method: str) -> str:
@@ -216,13 +287,15 @@ def _response_kind(method: str) -> str:
     return "envelope"
 
 
-def _response_statuses(call: ast.Call, method: str) -> set[int]:
+def _response_statuses(
+    call: ast.Call, method: str, bindings: dict[str, set[int]] | None = None
+) -> set[int]:
     for keyword in call.keywords:
         if keyword.arg == "status":
-            return _status_values(keyword.value) or {200}
+            return _status_values(keyword.value, bindings) or {200}
     positional_index = {"json": 1, "redirect": 1, "envelope": 2}.get(method)
     if positional_index is not None and len(call.args) > positional_index:
-        return _status_values(call.args[positional_index]) or {200}
+        return _status_values(call.args[positional_index], bindings) or {200}
     if method == "no_content":
         return {204}
     if method == "redirect":

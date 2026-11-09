@@ -64,6 +64,9 @@ class WithoutOverlapping:
     """
 
     REDIS_KEY_PREFIX = "cara:overlap:"
+    #: The throttle's words when no peer was seen: the dead-letter triage
+    #: replays what an outage left, and only a peer's lock reads as held.
+    BACKEND_FAULT_REASON = "Overlap lock backend could not answer"
 
     def __init__(self, key: str | None = None, expire_after: int = 300):
         self.key = key
@@ -87,7 +90,8 @@ class WithoutOverlapping:
             # place (see ``_effective_ttl``).
             owner = self._new_owner()
             ttl = self._effective_ttl(job)
-            if not self._try_acquire(cache, redis_key, owner, ttl):
+            acquired = self._try_acquire(cache, redis_key, owner, ttl)
+            if not acquired:
                 self._log_skip(lock_key)
                 # A peer holds the lock (or the backend could not say it
                 # does not), so this copy did NOT run. Returning
@@ -97,7 +101,9 @@ class WithoutOverlapping:
                 # inverted into silent work LOSS. Come back after the peer's
                 # lease could have expired.
                 raise JobThrottledException(
-                    f"Job {lock_key} skipped: another copy holds the lock",
+                    f"{self.BACKEND_FAULT_REASON} for {lock_key}"
+                    if acquired is None
+                    else f"Job {lock_key} skipped: another copy holds the lock",
                     key=lock_key,
                     retry_after=max(1, int(ttl)),
                 )
@@ -186,20 +192,20 @@ class WithoutOverlapping:
         job_timeout = int(getattr(job, "timeout", 0) or 0)
         return max(int(self.expire_after), job_timeout + self._TTL_BUFFER_S)
 
-    def _try_acquire(self, cache, redis_key: str, owner: str, ttl: int) -> bool:
+    def _try_acquire(self, cache, redis_key: str, owner: str, ttl: int) -> bool | None:
         """Atomic owner-fenced acquire via ``add`` (SET-NX) storing OUR owner
         token so ``forget_if`` can later release only our own lock. Falls back
         to ``has`` + ``put`` only for drivers without ``add`` (a narrow TOCTOU
-        acceptable for those non-Redis fakes). A backend fault is treated as
-        'held' (throttle, not the failure budget) and logged at WARNING so an
-        outage-driven throttle loop is visible."""
+        acceptable for those non-Redis fakes). A backend fault is None: not
+        acquired (throttle, not the failure budget), but no peer was seen, and
+        logged at WARNING so an outage-driven throttle loop is visible."""
         add = getattr(cache, "add", None)
         if callable(add):
             try:
                 return bool(add(redis_key, owner, ttl))
             except cache_backend_fault_types() as exc:
                 self._log_backend_fault(redis_key, "acquire", exc)
-                return False
+                return None
 
         # Fallback path — has + put. Subject to a TOCTOU window between
         # check and write; acceptable degradation when running on a
@@ -211,7 +217,7 @@ class WithoutOverlapping:
             return True
         except cache_backend_fault_types() as exc:
             self._log_backend_fault(redis_key, "acquire", exc)
-            return False
+            return None
 
     @staticmethod
     def _log_skip(lock_key: str) -> None:

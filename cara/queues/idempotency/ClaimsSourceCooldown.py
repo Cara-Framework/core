@@ -32,6 +32,7 @@ from __future__ import annotations
 import pendulum
 
 from cara.configuration import config
+from cara.exceptions import CacheConfigurationException, IdempotencyGateFaultException
 from cara.facades import Cache, Log
 
 
@@ -128,7 +129,8 @@ class ClaimsSourceCooldown:
         owner = self._cooldown_owner()
         stamp = pendulum.now("UTC").isoformat() + (f"|{owner}" if owner else "")
         if Cache.add(time_key, stamp, cooldown_minutes * 60) or (
-            owner and self._take_over_own_cooldown(time_key, owner, stamp, cooldown_minutes)
+            owner
+            and self._take_over_own_cooldown(time_key, owner, stamp, cooldown_minutes)
         ):
             self._idempotency_cooldown_claim = (time_key, stamp)
             Log.debug(
@@ -171,19 +173,28 @@ class ClaimsSourceCooldown:
         orphaned RUNNING). Only the same durable job may take the window over
         — any other dispatch still meets the live cooldown — and the swap is
         compare-and-delete then SETNX, so two takers cannot both win.
+
+        ``False`` means ONE thing: another run holds the window, and the gate
+        settles this job as done without running it. A cache that could not
+        say so is not that answer: its backend fault reaches
+        ``_gate_cannot_ask_cache``, and a window it cannot read is the same
+        throttle, because the key's TTL heals it and nothing has run.
         """
         try:
             current = Cache.get(key)
-            if not (isinstance(current, str) and current.endswith(f"|{owner}")):
-                return False
-            if not Cache.forget_if(key, current):
-                return False
-            taken = bool(Cache.add(key, stamp, cooldown_minutes * 60))
-        except Exception as exc:
+        except CacheConfigurationException as exc:
             Log.warning(
-                "Cooldown take-over failed for %s: %s", key, exc, category="idempotency"
+                "Cooldown window %s is unreadable: %s", key, exc, category="idempotency"
             )
+            raise IdempotencyGateFaultException(
+                f"{IdempotencyGateFaultException.REASON}: {exc}",
+                retry_after=self.GATE_FAULT_RETRY_SECONDS,
+            ) from exc
+        if not (isinstance(current, str) and current.endswith(f"|{owner}")):
             return False
+        if not Cache.forget_if(key, current):
+            return False
+        taken = bool(Cache.add(key, stamp, cooldown_minutes * 60))
         if taken:
             Log.info(
                 "Cooldown %s re-owned by a redelivery of job %s (its earlier run "

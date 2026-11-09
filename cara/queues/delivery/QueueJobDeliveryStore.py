@@ -310,39 +310,71 @@ class QueueJobDeliveryStore:
         ``behind_full_window`` counts the rows of the queues that did NOT
         move and whose window is full, so the alert names the workers
         rather than the relay.
+
+        A queue can also stand below that window on purpose. On a stuck queue
+        with broker room, ``behind_tenant_window`` counts the aged rows
+        ``_claim_next_publish`` refuses because their seller already holds its
+        whole tenant window (the same slot, urgent-slot and central-row rules),
+        and ``behind_moving_queue`` the rows of a queue that published within
+        the budget: a backlog past the age ceiling. Neither is a dead relay.
+        ``behind_no_window`` is what is left on a queue that did not move: aged
+        rows the claim would have published, so nothing but the relay explains
+        them, whatever one seller's window explains beside them.
         """
         snapshot = _DeliveryRecovery._delivery_outbox_health_metrics(self)
         budget = max(int(config("queue.outbox_stall_age_seconds", 300)), 1)
         due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
         row = self._db().select_one(
-            "WITH aged AS (SELECT queue, COUNT(*) AS waiting, "
+            "WITH aged AS (SELECT queue, COUNT(*) AS waiting, COUNT(*) FILTER "
+            "(WHERE available_at < NOW() - make_interval(secs => %s)) AS overdue, "
             f"MIN(available_at) AS oldest FROM {self.table} WHERE {due} "
             "GROUP BY queue HAVING MIN(available_at) "
             "< NOW() - make_interval(secs => %s)), "
-            "judged AS (SELECT aged.waiting, ("
-            "aged.oldest < NOW() - make_interval(secs => %s) OR NOT "
+            "held AS (SELECT slot.queue, COALESCE(slot.tenant_id, 0) AS tenant_key, "
+            f"COUNT(*) AS slots FROM {self.table} AS slot "
+            "WHERE slot.queue IN (SELECT queue FROM aged) "
+            "AND slot.status IN ('pending', 'processing') "
+            "AND (slot.publish_status = 'published' "
+            "OR (slot.publish_status = 'processing' "
+            "AND slot.publish_lease_expires_at > NOW())) "
+            "GROUP BY slot.queue, COALESCE(slot.tenant_id, 0)), "
+            "judged AS (SELECT aged.queue, aged.waiting, aged.overdue, "
+            "aged.oldest < NOW() - make_interval(secs => %s) AS past_ceiling, "
             f"EXISTS (SELECT 1 FROM {self.table} AS moved "
             "WHERE moved.queue = aged.queue "
-            "AND moved.published_at > NOW() - make_interval(secs => %s))"
-            ") AS stuck, ("
-            f"SELECT COUNT(*) FROM {self.table} AS held "
-            "WHERE held.queue = aged.queue "
-            "AND held.status IN ('pending', 'processing') "
-            "AND (held.publish_status = 'published' "
-            "OR (held.publish_status = 'processing' "
-            "AND held.publish_lease_expires_at > NOW()))"
-            ") >= %s AS window_full FROM aged) "
-            "SELECT COUNT(*) FILTER (WHERE stuck) AS stuck_queues, "
-            "COUNT(*) AS aged_queues, COALESCE(SUM(waiting) "
-            "FILTER (WHERE stuck AND window_full), 0) AS behind_full_window "
-            "FROM judged",
+            "AND moved.published_at > NOW() - make_interval(secs => %s)) AS moved, "
+            "COALESCE((SELECT SUM(held.slots) FROM held "
+            "WHERE held.queue = aged.queue), 0) >= %s AS window_full FROM aged), "
+            "refused AS (SELECT candidate.queue, COUNT(*) AS denied "
+            f"FROM {self.table} AS candidate JOIN held "
+            "ON held.queue = candidate.queue AND held.tenant_key = candidate.tenant_id "
+            f"WHERE {due} AND available_at < NOW() - make_interval(secs => %s) "
+            "AND %s > 0 AND held.slots >= %s + CASE WHEN candidate.priority "
+            "IN ('critical', 'high') THEN %s ELSE 0 END GROUP BY candidate.queue) "
+            "SELECT COUNT(*) FILTER (WHERE past_ceiling OR NOT moved) AS stuck_queues, "
+            "COUNT(*) AS aged_queues, COALESCE(SUM(waiting) FILTER "
+            "(WHERE (past_ceiling OR NOT moved) AND window_full), 0) "
+            "AS behind_full_window, COALESCE(SUM(denied) FILTER "
+            "(WHERE (past_ceiling OR NOT moved) AND NOT window_full), 0) "
+            "AS behind_tenant_window, COALESCE(SUM(waiting) FILTER "
+            "(WHERE past_ceiling AND moved AND NOT window_full), 0) "
+            "AS behind_moving_queue, COALESCE(SUM(overdue - COALESCE(denied, 0)) "
+            "FILTER (WHERE NOT moved AND NOT window_full), 0) AS behind_no_window "
+            "FROM judged LEFT JOIN refused USING (queue)",
             [
+                budget,
                 self.STATUS_PENDING,
                 self.PUBLISH_PUBLISHED,
                 budget,
                 budget * self.DRAINING_AGE_MULTIPLE,
                 budget,
                 self.broker_window_per_queue,
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                budget,
+                self.tenant_window_per_queue,
+                self.tenant_window_per_queue,
+                self.tenant_urgent_slots_per_queue,
             ],
         )
         aged_queues = int(self._row_value(row, "aged_queues") or 0)
@@ -351,6 +383,13 @@ class QueueJobDeliveryStore:
             **snapshot,
             "draining": 1.0 if aged_queues and not stuck_queues else 0.0,
             "behind_full_window": float(self._row_value(row, "behind_full_window") or 0),
+            "behind_tenant_window": float(
+                self._row_value(row, "behind_tenant_window") or 0
+            ),
+            "behind_moving_queue": float(
+                self._row_value(row, "behind_moving_queue") or 0
+            ),
+            "behind_no_window": float(self._row_value(row, "behind_no_window") or 0),
         }
 
     def abandon_execution(self, job_id: str, lease_token: str) -> None:

@@ -8,6 +8,7 @@ import importlib
 import inspect
 from typing import Any
 
+from cara.broadcasting import drained
 from cara.configuration import config
 from cara.context import Tenancy
 from cara.exceptions import ConfigurationException
@@ -171,7 +172,7 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
             # Amazon fires lost in an hour).
             _ScheduledThrottle._run_with_throttle_retry(
                 _identifier,
-                lambda: asyncio.run(_run_scoped()),
+                lambda: asyncio.run(drained(_run_scoped())),
                 budget_seconds=_budget,
             )
         except BaseException:

@@ -265,6 +265,32 @@ class DatabaseManager:
         with resolver.transaction(connection_name):
             yield self
 
+    @contextmanager
+    def advisory_session(self, key: int, connection=None):
+        """Hold a session-level advisory lock on a connection of its own.
+
+        Yields True when this session took the lock, False when another
+        session holds it. ``select`` and ``statement`` hand their connection
+        back after every call, so a session lock taken through them is held by
+        whichever pooled handle ran it, or by none once that handle closes.
+        Postgres releases this one if the process dies.
+        """
+        session = self.create_connection_instance(connection)
+        acquired = False
+        try:
+            session.set_cursor()
+            session.statement("SELECT pg_try_advisory_lock(%s) AS acquired", (key,))
+            acquired = bool(session._cursor.fetchone()["acquired"])
+            yield acquired
+        finally:
+            try:
+                if acquired:
+                    session.set_cursor()
+                    session.statement("SELECT pg_advisory_unlock(%s)", (key,))
+            finally:
+                session.open = 0
+                session.close_connection()
+
     def select(self, query, bindings=(), connection=None):
         """Execute a raw SELECT query and return results as list of dicts.
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from typing import Any
+from cara.broadcasting import drained
 from cara.context import Tenancy
 
 from cara._LazyExports import _install_lazy_exports
@@ -134,7 +135,7 @@ def run_through_middleware(job, handler: Callable) -> Any:
             return await res
         return res
 
-    return asyncio.run(run_through_middleware_async(job, async_handler))
+    return asyncio.run(drained(run_through_middleware_async(job, async_handler)))
 
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {

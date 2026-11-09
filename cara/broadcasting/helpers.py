@@ -77,12 +77,23 @@ async def broadcast_to_user_async(
 # swallows) any exception. Mirrors ``cara.events.Event._track``.
 _pending_broadcast_tasks: set[asyncio.Task] = set()
 
+#: ``cara.events.Event``'s fire-and-forget listeners, held here so that the
+#: drain below does not have to import the event layer.
+pending_listener_tasks: set[asyncio.Task] = set()
+
+#: How long the owner of an ending loop waits for detached work. Publishing is
+#: milliseconds; this only runs out when Redis is slow, and a slow Redis costs
+#: the job this much and no more.
+DETACHED_DRAIN_SECONDS = 2.0
+
 
 def _handle_broadcast_task_exception(task: asyncio.Task) -> None:
     try:
         task.result()
     except asyncio.CancelledError:
-        return
+        # Only an ending loop cancels a broadcast, and an owner that drained
+        # has already reported it (``drain_detached_tasks``).
+        _report_abandoned(1, "cara.broadcasting")
     except Exception as e:
         try:
             facades.Log.error(
@@ -109,6 +120,60 @@ def bind_socket_loop(loop: asyncio.AbstractEventLoop) -> None:
     """Record the loop the process's WebSocket connections run on."""
     global _socket_loop
     _socket_loop = loop
+
+
+def _report_abandoned(count: int, category: str) -> None:
+    """Say out loud that detached work died with its event loop."""
+    try:
+        facades.Log.warning(
+            "%s detached task(s) abandoned before they finished: their event loop ended",
+            count,
+            category=category,
+        )
+    except Exception:
+        print(f"[{category}] {count} detached task(s) abandoned", file=sys.stderr)
+
+
+async def drain_detached_tasks(timeout: float = DETACHED_DRAIN_SECONDS) -> None:
+    """Give this loop's detached broadcasts and listeners a bounded moment.
+
+    For the OWNER of a loop that is about to end, only: ``asyncio.run``
+    cancels whatever is left when its coroutine returns, and a job's sync
+    code only ever schedules its broadcast, so a job that returned at once
+    published nothing (live, 2026-11-09: 0 ``order.updated``, 0 ``sent`` in
+    35 minutes). What outlasts ``timeout`` is cancelled and counted once.
+    """
+
+    def _still_running(loop: asyncio.AbstractEventLoop) -> set[asyncio.Task]:
+        # Snapshot first: other threads' loops add to these sets concurrently.
+        tracked = [*pending_listener_tasks, *_pending_broadcast_tasks]
+        return {t for t in tracked if t.get_loop() is loop and not t.done()}
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    # A listener can broadcast as it finishes, so look again after each wait.
+    while (pending := _still_running(loop)) and (left := deadline - loop.time()) > 0:
+        await asyncio.wait(pending, timeout=left, return_when=asyncio.ALL_COMPLETED)
+    if not pending:
+        return
+    for task in pending:
+        task.remove_done_callback(_handle_broadcast_task_exception)
+        task.cancel()
+    _report_abandoned(len(pending), "cara.broadcasting")
+
+
+async def drained(awaitable: Awaitable[Any]) -> Any:
+    """Await ``awaitable``, then drain: wrap the main coroutine of a job's loop.
+
+    ``asyncio.run(drained(job()))``. It wraps the loop's OWNER rather than a
+    job pipeline because the pipeline also runs nested, inline inside another
+    job or a request, where the loop goes on and a wait per inline job would
+    multiply on a slow Redis.
+    """
+    try:
+        return await awaitable
+    finally:
+        await drain_detached_tasks()
 
 
 def _handle_broadcast_future_exception(future: Any) -> None:
@@ -198,4 +263,7 @@ __all__ = [
     "broadcast_event",
     "broadcast_event_async",
     "broadcast_to_user_async",
+    "drain_detached_tasks",
+    "drained",
+    "pending_listener_tasks",
 ]

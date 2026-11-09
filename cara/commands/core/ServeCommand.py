@@ -11,6 +11,7 @@ import importlib.util
 import logging
 import os
 import platform
+import select
 import signal
 import socket
 import subprocess
@@ -29,6 +30,11 @@ from cara.support import LogColors
 _logger = logging.getLogger("cara.serve")
 
 _WS_MAX_FRAME_BYTES = 64 * 1024
+
+_OUTPUT_POLL_SECONDS = 0.2
+_OUTPUT_READ_BYTES = 64 * 1024
+#: How long output may keep arriving once the server itself has exited.
+_EXIT_DRAIN_SECONDS = 2.0
 
 
 @command(
@@ -639,20 +645,31 @@ class ServeCommand(CommandBase):
         try:
             start_time = time.time()
 
-            while True:
-                output = process.stdout.readline()
-                if output:
-                    line = output.strip()
-                    if line:
-                        # Colorize and print the line
-                        colorized_line = self.log_colors.colorize_line(line)
-                        print(colorized_line)
+            def _emit(raw: bytes) -> None:
+                line = raw.decode("utf-8", "replace").strip()
+                if line:
+                    print(self.log_colors.colorize_line(line))
 
-                # Check if process is still running
-                if process.poll() is not None:
-                    break
-
-                time.sleep(0.1)
+            # Read as fast as the server writes: a slow reader fills the 64 KB
+            # pipe, the server's logging blocks, and every request with it.
+            # Raw reads, because a text readline could not be bounded once the
+            # server is gone and a grandchild still holds the pipe open.
+            fd = process.stdout.fileno()
+            partial = b""
+            stop_reading_at = None
+            while stop_reading_at is None or time.monotonic() < stop_reading_at:
+                if select.select([fd], [], [], _OUTPUT_POLL_SECONDS)[0]:
+                    chunk = os.read(fd, _OUTPUT_READ_BYTES)
+                    if not chunk:
+                        break
+                    *lines, partial = (partial + chunk).split(b"\n")
+                    for raw_line in lines:
+                        _emit(raw_line)
+                if stop_reading_at is None and process.poll() is not None:
+                    # What it wrote last is usually the traceback saying why.
+                    stop_reading_at = time.monotonic() + _EXIT_DRAIN_SECONDS
+            _emit(partial)
+            process.wait()
 
         except KeyboardInterrupt:
             self.console.print()

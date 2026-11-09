@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 import time
 import uuid
@@ -48,18 +49,22 @@ def _amqp_delivery_push(self, *jobs: Any, options: dict[str, Any]) -> str | list
 
         explicit_job_id = options.get("job_id")
 
-        if isinstance(job, UniqueJob) and explicit_job_id is None:
-            raise QueueException("UniqueJob dispatch must go through Bus.dispatch().")
         if explicit_job_id is not None and len(jobs) != 1:
             raise QueueException("An explicit job_id requires exactly one job.")
         try:
             job_id = str(uuid.UUID(str(explicit_job_id or uuid.uuid4())))
         except (ValueError, AttributeError, TypeError) as exc:
             raise QueueException("AMQP job_id must be a valid UUID.") from exc
+        # The open-row index is the fold: a direct push of a unique job
+        # folds exactly as ``Bus.dispatch`` does.
         accepted_job_id = self._register_immediate_delivery(
             job=job,
             job_id=job_id,
-            merged_opts=merged_opts,
+            merged_opts=(
+                {**merged_opts, "unique_key": job.unique_id()}
+                if isinstance(job, UniqueJob) and merged_opts.get("unique_key") is None
+                else merged_opts
+            ),
             job_opts=job_opts,
         )
         job_ids.append(accepted_job_id)
@@ -257,7 +262,7 @@ def _amqp_delivery_later(
         delay_seconds = delay
     else:
         delay_seconds = (
-            int(delay.total_seconds()) if hasattr(delay, "total_seconds") else delay
+            math.ceil(delay.total_seconds()) if hasattr(delay, "total_seconds") else delay
         )
 
     # Calculate when job should run

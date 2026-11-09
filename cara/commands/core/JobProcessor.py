@@ -7,6 +7,7 @@ import os
 import threading
 import time
 
+from cara.broadcasting import drained
 from cara.context import Tenancy
 from cara.exceptions import QueueException
 from cara.facades import Log
@@ -121,7 +122,9 @@ class JobProcessor:
         hard_kill.daemon = True
         hard_kill.start()
         try:
-            return asyncio.run(_run_registered())
+            # Outside the job's own timeout: the drain has its own bound, and
+            # a slow Redis must not turn a finished job into a timed-out one.
+            return asyncio.run(drained(_run_registered()))
         except TimeoutError as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
         finally:

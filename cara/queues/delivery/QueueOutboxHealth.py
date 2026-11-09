@@ -59,7 +59,7 @@ alert lifecycle, throttling — is framework behavior.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from cara.configuration import config
 from cara.facades import Cache, Log, Queue
@@ -92,6 +92,13 @@ class QueueOutboxHealth:
     HOOK_ALERT_DEDUP_KEY = "queue_hook_outbox_stalled"
     HOOK_ACTIVE_CACHE_KEY = "queue:outbox:hooks:stall:active"
     HOOK_NOTIFY_CACHE_KEY = "queue:outbox:hooks:stall:notified"
+
+    #: The dedup keys this scheduler process has announced as stalled and not
+    #: yet resolved. The cache key above survives a restart of this process
+    #: and this set survives a loss of the cache, so an incident is lost only
+    #: when both go in the same incident; a Redis flush alone used to leave
+    #: the page open until someone closed it by hand.
+    _unresolved_incidents: ClassVar[set[str]] = set()
 
     # ── configuration ────────────────────────────────────────────────
     @staticmethod
@@ -292,15 +299,43 @@ class QueueOutboxHealth:
                 else "Last successful publication was "
                 f"{int(snapshot['last_publish_age'])}s ago."
             )
-            + (
-                f" {int(snapshot['behind_full_window'])} of them wait behind a "
-                "full broker window on a queue that has not moved within the "
-                "budget, so nothing is taking work off it. Check that the "
-                "`craft queue:work` pool for that queue is running."
-                if snapshot.get("behind_full_window")
-                else " Dispatch reports success while the work never reaches "
-                "the broker. Check that `craft queue:relay` is running."
-            )
+            + cls._stall_cause(snapshot)
+        )
+
+    @staticmethod
+    def _stall_cause(snapshot: dict[str, float]) -> str:
+        """Who to look at: what no window explains can only be the relay.
+
+        A window explains its own rows and no others, so one row without an
+        explanation outranks them: the page must not say the relay is alive
+        while it holds another seller's work back.
+        """
+        if not snapshot.get("behind_no_window"):
+            if snapshot.get("behind_full_window"):
+                return (
+                    f" {int(snapshot['behind_full_window'])} of them wait behind a "
+                    "full broker window on a queue that has not moved within the "
+                    "budget, so nothing is taking work off it. Check that the "
+                    "`craft queue:work` pool for that queue is running."
+                )
+            if snapshot.get("behind_tenant_window"):
+                return (
+                    f" {int(snapshot['behind_tenant_window'])} of them wait behind "
+                    "their seller's own full window: the relay is alive and holds "
+                    "them back on purpose while that seller's earlier jobs keep "
+                    "every slot. Check those long-running jobs and the "
+                    "`craft queue:work` pool for that queue."
+                )
+            if snapshot.get("behind_moving_queue"):
+                return (
+                    f" {int(snapshot['behind_moving_queue'])} of them sit on a queue "
+                    "the relay published to within the budget, but past the age "
+                    "ceiling: work arrives faster than it finishes. Check the long "
+                    "jobs and the `craft queue:work` pool for that queue."
+                )
+        return (
+            " Dispatch reports success while the work never reaches "
+            "the broker. Check that `craft queue:relay` is running."
         )
 
     @classmethod
@@ -332,6 +367,7 @@ class QueueOutboxHealth:
         # the durable forensic trail and must not have holes. Only the
         # paging channel is rate limited.
         Log.error("%s: %s", title, body, category=category)
+        cls._unresolved_incidents.add(dedup_key)
 
         # Cache is best-effort infrastructure. If it is unreachable we
         # would rather page twice than not at all, so failures fall
@@ -381,12 +417,18 @@ class QueueOutboxHealth:
         log_args: tuple,
         category: str,
     ) -> str:
+        was_active = dedup_key in cls._unresolved_incidents
         try:
-            was_active = bool(Cache.get(active_key))
-        except Exception:  # a cache miss must not page
-            return "quiet"
+            was_active = bool(Cache.get(active_key)) or was_active
+        except Exception as exc:  # a cache miss must not page
+            Log.warning(
+                "Queue outbox recovery could not read its alert state: %s",
+                exc,
+                category=category,
+            )
         if not was_active:
             return "quiet"
+        cls._unresolved_incidents.discard(dedup_key)
 
         try:
             Cache.forget(active_key)

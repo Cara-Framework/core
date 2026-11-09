@@ -10,6 +10,7 @@ from typing import Any
 
 import pendulum
 
+from cara.broadcasting import drained
 from cara.context import Tenancy
 from cara.exceptions import QueueException
 from cara.facades import Log
@@ -427,9 +428,11 @@ def _delivery_process_terminal_hooks(
                 )
 
             asyncio.run(
-                asyncio.wait_for(
-                    _run_hooks(),
-                    timeout=self.hook_timeout_seconds,
+                drained(
+                    asyncio.wait_for(
+                        _run_hooks(),
+                        timeout=self.hook_timeout_seconds,
+                    )
                 )
             )
     except Exception as exc:

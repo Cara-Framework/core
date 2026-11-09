@@ -69,6 +69,12 @@ STATUS_APPLIED = "applied"
 STATUS_FAILED = "failed"
 STATUS_REVERSED = "reversed"
 
+#: Session advisory lock that serializes ``schema:apply`` and
+#: ``schema:rollback`` on one database. Two runs of one plan queued on a table
+#: lock: the loser died on "column already exists" and recorded the winner's
+#: work as failed. A plain number because advisory locks are per database.
+SCHEMA_CHANGE_LOCK = 7236418205
+
 #: ``forward_sql`` prefix meaning "this is not SQL — run the named generated
 #: migration". A new table is created by executing its own generated creator,
 #: never by a CREATE TABLE re-rendered from the model: one renderer, one truth.
@@ -113,6 +119,10 @@ class Operation:
     #: What a returned row MEANS, in the words the operator needs to act on.
     preflight_failure: str | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
+    #: The integer key a backfill walks. Apply runs ``forward_sql`` in short
+    #: transactions over slices of this column instead of one UPDATE, so a
+    #: writer waits for one slice, never for the table. ``None`` runs it whole.
+    batch_column: str | None = None
 
     @property
     def reversible(self) -> bool:
@@ -151,6 +161,7 @@ def as_dict(operation: Operation) -> dict:
         "preflight_sql": operation.preflight_sql,
         "preflight_failure": operation.preflight_failure,
         "notes": list(operation.notes),
+        "batch_column": operation.batch_column,
     }
 
 
@@ -169,6 +180,7 @@ def from_dict(data: dict) -> Operation:
         preflight_sql=data.get("preflight_sql"),
         preflight_failure=data.get("preflight_failure"),
         notes=tuple(data.get("notes") or ()),
+        batch_column=data.get("batch_column"),
     )
 
 
@@ -207,7 +219,16 @@ def _ddl_precedence(operation: Operation) -> int:
     triggers last. An entry whose SQL creates both a function and a trigger
     ranks as a trigger: it carries its own function and only needs the
     stand-alone functions to exist before it.
+
+    A new column precedes a stand-alone function in the additive class, where
+    a function now sorts: a ``LANGUAGE sql`` body is validated at creation and
+    may read that column. A batched backfill comes after the triggers, so a
+    trigger that guards the column sees every row the backfill writes.
     """
+    if operation.kind == "add_column":
+        return 0
+    if operation.batch_column:
+        return 4
     sql = operation.forward_sql
     if _CREATES_TRIGGER.search(sql):
         return 3
@@ -276,6 +297,7 @@ __all__ = [
     "LOCKING",
     "Operation",
     "SAFETY_ORDER",
+    "SCHEMA_CHANGE_LOCK",
     "STATUS_APPLIED",
     "STATUS_FAILED",
     "STATUS_REVERSED",

@@ -209,12 +209,14 @@ def infer_value_schema(
         # ``row.get("state") or "in_stock"``: the literal is the fallback, not
         # the vocabulary, so an unknown operand keeps the type but opens the
         # values, however deep the fallback nests them (``facts.get("state")
-        # or {"code": "unknown"}``). A ``None`` operand adds no value, only null.
+        # or {"code": "unknown"}``), and the keys of a fallback object: the
+        # real value can carry more of them. A ``None`` operand adds no value,
+        # only null.
         if any(
             schema == ANY_SCHEMA and not _is_none_literal(value)
             for schema, value in zip(schemas, node.values, strict=True)
         ):
-            merged = _without_enums(merged)
+            merged = _with_open_keys(_without_enums(merged))
         return _nullable(merged) if any(map(_is_none_literal, node.values)) else merged
     return dict(ANY_SCHEMA)
 
@@ -234,6 +236,20 @@ def _without_enums(schema: Any) -> Any:
             if not (key == "enum" and isinstance(item, list))
         }
     return schema
+
+
+def _with_open_keys(schema: dict[str, Any]) -> dict[str, Any]:
+    """``schema``, every object in it declared to carry keys it does not name."""
+    if "properties" not in schema:
+        return schema
+    return {
+        **schema,
+        "properties": {
+            key: _with_open_keys(item) for key, item in schema["properties"].items()
+        },
+        "additionalProperties": True,
+        "x-fields-partial": True,
+    }
 
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:

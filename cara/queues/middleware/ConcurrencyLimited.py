@@ -63,15 +63,21 @@ class ConcurrencyLimited:
       class was written to prevent.
     * FAULT (Redis reachable in principle, this call failed) fails CLOSED:
       one WARNING naming the concurrency key, one counter increment, and
-      the job requeues as a throttle. No attempt is consumed, so nothing is
-      dropped — but on-call should read a connector backlog during a Redis
-      incident as this middleware working, not as a new bug.
+      the job requeues as a throttle. No attempt is consumed, and on-call
+      should read a connector backlog during a Redis incident as this
+      middleware working, not as a new bug. The refusal starts with
+      :attr:`BACKEND_FAULT_REASON`: an outage that outlasts the job's throttle
+      budget dead-letters it, the ledger keeps only this text, and dead-letter
+      triage replays that prefix where a real full ceiling stays held.
     * ABSENCE (no application container/cache binding) is misconfiguration
       and raises :class:`ConcurrencyBackendUnavailable`. Declaring a hard
       ceiling in a process that cannot enforce it must never run uncapped.
     """
 
     REDIS_KEY_PREFIX = "cara:concurrency:"
+    #: Every refusal the BACKEND caused starts with this (the contract of
+    #: ``IdempotencyGateFaultException.REASON``): the job's body never ran.
+    BACKEND_FAULT_REASON = "Concurrency backend could not answer"
     #: Seconds a dead worker's slot survives; a live run renews its own.
     DEFAULT_SLOT_TTL = 120
 
@@ -113,14 +119,22 @@ class ConcurrencyLimited:
             )
 
         slot_id = f"{id(job)}:{time.time()}"
-        if not self._try_acquire(cache, concurrency_key, redis_key, slot_id):
+        refusal = (
+            f"Concurrency limit ({self.max_concurrent}) reached for {concurrency_key}"
+        )
+        try:
+            acquired = self._try_acquire(cache, redis_key, slot_id)
+        except cache_backend_fault_types() as exc:
+            self._log_backend_fault(concurrency_key, exc)
+            self._count_backend_fault(concurrency_key)
+            acquired = False
+            refusal = f"{self.BACKEND_FAULT_REASON} for {concurrency_key}: {exc}"
+        if not acquired:
             self._log_throttled(concurrency_key)
             await asyncio.sleep(self.retry_delay)
             # Re-raise so the queue runner retries (does not count
             # against max_attempts — ThrottlesExceptions handles that).
-            raise ConcurrencyExceeded(
-                f"Concurrency limit ({self.max_concurrent}) reached for {concurrency_key}"
-            )
+            raise ConcurrencyExceeded(refusal)
         # The slot is a heartbeat lease: ``slot_ttl`` is how long a DEAD
         # worker's slot survives, not how long a run may take. A live run of
         # any length renews it; sizing it to the job's timeout instead kept a
@@ -172,13 +186,7 @@ class ConcurrencyLimited:
         "return 1"
     )
 
-    def _try_acquire(
-        self,
-        cache,
-        concurrency_key: str,
-        redis_key: str,
-        slot_id: str,
-    ) -> bool:
+    def _try_acquire(self, cache, redis_key: str, slot_id: str) -> bool:
         """Atomic slot acquisition using a single Redis EVAL.
 
         Pre-fix this method issued ``ZCARD`` (read) and ``ZADD`` (write)
@@ -200,27 +208,25 @@ class ConcurrencyLimited:
         production load. A driver that cannot run EVAL cannot enforce this
         ceiling at all and must say so (:class:`ConcurrencyBackendUnavailable`),
         not fall back to a known-broken read-then-write.
+
+        ``False`` is a full ceiling and nothing else; a backend that could not
+        answer raises to :meth:`handle`, which words that refusal differently.
         """
         redis = self._connection(cache)
         now = time.time()
         expiry = now + self.slot_ttl
         key_ttl = self.slot_ttl + 60
 
-        try:
-            result = redis.eval(
-                self._ACQUIRE_LUA,
-                1,  # numkeys
-                redis_key,
-                str(now),
-                str(expiry),
-                str(int(self.max_concurrent)),
-                slot_id,
-                str(int(key_ttl)),
-            )
-        except cache_backend_fault_types() as exc:
-            self._log_backend_fault(concurrency_key, exc)
-            self._count_backend_fault(concurrency_key)
-            return False
+        result = redis.eval(
+            self._ACQUIRE_LUA,
+            1,  # numkeys
+            redis_key,
+            str(now),
+            str(expiry),
+            str(int(self.max_concurrent)),
+            slot_id,
+            str(int(key_ttl)),
+        )
         return bool(int(result if result is not None else 0))
 
     # Renew one slot: push its expiry score forward ONLY while it is still a

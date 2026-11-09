@@ -15,6 +15,7 @@ class FieldDefinition:
         self._nullable = False
         self._default = None
         self._backfill_from = None
+        self._backfill_where = None
         self._unique = False
         self._index = False
         self._use_current = False
@@ -30,15 +31,19 @@ class FieldDefinition:
         self._default = value
         return self
 
-    def backfill_from(self, expression: str) -> Self:
+    def backfill_from(self, expression: str, where: str | None = None) -> Self:
         """Declare the evolve-mode SQL expression for existing rows.
 
         Fresh migrations ignore it because a newly created table has no rows
-        to fill. ``schema:plan`` uses it between ADD COLUMN and SET NOT NULL.
+        to fill. ``schema:plan`` uses it between ADD COLUMN and SET NOT NULL,
+        or, on a nullable column, as a batched fill after the ADD. ``where``
+        limits a nullable column's fill to the rows that should have a value,
+        so the rest are neither rewritten nor locked.
         """
         if not isinstance(expression, str) or not expression.strip():
             raise ValueError("backfill_from expression must be a non-empty string")
         self._backfill_from = expression
+        self._backfill_where = where
         return self
 
     def unique(self) -> Self:
@@ -103,6 +108,8 @@ class FieldDefinition:
             params["default"] = self._default
         if self._backfill_from is not None:
             params["backfill_from"] = self._backfill_from
+        if self._backfill_where is not None:
+            params["backfill_where"] = self._backfill_where
         if self._unique:
             params["unique"] = True
         if self._index:

@@ -460,7 +460,11 @@ class SignedJsonJobSerializer:
         if kid not in signing_keys:
             raise QueueException("Active AMQP signing key id is absent from keyring.")
         issued = _SIGNED_JSON_VALUES.epoch(issued_at, default_now=True)
-        available = _SIGNED_JSON_VALUES.epoch(not_before, default=issued)
+        # ``max``: a retry due now reads the clock before this one does, and
+        # the transaction between the two reads can outlast a second.
+        available = max(
+            _SIGNED_JSON_VALUES.epoch_at_or_after(not_before, default=issued), issued
+        )
         ttl = _SIGNED_JSON_VALUES.bounded_seconds(ttl_seconds, "ttl_seconds", minimum=300)
         max_age = _SIGNED_JSON_VALUES.bounded_seconds(
             max_age_seconds,

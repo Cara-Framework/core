@@ -236,6 +236,18 @@ def _model_discovery_extract_field_definition_new_syntax(
                     # has no existing rows to fill.
                     if current.args and isinstance(current.args[0], ast.Constant):
                         params["backfill_from"] = current.args[0].value
+                    limits = [
+                        *current.args[1:2],
+                        *(k.value for k in current.keywords if k.arg == "where"),
+                    ]
+                    where = limits[0] if limits else None
+                    if isinstance(where, ast.Constant):
+                        params["backfill_where"] = where.value
+                    elif where is not None:
+                        # Recorded, never dropped: a fill whose limit went
+                        # missing would write every row of the table.
+                        params["backfill_where"] = ast.unparse(where)
+                        params["backfill_where_is_raw"] = True
                 elif method_name == "default":
                     if current.args:
                         arg = current.args[0]

@@ -70,6 +70,18 @@ def changed_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]
             continue
         settled = respelled_bodies.get(name) or current
         if constraint_body(settled) == constraint_body(wanted):
+            if left_not_valid(live, table, name):
+                operations.append(
+                    _validate_check(
+                        table,
+                        name,
+                        expression,
+                        "finish a CHECK that was attached and never validated",
+                        f"{table} holds rows violating {name} — repair the data "
+                        "before validating the constraint",
+                        "the ADD CONSTRAINT's reverse removes the constraint",
+                    )
+                )
             continue
         operations.append(
             Operation(
@@ -94,28 +106,45 @@ def changed_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]
             )
         )
         operations.append(
-            Operation(
-                kind="validate_check",
-                table=table,
-                key=f"{table}:{name}:validate",
-                forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
-                reverse_sql=None,
-                safety=LOCKING,
-                reason="prove the existing rows satisfy the replaced CHECK",
-                preflight_sql=(
-                    f'SELECT 1 FROM "{table}" WHERE NOT ({expression}) LIMIT 1'
-                ),
-                preflight_failure=(
-                    f"{table} holds rows the declared {name} refuses — repair "
-                    "the data before validating the constraint"
-                ),
-                notes=(
-                    "no reverse recorded: validation has nothing to undo — the "
-                    "paired replace's reverse restores the old body",
-                ),
+            _validate_check(
+                table,
+                name,
+                expression,
+                "prove the existing rows satisfy the replaced CHECK",
+                f"{table} holds rows the declared {name} refuses — repair "
+                "the data before validating the constraint",
+                "the paired replace's reverse restores the old body",
             )
         )
     return operations
+
+
+def left_not_valid(live: LiveSchema, table: str, name: str) -> bool:
+    """Whether a constraint was attached and never validated.
+
+    An apply stopped between a recipe's ADD and its VALIDATE leaves exactly
+    this, and by name and body it reads as finished: no plan asked for the
+    VALIDATE again, so the existing rows stayed unproven for good.
+    """
+    current = (live.constraint_definitions or {}).get(table, {}).get(name)
+    return bool(current) and constraint_body(current) != str(current).strip()
+
+
+def _validate_check(
+    table: str, name: str, expression: str, reason: str, failure: str, undone_by: str
+) -> Operation:
+    return Operation(
+        kind="validate_check",
+        table=table,
+        key=f"{table}:{name}:validate",
+        forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
+        reverse_sql=None,
+        safety=LOCKING,
+        reason=reason,
+        preflight_sql=f'SELECT 1 FROM "{table}" WHERE NOT ({expression}) LIMIT 1',
+        preflight_failure=failure,
+        notes=(f"no reverse recorded: validation has nothing to undo — {undone_by}",),
+    )
 
 
 #: A foreign key as text: ``pg_get_constraintdef``, or a model's named DDL.

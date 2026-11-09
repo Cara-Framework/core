@@ -32,16 +32,18 @@ from __future__ import annotations
 import ast
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 
 # ``commons.models`` collapse rewrites. Models are FLAT-copied into
-# ``app/models`` (sub-packages disappear), so any dotted sub-path must fold
-# into the barrel (``from commons.models.x import Y`` → ``from app.models
-# import Y``) or the flat module name (``commons.models.x.Y`` →
-# ``app.models.Y``), with no knowledge of what the sub-packages are called.
+# ``app/models`` (sub-packages disappear), so a dotted sub-path folds onto the
+# flat module name (``commons.models.x.Y`` → ``app.models.Y``), with no
+# knowledge of what the sub-packages are called. Import STATEMENTS are folded
+# per name by ``_fold_model_imports``; ``_FROM_IMPORT`` only keeps prose
+# (docstrings, comments) from naming a package the image does not carry.
 # Every OTHER kernel package ships verbatim, so its references keep their
 # sub-paths and go through the generic word-boundary rewrite instead.
 _FROM_IMPORT = re.compile(r"from commons\.models(?:\.\w+)* import")
@@ -85,6 +87,73 @@ def _split_import_names(block: str) -> list[str]:
             if tok:
                 names.append(tok)
     return names
+
+
+def _barrel_bindings(init_file: Path) -> dict[str, str | None]:
+    """What the rewritten ``app/models`` barrel exposes: each name → the flat
+    module it re-exports it from (``None`` for a name the barrel defines)."""
+    if not init_file.exists():
+        return {}
+    bindings: dict[str, str | None] = dict.fromkeys(_public_definitions(init_file))
+    for node in ast.parse(init_file.read_text()).body:
+        if isinstance(node, ast.ImportFrom) and node.level == 1:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = node.module
+    return bindings
+
+
+def _fold_model_imports(
+    source: str, target_of: Callable[[str, str], str | None]
+) -> tuple[str, list[tuple[int, str]]]:
+    """Rewrite every ``from commons.models[...] import ...`` statement in
+    ``source``, sending each name to ``target_of(module, name)``.
+
+    Per NAME because one statement can mix a barrel model with a helper the
+    barrel never re-exports, and per STATEMENT (``ast``, at any depth) because
+    a function-local import fails only when the first request reaches it. The
+    pieces join with ``;`` so an indented or one-line ``if x: from ...`` stays
+    valid. Returns the new text and every ``(line, name)`` that has no target.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source, []  # not this step's to report; compile rejects it
+    raw = source.encode()
+    line_starts = [0]
+    for line in raw.splitlines(keepends=True):
+        line_starts.append(line_starts[-1] + len(line))
+    edits: list[tuple[int, int, str]] = []
+    unresolved: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level != 0 or not node.module:
+            continue
+        if node.module != "commons.models" and not node.module.startswith(
+            "commons.models."
+        ):
+            continue
+        by_target: dict[str, list[str]] = {}
+        for alias in node.names:
+            target = target_of(node.module, alias.name)
+            if target is None:
+                unresolved.append((node.lineno, alias.name))
+                continue
+            by_target.setdefault(target, []).append(
+                f"{alias.name} as {alias.asname}" if alias.asname else alias.name
+            )
+        statement = "; ".join(
+            f"from {target} import {', '.join(names)}"
+            for target, names in by_target.items()
+        )
+        edits.append(
+            (
+                line_starts[node.lineno - 1] + node.col_offset,
+                line_starts[node.end_lineno - 1] + node.end_col_offset,
+                statement,
+            )
+        )
+    for start, end, statement in sorted(edits, reverse=True):
+        raw = raw[:start] + statement.encode() + raw[end:]
+    return raw.decode(), unresolved
 
 
 @command(
@@ -176,15 +245,17 @@ class VendorCommonsCommand(CommandBase):
         #    (at any depth) into the local app/models package, then turn the
         #    barrel's commons.models re-exports into relative ones.
         models_src = commons / "models"
+        owners: dict[str, str] = {}
+        defined_in: dict[str, set[str]] = {}
         if models_src.exists():
             copied = 0
-            owners: dict[str, str] = {}
             for py in sorted(models_src.rglob("*.py")):
                 if py.name == "__init__.py":
                     continue
                 shutil.copy2(py, app_models / py.name)
                 copied += 1
-                for name in _public_definitions(py):
+                defined_in[py.stem] = set(_public_definitions(py))
+                for name in defined_in[py.stem]:
                     owners[name] = py.stem
             self.info(f"copied {copied} model module(s) → app/models")
             unresolved = self._rewrite_barrel(app_models / "__init__.py", owners)
@@ -221,8 +292,22 @@ class VendorCommonsCommand(CommandBase):
             if kernel
             else None
         )
+        barrel = _barrel_bindings(app_models / "__init__.py")
+
+        def target_of(module: str, name: str) -> str | None:
+            """The module a folded name resolves from in the flat tree: the
+            barrel when it holds this very definition, otherwise the flat
+            module defining it. The barrel is never widened for a private
+            helper, and a name with neither fails the build below."""
+            tail = module.rpartition(".")[2]
+            stem = tail if name in defined_in.get(tail, ()) else owners.get(name)
+            if name in barrel and (stem is None or barrel[name] == stem):
+                return "app.models"
+            return None if stem is None else f"app.models.{stem}"
+
         scan = [root / "app", root / "database" / "migrations", root / "packages"]
         changed = 0
+        unfolded: list[str] = []
         for scan_dir in scan:
             if not scan_dir.exists():
                 continue
@@ -230,14 +315,29 @@ class VendorCommonsCommand(CommandBase):
                 if "__pycache__" in str(py) or py.name.startswith("."):
                     continue
                 text = py.read_text()
+                new = text
+                if models_src.exists():
+                    new, unresolved = _fold_model_imports(text, target_of)
+                    unfolded += [
+                        f"{py.relative_to(root)}:{line} {name}"
+                        for line, name in unresolved
+                    ]
                 new = _DOTTED_PREFIX.sub(
-                    "app.models.", _FROM_IMPORT.sub("from app.models import", text)
+                    "app.models.", _FROM_IMPORT.sub("from app.models import", new)
                 )
                 if generic is not None:
                     new = generic.sub(r"app.\1", new)
                 if new != text:
                     py.write_text(new)
                     changed += 1
+        if unfolded:
+            self.error(
+                "commons.models import(s) of name(s) neither the app/models barrel "
+                "nor any model module provides: "
+                + ", ".join(sorted(unfolded))
+                + " — the vendored image could not import them"
+            )
+            return 1
         self.info(f"rewrote commons.* references in {changed} file(s)")
 
         # 5) materialise the framework: in the image ./cara must be a real

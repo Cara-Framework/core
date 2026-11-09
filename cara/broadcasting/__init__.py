@@ -27,6 +27,9 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "broadcast_to_user_async": (".helpers", "broadcast_to_user_async"),
     "channel_from_wire": (".Channel", "channel_from_wire"),
     "channel_name": (".Channel", "channel_name"),
+    "drain_detached_tasks": (".helpers", "drain_detached_tasks"),
+    "drained": (".helpers", "drained"),
+    "pending_listener_tasks": (".helpers", "pending_listener_tasks"),
 }
 
 __all__ = [
@@ -54,6 +57,9 @@ __all__ = [
     "broadcast_to_user_async",
     "channel_from_wire",
     "channel_name",
+    "drain_detached_tasks",
+    "drained",
+    "pending_listener_tasks",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

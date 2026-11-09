@@ -45,6 +45,7 @@ def wired(monkeypatch):
 
     monkeypatch.setattr(module, "Cache", cache)
     monkeypatch.setattr(module, "AlertSink", sink)
+    monkeypatch.setattr(QueueOutboxHealth, "_unresolved_incidents", set())
     for level in ("error", "info", "warning"):
         monkeypatch.setattr(
             module.Log,
