@@ -41,9 +41,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 import uuid
 import weakref
+from collections import deque
 from typing import Any
 
 try:
@@ -53,10 +53,7 @@ except ImportError:
 
 import contextlib
 
-from cara.broadcasting.ConnectionManager import (
-    ConnectionManager,
-    _is_connection_closed_error,
-)
+from cara.broadcasting.ConnectionManager import ConnectionManager
 from cara.broadcasting.contracts.Broadcaster import Broadcaster
 from cara.broadcasting.drivers.RedisPublisher import RedisPublisher
 from cara.exceptions import BroadcastingConfigurationException
@@ -68,6 +65,10 @@ from cara.support import json_dumps
 # for the relevant user. The ``__user:`` prefix is private to the
 # driver and doesn't collide with application channel names.
 _USER_CHANNEL_PREFIX = "__user:"
+
+# Frames one channel may have waiting. A wedged subscriber is reaped within one
+# send timeout, so this only has to outlast that against a burst.
+_LANE_CAPACITY = 2048
 
 
 class RedisBroadcaster(ConnectionManager, Broadcaster):
@@ -124,6 +125,12 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         self._listener_pubsub: Any = None
         self._listener_ready: asyncio.Event = asyncio.Event()
         self._listener_lock: asyncio.Lock = asyncio.Lock()
+
+        # Frames read but not yet delivered, one lane per pubsub channel.
+        # See ``_enqueue_pubsub_message``.
+        self._lanes: dict[Any, deque[dict[str, Any]]] = {}
+        self._lane_tasks: set[asyncio.Task] = set()
+        self._shedding_lanes: set[Any] = set()
 
     # ------------------------------------------------------------------
     # Redis client lifecycle
@@ -502,9 +509,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             try:
                 client = await self._redis()
                 if client is None:
-                    # ``_redis()`` normally raises on failure, but guard
-                    # anyway: ``client.pubsub()`` on None surfaces as the
-                    # confusing "'NoneType' object has no attribute 'pubsub'".
+                    # ``client.pubsub()`` on None would be a confusing crash.
                     # Treat as a connection failure -> backoff + retry.
                     raise ConnectionError("Redis client unavailable")
                 # Bind the pubsub to a LOCAL before iterating. ``cleanup()``
@@ -524,7 +529,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 async for message in pubsub.listen():
                     if message.get("type") != "message":
                         continue
-                    await self._dispatch_pubsub_message(message)
+                    self._enqueue_pubsub_message(message)
             except asyncio.CancelledError:
                 Log.debug("Redis listener cancelled", category="cara.broadcasting")
                 break
@@ -562,6 +567,52 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                         await self._listener_pubsub.aclose()
                     self._listener_pubsub = None
                 self._listener_ready.clear()
+
+    def _enqueue_pubsub_message(self, message: dict[str, Any]) -> None:
+        """Hand a frame to its channel's lane without waiting on any socket.
+
+        The listener used to await each frame's whole fan-out before reading
+        the next, so one client that stopped reading held every workspace's
+        stream for a send timeout per frame. A lane per pubsub channel keeps a
+        channel's own frames in order and shares nothing between channels.
+        Past the lane's capacity the OLDEST frame goes: a frame says something
+        moved, and the newest is the one worth having.
+        """
+        channel = message.get("channel")
+        lane = self._lanes.get(channel)
+        if lane is None:
+            lane = deque(maxlen=_LANE_CAPACITY)
+            self._lanes[channel] = lane
+            task = asyncio.create_task(self._drain_lane(channel, lane))
+            self._lane_tasks.add(task)
+            task.add_done_callback(self._lane_tasks.discard)
+        elif len(lane) == _LANE_CAPACITY and channel not in self._shedding_lanes:
+            self._shedding_lanes.add(channel)
+            Log.warning(
+                "Realtime lane %s is full; dropping its oldest frames",
+                channel,
+                category="cara.broadcasting",
+            )
+        lane.append(message)
+
+    async def _drain_lane(self, channel: Any, lane: deque[dict[str, Any]]) -> None:
+        """Deliver one channel's frames in order, until none are left."""
+        try:
+            while lane:
+                try:
+                    await self._dispatch_pubsub_message(lane.popleft())
+                except Exception as e:
+                    Log.warning(
+                        "Delivering a pubsub frame on %s failed: %s",
+                        channel,
+                        e,
+                        category="cara.broadcasting",
+                    )
+        finally:
+            # No await between the empty check and here, so a frame can't land
+            # in a lane nobody is draining.
+            self._lanes.pop(channel, None)
+            self._shedding_lanes.discard(channel)
 
     async def _dispatch_pubsub_message(self, message: dict[str, Any]) -> None:
         """Decode an incoming pubsub frame and deliver it locally.
@@ -606,39 +657,6 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             )
 
     # ------------------------------------------------------------------
-    # Override base heartbeat with closed-connection tolerance — keeps
-    # noisy disconnects out of error logs.
-    # ------------------------------------------------------------------
-    async def _heartbeat_loop(self, connection_id: str) -> None:
-        interval = self.heartbeat_interval
-        try:
-            while connection_id in self.connections:
-                await asyncio.sleep(interval)
-                ws = self.connections.get(connection_id)
-                if ws is None:
-                    return
-                try:
-                    await ws.send_json({"event": "ping", "ts": time.time()})
-                except Exception as e:
-                    if _is_connection_closed_error(e):
-                        Log.debug(
-                            "Heartbeat: %s closed",
-                            connection_id,
-                            category="cara.broadcasting",
-                        )
-                    else:
-                        Log.warning(
-                            "Heartbeat to %s failed: %s",
-                            connection_id,
-                            e,
-                            category="cara.broadcasting",
-                        )
-                    await self.remove_connection(connection_id)
-                    return
-        except asyncio.CancelledError:
-            raise
-
-    # ------------------------------------------------------------------
     # Cleanup — application shutdown hook.
     # ------------------------------------------------------------------
     async def cleanup(self) -> None:
@@ -646,6 +664,12 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             self._listener_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._listener_task
+
+        for task in list(self._lane_tasks):
+            task.cancel()
+        await asyncio.gather(*self._lane_tasks, return_exceptions=True)
+        self._lane_tasks.clear()
+        self._lanes.clear()
 
         if self._listener_pubsub is not None:
             with contextlib.suppress(

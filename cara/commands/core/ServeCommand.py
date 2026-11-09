@@ -28,6 +28,8 @@ from cara.support import LogColors
 
 _logger = logging.getLogger("cara.serve")
 
+_WS_MAX_FRAME_BYTES = 64 * 1024
+
 
 @command(
     name="serve",
@@ -475,6 +477,11 @@ class ServeCommand(CommandBase):
             "--no-access-log",  # Disable uvicorn's HTTP access logging
             "--ws",
             "websockets",
+            # The stock limit is 16 MiB, and a frame is buffered whole before
+            # any of our code can look at it. The largest one a client of ours
+            # legitimately sends is under 200 bytes.
+            "--ws-max-size",
+            str(_WS_MAX_FRAME_BYTES),
             # Strip ``Server: uvicorn`` from every response. Stack
             # fingerprinting via the Server header lets a scanner pin
             # the framework + version and look up known CVEs without

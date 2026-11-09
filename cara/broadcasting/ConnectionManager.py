@@ -33,6 +33,7 @@ from collections import defaultdict
 from typing import Any
 
 from cara.broadcasting.helpers import bind_socket_loop
+from cara.broadcasting.SocketRetirement import SocketRetirement
 from cara.facades import Log
 
 
@@ -96,12 +97,13 @@ class ConnectionManager:
         self._cleanup_task: asyncio.Task | None = None
 
         # Serializes ``add_connection`` so the cap-check → evict → add span
-        # (which straddles awaits: the evicted-tab notice + remove_connection)
-        # can't race a concurrent connect for the SAME user into exceeding the
-        # per-user / global cap. ``remove_connection`` stays lock-free
-        # (idempotent) and is CALLED inside this lock, so it must not re-acquire
-        # it. Connection setup is infrequent relative to messages, so
-        # serialising it is cheap.
+        # (which straddles awaits: remove_connection) can't race a concurrent
+        # connect for the SAME user into exceeding the per-user / global cap.
+        # ``remove_connection`` stays lock-free (idempotent) and is CALLED
+        # inside this lock, so it must not re-acquire it. Nothing that waits on
+        # a client may run under it: it is process-wide, and one wedged tab
+        # would hold every other handshake. Connection setup is infrequent
+        # relative to messages, so serialising it is cheap.
         self._registry_lock = asyncio.Lock()
 
         # Per-recipient send timeout for broadcast fan-out. A client whose TCP
@@ -112,6 +114,7 @@ class ConnectionManager:
         self._broadcast_send_timeout: float = float(
             ws_cfg.get("broadcast_send_timeout", 5.0)
         )
+        self._retirement = SocketRetirement(self._broadcast_send_timeout)
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -138,15 +141,22 @@ class ConnectionManager:
         # Sync broadcasters off this loop hand their fan-out to it
         # (``helpers._run_or_schedule``): the socket is only safe here.
         bind_socket_loop(asyncio.get_running_loop())
-        async with self._registry_lock:
-            await self._add_connection_locked(connection_id, websocket, user_id, metadata)
+        evictions: list[asyncio.Task] = []
+        try:
+            async with self._registry_lock:
+                await self._add_connection_locked(
+                    connection_id, websocket, user_id, metadata, evictions
+                )
+        finally:
+            await SocketRetirement.settle(evictions)
 
     async def _add_connection_locked(
         self,
         connection_id: str,
         websocket: Any,
-        user_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        user_id: str | None,
+        metadata: dict[str, Any] | None,
+        evictions: list[asyncio.Task],
     ) -> None:
         if connection_id in self.connections:
             # Idempotency: a re-add with the same id replaces the old
@@ -180,30 +190,26 @@ class ConnectionManager:
                 )
                 # Tell the dropped tab WHY it lost the socket so the
                 # client can show "you signed in elsewhere" instead of
-                # silently retry-storming. Best-effort: a closed peer
-                # just raises here and the broadcast-closed marker
-                # filters the noise.
+                # silently retry-storming, then end it. The registry
+                # forgets it now; the notice and the close run outside
+                # the lock.
                 evicted_ws = self.connections.get(oldest)
+                await self.remove_connection(oldest)
                 if evicted_ws is not None:
-                    try:
-                        await evicted_ws.send_json(
-                            {
+                    evictions.append(
+                        self._retirement.begin(
+                            evicted_ws,
+                            SocketRetirement.CLOSE_EVICTED,
+                            "Connection limit reached",
+                            notice={
                                 "event": "connection.evicted",
                                 "data": {
                                     "reason": "max_connections_per_user",
                                     "limit": self.max_connections_per_user,
                                 },
-                            }
+                            },
                         )
-                    except Exception as e:
-                        if not _is_connection_closed_error(e):
-                            Log.debug(
-                                "Eviction notice to %s failed: %s",
-                                oldest,
-                                e,
-                                category="cara.broadcasting",
-                            )
-                await self.remove_connection(oldest)
+                    )
 
         if len(self.connections) >= self.max_connections:
             Log.warning(
@@ -281,8 +287,9 @@ class ConnectionManager:
                     self.channel_subscribers.pop(channel, None)
 
         # Step 2 — cancel heartbeat.
+        # A heartbeat dropping its own connection still has work to finish.
         task = self._heartbeat_tasks.pop(connection_id, None)
-        if task and not task.done():
+        if task and not task.done() and task is not asyncio.current_task():
             task.cancel()
 
         # Step 3 — drop the websocket + metadata + indexes.
@@ -472,8 +479,8 @@ class ConnectionManager:
         )
 
         delivered = 0
-        failed: list[str] = []
-        for (connection_id, _), result in zip(targets, results, strict=False):
+        failed: list[tuple[str, Any]] = []
+        for (connection_id, ws), result in zip(targets, results, strict=False):
             if isinstance(result, Exception):
                 if _is_connection_closed_error(result):
                     Log.debug(
@@ -490,7 +497,7 @@ class ConnectionManager:
                         result,
                         category="cara.broadcasting",
                     )
-                failed.append(connection_id)
+                failed.append((connection_id, ws))
             else:
                 delivered += 1
 
@@ -499,8 +506,16 @@ class ConnectionManager:
         # the cleanup, holding the broadcast caller for the duration.
         if failed:
             await asyncio.gather(
-                *(self.remove_connection(cid) for cid in failed),
+                *(self.remove_connection(cid) for cid, _ in failed),
                 return_exceptions=True,
+            )
+            await SocketRetirement.settle(
+                [
+                    self._retirement.begin(
+                        ws, SocketRetirement.CLOSE_UNRESPONSIVE, "Send timed out"
+                    )
+                    for _, ws in failed
+                ]
             )
 
         if delivered:
@@ -550,7 +565,13 @@ class ConnectionManager:
                 if ws is None:
                     return
                 try:
-                    await ws.send_json({"event": "ping", "ts": time.time()})
+                    # Bounded like a fan-out send: a peer that stopped reading
+                    # would otherwise park this task for good, and the heartbeat
+                    # is what was supposed to notice that peer.
+                    await asyncio.wait_for(
+                        ws.send_json({"event": "ping", "ts": time.time()}),
+                        timeout=self._broadcast_send_timeout,
+                    )
                 except Exception as e:
                     if _is_connection_closed_error(e):
                         Log.debug(
@@ -565,11 +586,18 @@ class ConnectionManager:
                             e,
                             category="cara.broadcasting",
                         )
-                    await self.remove_connection(connection_id)
+                    await self._drop_connection(connection_id, ws, "Heartbeat failed")
                     return
         except asyncio.CancelledError:
             # Normal shutdown path when ``remove_connection`` cancels us.
             raise
+
+    async def _drop_connection(self, connection_id: str, ws: Any, reason: str) -> None:
+        """Forget a connection the registry gave up on, and close its socket."""
+        await self.remove_connection(connection_id)
+        await SocketRetirement.settle(
+            [self._retirement.begin(ws, SocketRetirement.CLOSE_UNRESPONSIVE, reason)]
+        )
 
     async def _cleanup_loop(self) -> None:
         """Periodic idle-connection sweep. Removes any connection whose
@@ -592,6 +620,9 @@ class ConnectionManager:
 
     async def _sweep_idle_connections(self) -> None:
         now = time.time()
+        # One settle for the whole sweep: per socket, a row of peers that will
+        # not finish closing would cost a settle each.
+        retiring: list[asyncio.Task] = []
         # Snapshot keys so removals during iteration don't error.
         for connection_id in list(self.connection_metadata.keys()):
             meta = self.connection_metadata.get(connection_id)
@@ -611,7 +642,15 @@ class ConnectionManager:
                     now - last,
                     category="cara.broadcasting",
                 )
+                ws = self.connections.get(connection_id)
                 await self.remove_connection(connection_id)
+                if ws is not None:
+                    retiring.append(
+                        self._retirement.begin(
+                            ws, SocketRetirement.CLOSE_UNRESPONSIVE, "Idle timeout"
+                        )
+                    )
+        await SocketRetirement.settle(retiring)
 
     async def cleanup(self) -> None:
         """Tear down everything. Called by the application during
@@ -624,6 +663,7 @@ class ConnectionManager:
             if task and not task.done():
                 task.cancel()
         self._heartbeat_tasks.clear()
+        await self._retirement.cancel_all()
         self.connections.clear()
         self.channel_subscribers.clear()
         self.connection_channels.clear()

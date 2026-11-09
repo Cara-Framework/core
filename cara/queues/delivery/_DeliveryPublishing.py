@@ -263,7 +263,8 @@ def _delivery_publish_due(self) -> dict[str, int]:
                 job_id,
                 token,
                 int(self._row_value(row, "publish_attempts") or 0),
-                str(exc),
+                # pika's AMQPConnectionError stringifies to nothing.
+                str(exc) or repr(exc),
             )
             result["retried" if released else "settle_lost"] += 1
             Log.warning(

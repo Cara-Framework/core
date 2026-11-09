@@ -72,6 +72,9 @@ class Model(
         __connection__: The database connection name
         __primary_key__: The primary key column name
         __primary_key_type__: The PHP/JS type of the primary key
+        __row_lock__: What ``lock_for_update`` takes on this model's rows:
+            ``"update"``, or ``"no_key_update"`` for a parent of many tables,
+            because ``FOR UPDATE`` also blocks every foreign key check on the row
         __timestamps__: Whether to manage created_at/updated_at timestamps
         __timezone__: The timezone for date attributes
         __with__: Relations to eager load by default
@@ -91,6 +94,7 @@ class Model(
     __resolved_connection__: Any | None = None
     __primary_key__: str = "id"
     __primary_key_type__: str = "int"
+    __row_lock__: str = "update"
     __selects__: list[str] = []
 
     # Attribute casting and dates

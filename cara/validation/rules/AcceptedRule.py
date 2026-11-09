@@ -14,7 +14,8 @@ class AcceptedRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         if isinstance(value, str):
             return value.lower() in {"yes", "on", "1", "true"}
-        return value in _TRUTHY
+        # A list or dict cannot be looked up in a set, and ``bool`` is an int.
+        return isinstance(value, int) and value in _TRUTHY
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)

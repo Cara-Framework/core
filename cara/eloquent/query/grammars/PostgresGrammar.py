@@ -32,7 +32,11 @@ class PostgresGrammar(BaseGrammar):
         "delete": '{table}."{column}"{separator}',
     }
 
-    locks = {"share": "FOR SHARE", "update": "FOR UPDATE"}
+    locks = {
+        "share": "FOR SHARE",
+        "update": "FOR UPDATE",
+        "no_key_update": "FOR NO KEY UPDATE",
+    }
 
     def select_no_table(self):
         return "SELECT {columns} {lock}"

@@ -142,14 +142,32 @@ def _delivery_mark_retry_scheduled(
 
 
 def _delivery_abandon_execution(self, job_id: str, lease_token: str) -> None:
-    """Release one interrupted execution lease before broker redelivery."""
+    """Hand one interrupted execution back to the publication outbox.
+
+    The broker copy cannot be counted on: a replica that met this run's live
+    lease acknowledged it away on the promise that the relay owns the retry,
+    and a row left ``published`` is one the relay will not touch, so it stood
+    for two hours holding a broker-window slot with no copy anywhere.
+
+    Back in the outbox the relay restores it, but only after one heartbeat
+    lease, the wait a dead worker's row gets. The process releasing this row
+    may still be running the body (a job that ignored cancellation dies at
+    the forced exit), and the row must not start elsewhere before it is gone.
+    A broker copy that did survive returns when that process's connection
+    closes and is claimed at once; its receipt takes the row out of the
+    outbox, so the usual shutdown still leaves one copy of the job.
+    """
     now = pendulum.now("UTC")
     affected = self._db().statement(
         f"UPDATE {self.table} SET status = %s, lease_token = NULL, "
-        "lease_expires_at = NULL, updated_at = %s "
+        "lease_expires_at = NULL, publish_status = %s, publish_retry_at = %s, "
+        "published_at = NULL, publish_lease_token = NULL, "
+        "publish_lease_expires_at = NULL, updated_at = %s "
         "WHERE job_id = %s AND status = %s AND lease_token = %s",
         [
             self.STATUS_PENDING,
+            self.PUBLISH_PENDING,
+            now.add(seconds=self.execution_heartbeat_seconds),
             now,
             job_id,
             self.STATUS_PROCESSING,

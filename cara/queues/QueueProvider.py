@@ -64,6 +64,12 @@ class QueueProvider(DeferredProvider):
         driver = AMQPDriver(
             application=self.application,
             options={
+                # The whole declaration first, so a key the config declares
+                # reaches the driver without being named here. Copying key by
+                # key dropped the broker and tenant windows: production asked
+                # for 4/3/1 and the relay ran on the store's fallback 2/0/0.
+                # The entries below only add defaults and resolved values.
+                **config("queue.drivers.amqp"),
                 "username": username,
                 "password": password,
                 # Process capability (none/consume/publish/topology/full).
@@ -139,6 +145,26 @@ class QueueProvider(DeferredProvider):
                 "delivery_hook_timeout_seconds": config(
                     "queue.drivers.amqp.delivery_hook_timeout_seconds",
                     60,
+                ),
+                "delivery_hook_max_attempts": config(
+                    "queue.drivers.amqp.delivery_hook_max_attempts",
+                    10,
+                ),
+                "delivery_broker_window_per_queue": config(
+                    "queue.drivers.amqp.delivery_broker_window_per_queue",
+                    2,
+                ),
+                "delivery_tenant_window_per_queue": config(
+                    "queue.drivers.amqp.delivery_tenant_window_per_queue",
+                    0,
+                ),
+                "delivery_tenant_urgent_slots_per_queue": config(
+                    "queue.drivers.amqp.delivery_tenant_urgent_slots_per_queue",
+                    0,
+                ),
+                "delivery_priority_aging_seconds": config(
+                    "queue.drivers.amqp.delivery_priority_aging_seconds",
+                    300,
                 ),
                 "delivery_publish_lease_seconds": config(
                     "queue.drivers.amqp.delivery_publish_lease_seconds",

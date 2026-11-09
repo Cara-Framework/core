@@ -32,12 +32,14 @@ import asyncio
 import hashlib
 import json
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pendulum
 
-from cara.exceptions import IdempotencyOverlapException
+from cara.cache import cache_backend_fault_types
+from cara.exceptions import IdempotencyGateFaultException, IdempotencyOverlapException
 from cara.facades import Cache, Log
 from cara.queues.idempotency.ClaimsSourceCooldown import ClaimsSourceCooldown
 from cara.queues.LeaseHeartbeat import LeaseHeartbeat
@@ -91,6 +93,10 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
     #: poll's lease for 65 minutes and every later poll of that channel
     #: waited on it and settled having done nothing (live, 2026-10-30).
     JOB_LOCK_LEASE_SECONDS = 120
+
+    #: Floor, before jitter, on when a job the gate could not clear comes
+    #: back: with the throttle budget of 50 it rides out a cache outage.
+    GATE_FAULT_RETRY_SECONDS = 10
 
     #: Sentinel that encodes a cached ``None`` return value. Without
     #: this, ``cache_result(None)`` writes ``None`` and
@@ -180,6 +186,8 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         Raises:
             IdempotencyOverlapException: When a durable-intent job opted into
                 redelivery and another callback owns the same lease.
+            IdempotencyGateFaultException: When the gate could not ask the
+                cache; the callback did not run, so the job is put back.
         """
         self._idempotency_key = self.generate_idempotency_key()
         self._idempotency_cooldown_claim = None
@@ -204,8 +212,10 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         # policy still applies and the active owner lock is always respected.
         if not bypass_result_cache and getattr(self, "idempotency_cache_results", True):
             cache_key = self._result_key()
-            if Cache.has(cache_key):
-                cached_raw = Cache.get(cache_key)
+            with self._gate_cannot_ask_cache():
+                completed = Cache.has(cache_key)
+                cached_raw = Cache.get(cache_key) if completed else None
+            if completed:
                 cached_result = None if cached_raw == self._NONE_SENTINEL else cached_raw
                 Log.debug(
                     "Job already completed (cached): %s",
@@ -217,7 +227,9 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 return cached_result
             self._emit_cache_op_metric("get", "miss")
 
-        if not is_forced and not self.should_execute_based_on_lifecycle():
+        with self._gate_cannot_ask_cache():
+            should_run = is_forced or self.should_execute_based_on_lifecycle()
+        if not should_run:
             Log.debug(
                 "Job skipped (already processed): %s",
                 self.get_job_identifier(),
@@ -238,7 +250,9 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
             # evidence, but never an active owner. Lock stealing allows two
             # external-side-effect jobs to run concurrently and lets the older
             # worker delete the newer worker's lock on exit.
-            if self.is_job_locked():
+            with self._gate_cannot_ask_cache():
+                locked = self.is_job_locked()
+            if locked:
                 Log.debug(
                     "Job already running; waiting: %s",
                     self.get_job_identifier(),
@@ -256,6 +270,25 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         except BaseException:
             self._release_source_cooldown()
             raise
+
+    @contextmanager
+    def _gate_cannot_ask_cache(self) -> Iterator[None]:
+        """Turn a cache-backend fault in the gate into a throttle.
+
+        The gate runs before the callback: nothing ran, so nothing failed. As
+        a failure, a few seconds of Redis down dead-lettered a job whose body
+        never started. Skipping the gate is no answer either: it is what stops
+        two copies of a job pushing the same stock. The callback's own cache
+        errors are never inside this; they stay its failures.
+        """
+        try:
+            yield
+        except cache_backend_fault_types() as exc:
+            Log.warning("Idempotency gate fault: %s", exc, category="idempotency")
+            raise IdempotencyGateFaultException(
+                f"{IdempotencyGateFaultException.REASON}: {exc}",
+                retry_after=self.GATE_FAULT_RETRY_SECONDS,
+            ) from exc
 
     # ── Key generation + parameter normalization ───────────────────
 
@@ -367,11 +400,23 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         and dedupes for ``IDEMPOTENCY_CACHE_TTL``; a bare ``None`` is
         indistinguishable from a claim-miss no-op and only holds for
         ``IDEMPOTENCY_NONE_TTL`` (see the knob's doc for the poisoning
-        story this prevents)."""
+        story this prevents).
+
+        Best effort, like :meth:`release_job_lock`: the body has finished, and
+        raising here settled it as failed and ran it all again on the retry.
+        A lost entry only lets a later duplicate dispatch run."""
         cache_key = self._result_key()
         stored = self._NONE_SENTINEL if result is None else result
         ttl = self.IDEMPOTENCY_NONE_TTL if result is None else self.IDEMPOTENCY_CACHE_TTL
-        Cache.put(cache_key, stored, ttl)
+        try:
+            Cache.put(cache_key, stored, ttl)
+        except Exception as exc:
+            Log.warning(
+                "Failed to cache the result of %s: %s",
+                self.get_job_identifier(),
+                exc,
+                category="idempotency",
+            )
 
     def is_job_locked(self) -> bool:
         lock_key = self._lock_key()
@@ -498,7 +543,9 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         produced for this dispatch. Now A waits on B's completion
         and returns B's cached result.
         """
-        if not self.acquire_job_lock():
+        with self._gate_cannot_ask_cache():
+            acquired = self.acquire_job_lock()
+        if not acquired:
             Log.debug(
                 "Lock acquire lost race for %s; waiting on the in-flight run",
                 self.get_job_identifier(),
@@ -528,12 +575,14 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
             )
             return result
         except Exception as e:
-            Log.error(
-                "Job failed: %s - %s",
-                self.get_job_identifier(),
-                e,
-                category="idempotency",
-            )
+            # A throttle is put back, not broken: the worker's own marker.
+            if not getattr(e, "is_throttle", False):
+                Log.error(
+                    "Job failed: %s - %s",
+                    self.get_job_identifier(),
+                    e,
+                    category="idempotency",
+                )
             raise
         finally:
             heartbeat.stop()
@@ -580,7 +629,8 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         run's own claim.
         """
         try:
-            return await self.wait_for_completion()
+            with self._gate_cannot_ask_cache():
+                return await self.wait_for_completion()
         finally:
             self._release_source_cooldown()
 

@@ -12,6 +12,7 @@ import inspect
 from typing import Any
 
 from cara.exceptions import (
+    MethodNotAllowedException,
     MiddlewareNotFoundException,
     RouteNotFoundException,
     WebSocketException,
@@ -32,12 +33,16 @@ class WebsocketConductor:
     - Global and route-specific middleware pipeline
     - Proper auth cleanup and terminable middleware
     - Exception handling at application level
+
+    IMPORTANT: This is a singleton — all per-connection state MUST be local
+    variables, never stored on ``self``. A connection lives for as long as
+    the tab stays open, so anything parked on the instance is read back after
+    another connection has overwritten it.
     """
 
     def __init__(self, application):
         """Initialize conductor with application instance."""
         self.application = application
-        self.socket: Socket = None
         self.router = None
 
     async def handle(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
@@ -45,16 +50,14 @@ class WebsocketConductor:
         Main entry point for WebSocket connections.
 
         Follows HttpConductor pattern:
-        1. Initialize socket and router
+        1. Create this connection's socket as a LOCAL variable
         2. Let application-level exception handling work
         """
-        self.router = self.application.router
-        self.socket = Socket(self.application, scope, receive, send)
-        await self.handle_request(scope, receive, send)
+        if self.router is None:
+            self.router = self.application.router
+        await self.handle_request(Socket(self.application, scope, receive, send))
 
-    async def handle_request(
-        self, scope: dict[str, Any], receive: Any, send: Any
-    ) -> None:
+    async def handle_request(self, socket: Socket) -> None:
         """
         Handle WebSocket request with Laravel-style lifecycle.
 
@@ -66,8 +69,8 @@ class WebsocketConductor:
         5. Cleanup terminable middleware
         """
         # Accept connection first
-        if not getattr(self.socket, "_ws_connected", False):
-            await self.socket.accept()
+        if not getattr(socket, "_ws_connected", False):
+            await socket.accept()
 
         global_middleware = self.get_global_middleware()
 
@@ -79,13 +82,13 @@ class WebsocketConductor:
         global_pipeline_holder: list = []
         route_pipeline_holder: list = []
 
-        async def full_handler(socket: Socket):
+        async def full_handler(connection: Socket):
             """Route matching, route-specific middleware and controller dispatch."""
             # Route matching happens AFTER global middleware (Laravel style)
             try:
-                route = self.router.find(socket.path, "ws")
-                socket.set_route(route).load_params(
-                    route.set_params_from_path(socket.path)
+                route = self.router.find(connection.path, "ws")
+                connection.set_route(route).load_params(
+                    route.set_params_from_path(connection.path)
                 )
             except Exception:
                 # If route not found or method not allowed, let exception handler deal with it
@@ -99,7 +102,7 @@ class WebsocketConductor:
 
             # Get and run route middleware
             route_middleware = self.get_route_middleware(route)
-            route_pipeline = Pipeline(socket, application=self.application).through(
+            route_pipeline = Pipeline(connection, application=self.application).through(
                 route_middleware
             )
             route_pipeline_holder.append(route_pipeline)
@@ -110,9 +113,10 @@ class WebsocketConductor:
         # 1000 (normal closure) on success and 1011 (internal error)
         # only on a real exception.
         clean_exit = False
+        failure_code = 1011
         try:
             # Run the full pipeline with global middleware
-            global_pipeline = Pipeline(self.socket, application=self.application).through(
+            global_pipeline = Pipeline(socket, application=self.application).through(
                 global_middleware
             )
             global_pipeline_holder.append(global_pipeline)
@@ -124,12 +128,16 @@ class WebsocketConductor:
             Log.debug("WebSocket connection ended: %s", e, category="cara.websocket")
             # WebSocketException carries its own close code (4xxx). Use
             # it directly so the client sees an accurate reason rather
-            # than the catch-all 1011.
-            self._wsx_close_code = getattr(e, "code", 1011)
-            raise
-        except RouteNotFoundException:
+            # than the catch-all 1011. The refusal ends here: the finally
+            # delivers that code, and anything re-raised reaches the ASGI
+            # server as an error-level traceback an anonymous caller could
+            # produce at will just by connecting without a token.
+            failure_code = getattr(e, "code", 1011)
+        except RouteNotFoundException, MethodNotAllowedException:
             # A WS connection to an unregistered path is a 404, not a server
-            # error. The active API process has no matching route, so this is
+            # error. A path that only has HTTP routes reaches here too, as
+            # method-not-allowed, and every API URL is one of those. The
+            # active API process has no matching route, so this is
             # a misrouted or stale client. Close cleanly with 1008 (policy)
             # instead of re-raising, which would otherwise bubble to the ASGI
             # server as a noisy traceback for a benign client mistake.
@@ -137,37 +145,38 @@ class WebsocketConductor:
             # set below.
             Log.debug(
                 "No WS route for path '%s'; closing 1008",
-                getattr(self.socket, "path", "?"),
+                socket.path,
                 category="cara.websocket",
             )
-            self._wsx_close_code = 1008
+            failure_code = 1008
         except Exception as e:
             Log.error("Error in WebSocket connection: %s", e, exc_info=True)
             raise
         finally:
             # Clean up socket broadcasting first
-            await self.socket.cleanup_broadcasting()
+            await socket.cleanup_broadcasting()
             # Ensure connection is closed so the ASGI server releases it.
             # Pick the close code based on how we got here:
             #   1000 — controller returned normally
             #   4xxx — middleware/auth raised a typed WebSocketException
             #          (origin denied = 4003, unauthorized = 4006, etc.)
             #   1011 — anything else (uncaught controller exception)
-            if not getattr(self.socket, "_closed", False):
+            if not getattr(socket, "_closed", False):
                 if clean_exit:
                     code, reason = 1000, ""
                 else:
-                    code = getattr(self, "_wsx_close_code", 1011)
+                    code = failure_code
                     reason = "Internal error" if code == 1011 else ""
                 with contextlib.suppress(
                     OSError, RuntimeError, AttributeError, ConnectionError
                 ):
-                    await self.socket.close(code, reason)
+                    await socket.close(code, reason)
             # Always run terminable middleware on the EXACT instances
             # that executed for this request — same contract as the
             # HTTP conductor. See _run_terminable_middleware docstring.
             try:
                 await self._run_terminable_middleware(
+                    socket,
                     global_pipeline_holder[0] if global_pipeline_holder else None,
                     route_pipeline_holder[0] if route_pipeline_holder else None,
                 )
@@ -215,6 +224,7 @@ class WebsocketConductor:
 
     async def _run_terminable_middleware(
         self,
+        socket: Socket,
         global_pipeline: Pipeline | None,
         route_pipeline: Pipeline | None,
     ) -> None:
@@ -233,7 +243,7 @@ class WebsocketConductor:
         # where the auth middleware may not have completed. Mirrors
         # HttpConductor's ResetHttpAuth handling.
         try:
-            await ResetWebSocketAuth(self.application).terminate(self.socket)
+            await ResetWebSocketAuth(self.application).terminate(socket)
         except Exception as e:
             Log.error(
                 "Critical error in WebSocket auth cache cleanup: %s",
@@ -304,7 +314,7 @@ class WebsocketConductor:
                 pass
 
             try:
-                await terminate_fn(self.socket)
+                await terminate_fn(socket)
             except Exception as e:
                 Log.error(
                     "Error in terminable WebSocket middleware %s: %s",

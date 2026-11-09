@@ -139,6 +139,7 @@ class QueryBuilder(ObservesEvents):
     set_schema = _QuerySelection._qb_set_schema
     shared_lock = _QuerySelection._qb_shared_lock
     lock_for_update = _QuerySelection._qb_lock_for_update
+    _row_lock_strength = _QuerySelection._qb_row_lock_strength
     make_lock = _QuerySelection._qb_make_lock
     reset = _QuerySelection._qb_reset
     get_connection_information = _QuerySelection._qb_get_connection_information

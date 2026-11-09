@@ -25,6 +25,8 @@ from .TransactionContext import TransactionContext
 _logger = logging.getLogger("cara.eloquent.query")
 QueryBuilder: type
 
+_ROW_LOCK_STRENGTHS = ("update", "no_key_update")
+
 
 def _bind_query_builder(builder_type: type) -> None:
     global QueryBuilder
@@ -53,6 +55,9 @@ def _qb_lock_for_update(
 ) -> Self:
     """Acquire a ``FOR UPDATE`` row lock, optionally with modifiers.
 
+    A model that declares ``__row_lock__ = "no_key_update"`` locks its rows
+    ``FOR NO KEY UPDATE`` instead; every modifier applies the same way.
+
     Keyword Arguments:
         skip_locked -- emit ``FOR UPDATE SKIP LOCKED`` (rows currently
             locked by another transaction are skipped instead of waited
@@ -73,7 +78,35 @@ def _qb_lock_for_update(
         raise InvalidArgumentException(
             "lock_for_update: skip_locked and nowait are mutually exclusive."
         )
-    return self.make_lock("update", skip_locked=skip_locked, nowait=nowait, of=of)
+    return self.make_lock(
+        self._row_lock_strength(of), skip_locked=skip_locked, nowait=nowait, of=of
+    )
+
+
+def _qb_row_lock_strength(self, of) -> str:
+    """The lock ``lock_for_update`` takes: the model's ``__row_lock__``.
+
+    The declaration speaks for the model's own rows, so an ``of`` naming any
+    other table keeps the full lock. An unknown name is refused here because
+    the grammar compiles a lock it does not know to no lock at all.
+    """
+    if not self._model:
+        return "update"
+    strength = self._model.__row_lock__
+    if strength not in _ROW_LOCK_STRENGTHS:
+        raise InvalidArgumentException(
+            f"__row_lock__ must be one of {_ROW_LOCK_STRENGTHS}, got {strength!r}."
+        )
+    if any(table != self.get_table_name() for table in _lock_tables(of)):
+        return "update"
+    return strength
+
+
+def _lock_tables(of) -> list:
+    """``lock_for_update``'s ``of`` as a list: a name, a list of names, or None."""
+    if of is None:
+        return []
+    return [of] if isinstance(of, str) else list(of)
 
 
 def _qb_make_lock(
@@ -86,16 +119,10 @@ def _qb_make_lock(
     self.lock = lock
     # Modifiers ride alongside the base lock key so the existing
     # share/update map stays untouched; the grammar appends them.
-    if of is None:
-        of_tables = []
-    elif isinstance(of, str):
-        of_tables = [of]
-    else:
-        of_tables = list(of)
     self._lock_modifier = {
         "skip_locked": skip_locked,
         "nowait": nowait,
-        "of": of_tables,
+        "of": _lock_tables(of),
     }
     return self
 

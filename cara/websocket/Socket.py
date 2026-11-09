@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -41,6 +42,7 @@ from cara.broadcasting import Channel, channel_from_wire
 from cara.exceptions import InvalidArgumentException, WebSocketException
 from cara.facades import Broadcast, Config, Log
 from cara.support import json_dumps
+from cara.websocket.MessageBudget import MessageBudget
 
 
 class Socket:
@@ -49,6 +51,9 @@ class Socket:
     # Default per-connection idle timeout. Override per-instance with
     # ``socket.receive_timeout = N``.
     receive_timeout: int = 120
+    # The most one write may wait on a client that stopped reading. It runs
+    # under ``_send_lock``, so unbounded it would also hold ``close()`` out.
+    send_timeout: int = 30
 
     def __init__(
         self, application: Any, scope: dict[str, Any], receive: Any, send: Any
@@ -230,7 +235,15 @@ class Socket:
                 # and exit cleanly.
                 return
             try:
-                await self._send({"type": "websocket.send", "text": data})
+                await asyncio.wait_for(
+                    self._send({"type": "websocket.send", "text": data}),
+                    timeout=self.send_timeout,
+                )
+            except TimeoutError:
+                # The peer stopped reading, which is not the peer being gone:
+                # the socket still has to be closed, and marking it closed
+                # here would turn that close into a no-op.
+                raise
             except Exception:
                 self._closed = True
 
@@ -337,10 +350,54 @@ class Socket:
         text = await self.receive_text()
         if not text:
             return None
+        return self._decode_json(text)
+
+    @staticmethod
+    def _decode_json(text: str) -> Any:
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
             raise WebSocketException(f"Invalid JSON message: {e}", 4009) from e
+
+    async def serve_frames(
+        self,
+        fence: asyncio.Task,
+        answer: Callable[[Any], Awaitable[None]],
+        budget: MessageBudget,
+    ) -> None:
+        """Answer client frames until the client leaves or ``fence`` finishes.
+
+        ONE task reads for the whole connection and this waits on it once. A
+        fresh task per frame raced against the fence pinned every one of those
+        tasks, parsed body included, for the life of the socket: the
+        ``websockets`` read parks in ``asyncio.wait`` on its connection-long
+        transfer task, and ``asyncio.wait`` never takes a finished waiter back
+        out of the ``awaited_by`` of the future that did not finish. Answering
+        in the same task is also the backpressure: a client that outruns its
+        answers waits in TCP, not in memory here.
+        """
+        reader = asyncio.create_task(self._read_frames(answer, budget))
+        try:
+            await asyncio.wait({reader, fence}, return_when=asyncio.FIRST_COMPLETED)
+            if reader.done():
+                reader.result()
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+
+    async def _read_frames(
+        self, answer: Callable[[Any], Awaitable[None]], budget: MessageBudget
+    ) -> None:
+        """The read loop. The budget is spent on the raw frame: a client over
+        it has already had every parse it is owed."""
+        while self.is_connected:
+            text = await self.receive_text()
+            if not text:
+                return
+            if not budget.spend():
+                await self.close(4008, "Message rate exceeded")
+                return
+            await answer(self._decode_json(text))
 
     # ------------------------------------------------------------------
     # Broadcasting integration.

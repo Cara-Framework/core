@@ -80,6 +80,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "Http404Exception": (".Http404Exception", "Http404Exception"),
     "HttpException": (".HttpException", "HttpException"),
+    "IdempotencyGateFaultException": (
+        ".IdempotencyGateFaultException",
+        "IdempotencyGateFaultException",
+    ),
     "IdempotencyOverlapException": (
         ".IdempotencyOverlapException",
         "IdempotencyOverlapException",
@@ -243,6 +247,7 @@ __all__ = [
     "GenericContainerException",
     "Http404Exception",
     "HttpException",
+    "IdempotencyGateFaultException",
     "IdempotencyOverlapException",
     "InvalidArgumentException",
     "InvalidConfigurationLocationException",

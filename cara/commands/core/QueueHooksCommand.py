@@ -160,6 +160,20 @@ class QueueHooksCommand(_RelayLoop):
         for job_id in needs_child:
             if stop.is_set():
                 break
+            # One interpreter boot per row makes a full batch last minutes,
+            # and a gauge refreshed only when it ends froze at the burst's
+            # peak: 202 pending for five minutes of a backlog already gone
+            # (live, 2026-11-08). The refresh holds its own cadence, so
+            # asking before each child costs one scan per cadence at most.
+            # A gauge scan that fails must not stop the hooks it reports on.
+            try:
+                driver.refresh_delivery_metrics()
+            except Exception as exc:
+                Log.warning(
+                    "Queue hook gauges could not refresh mid-batch: %s",
+                    exc,
+                    category="cara.queue.delivery",
+                )
             spawned_at = pendulum.now("UTC")
             try:
                 returncode = _run_child(

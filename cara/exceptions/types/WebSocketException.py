@@ -26,6 +26,7 @@ class WebSocketException(CaraException):
     - 4009: Invalid message format
     - 4010: Connection timeout
     - 4011: Server error
+    - 4012: Evicted by the per-user connection cap
     """
 
     def __init__(self, message: str, code: int | None = 4000):
