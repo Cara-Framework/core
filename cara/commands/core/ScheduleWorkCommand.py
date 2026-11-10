@@ -11,7 +11,9 @@ import contextlib
 import inspect
 import json
 import os
+import signal
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -542,8 +544,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             else:
                 # BackgroundScheduler: start() returns immediately, jobs
                 # run in a thread pool. The while-loop below keeps the
-                # command alive until Ctrl-C or auto-reload sets
+                # command alive until Ctrl-C, SIGTERM or auto-reload sets
                 # shutdown_requested.
+                self._install_stop_signal()
                 driver.start()
                 while not self.shutdown_requested:
                     scheduler = getattr(driver, "scheduler", None)
@@ -561,14 +564,50 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             raise CaraException(f"Failed to start scheduler: {e}") from e
         finally:
             # Ensure the background scheduler stops its thread pool
-            # when the command exits (Ctrl-C, auto-reload, --once).
+            # when the command exits (Ctrl-C, SIGTERM, auto-reload, --once).
             if driver is not None:
                 with contextlib.suppress(
                     OSError, RuntimeError, AttributeError, ConnectionError
                 ):
-                    # A reload lets in-flight in-process jobs finish before
-                    # the process is replaced; Ctrl-C / --once do not wait.
-                    driver.shutdown(wait=getattr(self, "_reload_requested", False))
+                    # A reload or a SIGTERM lets in-flight in-process jobs
+                    # finish before the process goes; Ctrl-C / --once do not
+                    # wait.
+                    driver.shutdown(
+                        wait=bool(
+                            getattr(self, "_reload_requested", False)
+                            or getattr(self, "_stop_signal", None) is not None
+                        )
+                    )
+            self._restore_stop_signal()
+
+    def _install_stop_signal(self) -> None:
+        """Make SIGTERM a graceful stop instead of Python's default kill.
+
+        ``docker stop`` / compose send SIGTERM. Its default disposition ended
+        the process at once (exit 143 in 0 s, image5 2026-11-10) while
+        ``VerifySyncTasksJob`` and ``PollAmazonNotificationsJob`` run INLINE
+        in this process's thread pool, so a deploy cut them mid-run. The
+        handler only asks the keep-alive loop to stop; the ``finally`` above
+        then waits for the running inline job (bounded by the container's
+        stop grace period) and the command exits 0, like ``queue:work``,
+        ``queue:relay`` and ``queue:hooks``.
+        """
+        self._stop_signal = None
+        self._previous_sigterm = None
+        if threading.current_thread() is not threading.main_thread():
+            return
+
+        def _request_stop(signum, _frame):
+            self._stop_signal = signum
+            self.shutdown_requested = True
+
+        self._previous_sigterm = signal.signal(signal.SIGTERM, _request_stop)
+
+    def _restore_stop_signal(self) -> None:
+        previous = getattr(self, "_previous_sigterm", None)
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+            self._previous_sigterm = None
 
     def _publish_schedule_snapshot(self, driver) -> None:
         """Publish the live schedule to the shared cache, rate-limited.

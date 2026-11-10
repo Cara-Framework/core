@@ -216,7 +216,20 @@ def _replay_unique_key(self, payload: dict[str, Any]) -> str | None:
         return signed
     if not issubclass(job_class, UniqueJob):
         return None
-    return signed if signed is not None else job_class(**descriptor["kwargs"]).unique_id()
+    if signed is not None:
+        return signed
+    # The kwargs are what the OLDER contract signed, so today's constructor can
+    # refuse them (a required argument added since). That is this row's replay
+    # failing, not the operator door's: QueueRetryCommand and the admin route
+    # guard each row with ``except QueueException``, and a bare TypeError
+    # stopped a bulk retry on the row and 500ed the admin route.
+    try:
+        return job_class(**descriptor["kwargs"]).unique_id()
+    except Exception as exc:
+        raise QueueException(
+            f"Queue delivery replay cannot rebuild {job_class.__name__} from its "
+            f"signed arguments to derive its unique key: {exc}"
+        ) from exc
 
 
 def _open_replay(self, source_job_id: str, *, operator: str, reason: str) -> str:
