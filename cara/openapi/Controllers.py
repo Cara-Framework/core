@@ -24,6 +24,10 @@ from typing import Any
 _ACTION_FUNCTIONS = tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]
 _DECLARED_RESOURCE = re.compile(r"@resource\(\s*(\w+)\s*(\[\])?\s*\)")
 _DECLARED_META = re.compile(r"@meta\(\s*(\w+)\s*\)")
+# ``@raises(InvalidInput, ConflictException)``: the typed exceptions an action
+# answers with that are raised BELOW the controller (a service), where the
+# action's own source cannot show them.
+_DECLARED_RAISES = re.compile(r"@raises\(([^)]*)\)")
 
 # The response method that frames a payload as a page rather than a row. It is
 # framework-owned, so it means the same thing in every application.
@@ -257,6 +261,33 @@ def _status_bindings(
         ):
             bind(node.targets[0].id, node.value)
     return bindings
+
+
+def _raised_names(function: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """The exception classes ``function`` raises by name: ``raise Name(...)``,
+    ``raise Name`` or ``raise module.Name(...)``. A re-raised variable
+    (``raise exc``) names no class an application maps, so it adds nothing."""
+    names: set[str] = set()
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Raise) or node.exc is None:
+            continue
+        raised = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+        if isinstance(raised, ast.Name):
+            names.add(raised.id)
+        elif isinstance(raised, ast.Attribute):
+            names.add(raised.attr)
+    return names
+
+
+def _declared_raises(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """The exception classes ``function``'s docstring declares with ``@raises``."""
+    doc = ast.get_docstring(function) or ""
+    return [
+        name.strip()
+        for match in _DECLARED_RAISES.finditer(doc)
+        for name in match.group(1).split(",")
+        if name.strip()
+    ]
 
 
 def _chained_with_status(func: ast.Attribute) -> bool:

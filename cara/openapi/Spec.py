@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
@@ -218,7 +219,14 @@ def build_spec(
         for variant in variants:
             referenced_headers.update(passed)
             responses[str(variant.status)] = _with_headers(
-                _controller_response(variant, body_schema=body_schema), passed
+                _error_response(
+                    variant.status,
+                    envelope.error,
+                    f"{HTTPStatus(variant.status).phrase}.",
+                )
+                if variant.kind == "error"
+                else _controller_response(variant, body_schema=body_schema),
+                passed,
             )
         middleware_statuses = {
             status

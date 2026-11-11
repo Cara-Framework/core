@@ -96,7 +96,50 @@ class ErrorContractExtractor:
         """``type -> HTTP status`` for every discriminator whose status is known."""
         return {row.type: row.status for row in self.extract() if row.status is not None}
 
+    def exception_statuses(self) -> dict[str, int]:
+        """``class name -> HTTP status`` for every exception class that states
+        one: its own ``status_code``, else the nearest base's that does — what
+        a ``raise`` of it answers (``ControllerContractExtractor``). An
+        application class of the same name as a framework one wins: it is the
+        one the application raises."""
+        classes: dict[str, tuple[int | None, tuple[str, ...]]] = {}
+        for path in self._files_in_root_order():
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for cls in (
+                node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+            ):
+                raw = _class_constant(cls, "status_code")
+                own = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+                bases = tuple(
+                    base.id if isinstance(base, ast.Name) else base.attr
+                    for base in cls.bases
+                    if isinstance(base, (ast.Name, ast.Attribute))
+                )
+                classes[cls.name] = (own, bases)
+
+        def status_of(name: str, seen: frozenset[str]) -> int | None:
+            if name not in classes or name in seen:
+                return None
+            own, bases = classes[name]
+            if own is not None:
+                return own
+            for base in bases:
+                inherited = status_of(base, seen | {name})
+                if inherited is not None:
+                    return inherited
+            return None
+
+        return {
+            name: status
+            for name in sorted(classes)
+            if (status := status_of(name, frozenset())) is not None
+        }
+
     def _source_files(self) -> list[Path]:
+        return sorted(self._files_in_root_order())
+
+    def _files_in_root_order(self) -> list[Path]:
+        """Every source file once, framework roots before the application's."""
         seen: dict[Path, None] = {}
         for root in self._roots:
             if root.is_file():
@@ -105,7 +148,7 @@ class ErrorContractExtractor:
             for path in sorted(root.rglob("*.py")):
                 if path.name != "__init__.py":
                     seen.setdefault(path.resolve(), None)
-        return sorted(seen)
+        return list(seen)
 
     @staticmethod
     def _scan_classes(tree: ast.AST, label: str, register) -> None:
