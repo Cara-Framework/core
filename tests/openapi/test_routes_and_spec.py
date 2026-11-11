@@ -259,8 +259,86 @@ class TestSpecAssembly:
         assert operation["requestBody"]["content"]["application/json"]["schema"] == {
             "$ref": "#/components/schemas/StoreRequest"
         }
-        assert set(operation["responses"]) == {"201", "401", "403", "422", "429"}
+        # 400 / 413 / 415: what reading its body answers.
+        assert set(operation["responses"]) == {
+            "201",
+            "400",
+            "401",
+            "403",
+            "413",
+            "415",
+            "422",
+            "429",
+        }
         assert spec["components"]["securitySchemes"]["BearerAuth"]["scheme"] == ("bearer")
+
+    def test_every_operation_with_a_body_lists_what_reading_it_answers(self):
+        # Review 2026-11-11: 413 and 415 were published on 18 of 356 writes —
+        # only where a controller read the body itself — although the
+        # framework's request answers them for every body it reads.
+        spec = _spec(
+            routes=[
+                {
+                    "method": "POST",
+                    "path": "/api/things/",
+                    "controller": "ThingController",
+                    "action": "store",
+                    "name": "things.store",
+                },
+                {
+                    "method": "GET",
+                    "path": "/api/things/",
+                    "controller": "ThingController",
+                    "action": "index",
+                    "name": "things.index",
+                },
+            ],
+            request_schemas={"StoreRequest": {"type": "object", "properties": {}}},
+            controller_contracts={
+                "ThingController@store": ControllerContract(
+                    requests=("StoreRequest",),
+                    responses=(
+                        ControllerResponse(201, "envelope"),
+                        ControllerResponse(400, "error"),
+                    ),
+                )
+            },
+        )
+        store = spec["paths"]["/api/things/"]["post"]["responses"]
+        index = spec["paths"]["/api/things/"]["get"]["responses"]
+
+        assert {"400", "413", "415"} <= set(store)
+        assert store["415"]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/ApiErrorBody"
+        }
+        assert store["413"]["x-http-status"] == 413
+        assert not {"400", "413", "415"} & set(index)
+
+    def test_a_middleware_status_can_depend_on_the_route(self):
+        # The tenant middleware's write gate answers 402 only on the unsafe
+        # methods of routes outside its exempt list.
+        def tenant(route):
+            return (402, 403) if route["method"] == "POST" else (403,)
+
+        spec = _spec(
+            routes=[
+                {
+                    "method": method,
+                    "path": "/api/things/",
+                    "controller": "ThingController",
+                    "action": action,
+                    "name": f"things.{action}",
+                    "middleware": ["tenant"],
+                }
+                for method, action in (("POST", "store"), ("GET", "index"))
+            ],
+            middleware_error_statuses={"tenant": tenant},
+        )
+        operations = spec["paths"]["/api/things/"]
+
+        assert {"402", "403"} <= set(operations["post"]["responses"])
+        assert "402" not in operations["get"]["responses"]
+        assert "403" in operations["get"]["responses"]
 
     def test_every_ref_resolves_to_a_declared_component(self):
         spec = _spec()

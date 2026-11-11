@@ -40,6 +40,7 @@ def _grammar_initialize(
     self._having = having
     self.lock = lock
     self._lock_modifier = {"skip_locked": False, "nowait": False, "of": []}
+    self._returning = ()
     self._connection_details = connection_details or {}
 
     self._bindings = []
@@ -137,6 +138,7 @@ def _compile_update(self, qmark=False):
         key_equals=self._compile_key_value_equals(qmark=qmark),
         table=self.process_table(self.table),
         wheres=self.process_wheres(qmark=qmark),
+        returning=self.process_returning(),
     )
 
     return self

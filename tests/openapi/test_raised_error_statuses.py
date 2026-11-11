@@ -4,8 +4,10 @@ Live 2026-11-11 (Synkronus doors sweep): a publish already running answered
 409, a refused shipment 400, a missing photo 404 and an advertising read on a
 marketplace without ads 400 — and none of them was in the generated document,
 which listed only the middleware statuses and a blanket 422. An action now
-documents every typed exception its own methods raise, and the ones a service
-raises below it through an ``@raises(...)`` docstring declaration.
+documents every typed exception its own methods raise, and through an
+``@raises(...)`` docstring declaration what flows through a call the source
+does not pin (an untyped ``self.service`` here; the calls it does pin are
+followed — ``test_reachable_errors.py``).
 """
 
 from __future__ import annotations

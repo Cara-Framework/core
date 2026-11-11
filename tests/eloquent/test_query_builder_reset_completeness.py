@@ -42,6 +42,7 @@ _CLEAN_SLATE: dict[str, Any] = {
     "_unions": [],
     "lock": False,
     "_lock_modifier": {"skip_locked": False, "nowait": False, "of": []},
+    "_returning": (),
 }
 
 # A non-default value for each field, used to dirty the builder first.
@@ -61,6 +62,7 @@ _DIRTY: dict[str, Any] = {
     "_unions": [("other-builder", False)],
     "lock": True,
     "_lock_modifier": {"skip_locked": True, "nowait": True, "of": ["product"]},
+    "_returning": ("updated_at",),
 }
 
 

@@ -101,6 +101,42 @@ def test_missing_value_is_honest_under_negation() -> None:
     assert evaluate_tree(positive, _row(status=None)) is False
 
 
+def test_a_row_holding_several_values_is_in_any_of_them() -> None:
+    # A computed row may hold a SET for a field — a product sold on two
+    # marketplaces is on each of them: ``in`` asks whether it holds ANY of
+    # the values, ``not_in`` whether it holds NONE.
+    both = frozenset({"violation", "unknown"})
+    has_unknown = _tree('[{"f":"status","o":"in","v":["unknown"]}]')
+    lacks_unknown = _tree('[{"f":"status","o":"not_in","v":["unknown"]}]')
+    assert evaluate_tree(has_unknown, _row(status=both)) is True
+    assert evaluate_tree(lacks_unknown, _row(status=both)) is False
+    only = frozenset({"violation"})
+    assert evaluate_tree(has_unknown, _row(status=only)) is False
+    assert evaluate_tree(lacks_unknown, _row(status=only)) is True
+    resolutions = {"channel": {"CHN0123456789ABCDEFGHJKMNPQRS": 7}}
+    on_channel = _tree('[{"f":"channel","o":"in","v":["CHN0123456789ABCDEFGHJKMNPQRS"]}]')
+    sold_on_both = _row(channel=frozenset({3, 7}))
+    assert evaluate_tree(on_channel, sold_on_both, resolutions=resolutions) is True
+    sold_elsewhere = _row(channel=frozenset({3}))
+    assert evaluate_tree(on_channel, sold_elsewhere, resolutions=resolutions) is False
+
+
+def test_an_empty_set_is_a_missing_value() -> None:
+    nothing = frozenset()
+    has_unknown = _tree('[{"f":"status","o":"in","v":["unknown"]}]')
+    lacks_unknown = _tree('[{"f":"status","o":"not_in","v":["unknown"]}]')
+    assert evaluate_tree(has_unknown, _row(status=nothing)) is False
+    assert evaluate_tree(lacks_unknown, _row(status=nothing)) is True
+    empty_note = _tree('[{"f":"note","o":"empty","v":[]}]')
+    assert evaluate_tree(empty_note, _row(note=nothing)) is True
+
+
+def test_only_set_membership_compares_a_set() -> None:
+    at_least = _tree('[{"f":"gap","o":"gte","v":["4"]}]')
+    with pytest.raises(FilterTreeCompileError, match="several values"):
+        evaluate_tree(at_least, _row(gap=frozenset({5})))
+
+
 def test_entity_values_require_resolutions() -> None:
     tree = _tree('[{"f":"channel","o":"in","v":["CHN0123456789ABCDEFGHJKMNPQRS"]}]')
     with pytest.raises(FilterTreeCompileError):

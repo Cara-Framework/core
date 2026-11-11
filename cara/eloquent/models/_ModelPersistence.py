@@ -270,6 +270,8 @@ def _model_save(self, **kwargs: Any) -> bool:
                     **kwargs,
                 )
             )
+            # ``None`` when the UPDATE matched no row (``_qb_update``): the
+            # change stays pending and save() answers False below.
             if result:
                 # Merge dirty attributes into main attributes
                 self.__attributes__.update(self.__dirty_attributes__)
@@ -352,11 +354,10 @@ def _model_touch(self) -> None:
     # so without ignore_mass_assignment the filter strips it and the
     # UPDATE silently becomes a no-op (same failure SoftDeleteScope's
     # _restore fixed).
+    # The update refreshes the model itself, with the stamp read back from
+    # the row (``_qb_update``); re-filling it here with the naive string put
+    # back a value shaped unlike any read.
     self.update({timestamp_col: current_time}, ignore_mass_assignment=True)
-
-    # Also update the local attribute
-    self.__attributes__[timestamp_col] = current_time
-    self.__original_attributes__[timestamp_col] = current_time
 
 
 def _model_get_table_name(cls) -> str:

@@ -103,6 +103,53 @@ class TestRateLimitHeaders:
         assert "headers" not in responses["401"]
         assert "headers" not in responses["422"]
 
+    def test_an_error_the_action_raises_unwinds_the_throttle_bare(self):
+        # A typed error raised by the action (or below it), and what reading a
+        # body raises, leave through the exception handler: the throttle's
+        # ``response.header(...)`` never runs, so they carry no quota pair.
+        # Only the 201 the action returns is stamped.
+        spec = _spec(
+            request_schemas={"ThingRequest": {"type": "object", "properties": {}}},
+            controller_contracts={
+                "ThingController@store": ControllerContract(
+                    requests=("ThingRequest",),
+                    responses=(
+                        ControllerResponse(201, "envelope"),
+                        ControllerResponse(403, "error"),
+                        ControllerResponse(404, "error"),
+                    ),
+                ),
+            },
+        )
+        responses = spec["paths"]["/api/things/"]["post"]["responses"]
+
+        assert {"400", "403", "404", "413", "415"} <= set(responses)
+        for raised in ("400", "403", "404", "413", "415"):
+            assert "headers" not in responses[raised], raised
+        assert list(responses["201"]["headers"]) == ["RateLimit-Policy", "RateLimit"]
+
+    def test_a_429_the_action_raises_keeps_the_throttles_refusal_headers(self):
+        # The same status from the throttle in front of the action still
+        # carries the refusal's trio; the action's own raise adds no header.
+        spec = _spec(
+            controller_contracts={
+                "ThingController@store": ControllerContract(
+                    requests=(),
+                    responses=(
+                        ControllerResponse(201, "envelope"),
+                        ControllerResponse(429, "error"),
+                    ),
+                ),
+            },
+        )
+        refused = spec["paths"]["/api/things/"]["post"]["responses"]["429"]
+
+        assert list(refused["headers"]) == [
+            "Retry-After",
+            "RateLimit-Policy",
+            "RateLimit",
+        ]
+
     def test_an_unthrottled_operation_carries_none(self):
         responses = _spec()["paths"]["/api/open"]["get"]["responses"]
 

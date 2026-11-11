@@ -44,6 +44,13 @@ CAST_TYPE: dict[str, dict[str, Any]] = {
 # extend this with their own coercion helpers.
 CALL_TYPE: dict[str, dict[str, Any]] = {**OPT_TYPE, **CAST_TYPE}
 
+# Builtins whose result is a JSON array whatever they are handed. Matched on
+# the bare builtin only — ``self.resource.sorted()`` is a model's own method,
+# which the framework does not own. Without them every ``sorted(...)`` key was
+# published as ``{}`` (Synkronus, ~30 keys; perms2 review, 2026-11-11). Not
+# a table an application extends, so it stays out of the barrel.
+_SEQUENCE_BUILTINS: frozenset[str] = frozenset({"list", "sorted", "tuple"})
+
 # A wholly-permissive schema: "this field exists, type unknown". Honest stand-in
 # for values we cannot derive statically (a bare ORM read / helper call).
 ANY_SCHEMA: dict[str, Any] = {}
@@ -125,6 +132,9 @@ def infer_value_schema(
     # ``self.opt_float(x)`` / ``self.opt_int(x)`` / ... — the dominant pattern.
     if isinstance(node, ast.Call):
         func = node.func
+        # ``sorted(keys)`` / ``list(rows)`` / ``tuple(pair)`` -> an array.
+        if isinstance(func, ast.Name) and func.id in _SEQUENCE_BUILTINS:
+            return {"type": "array", "items": dict(ANY_SCHEMA)}
         # ``self.opt_xxx(...)`` or bare ``opt_xxx(...)``.
         attr = _callee_name(func)
         if attr in call_types:

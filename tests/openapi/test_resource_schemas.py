@@ -111,6 +111,53 @@ class ParentResource:
             "required": ["model", "amount"],
         }
 
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "sorted(self.resource.keys)",
+            "list(self.resource.keys)",
+            "tuple(self.resource.keys)",
+        ],
+    )
+    def test_a_builtin_sequence_call_is_an_array(self, tmp_path: Path, expression: str):
+        """``sorted``/``list``/``tuple`` always give a JSON array, whatever they
+        are handed. Synkronus published ~30 such keys as ``{}`` and an app
+        rewrote ``sorted(...)`` as a list comprehension to get one typed
+        (perms2 review, 2026-11-11): the gap was the framework's."""
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                KeysResource=f"""
+class KeysResource:
+    def to_array(self, request=None):
+        return {{"keys": {expression}}}
+""",
+            )
+        ).extract()
+
+        assert schemas["KeysResource"]["properties"]["keys"] == {
+            "type": "array",
+            "items": {},
+        }
+
+    def test_a_method_named_like_a_builtin_is_not_one(self, tmp_path: Path):
+        """Only the builtin itself is known: ``self.resource.sorted()`` is the
+        model's own method, whose result the framework cannot see."""
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                KeysResource="""
+class KeysResource:
+    def to_array(self, request=None):
+        return {"keys": self.resource.sorted(), "rows": self.resource.list()}
+""",
+            )
+        ).extract()
+
+        properties = schemas["KeysResource"]["properties"]
+        assert properties["keys"] == {}
+        assert properties["rows"] == {}
+
     def test_distinct_return_shapes_are_discriminated_variants(self, tmp_path: Path):
         schemas = ResourceSchemaExtractor(
             _resources(

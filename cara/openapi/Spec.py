@@ -12,9 +12,16 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable, Iterable
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
+
+from cara.exceptions import (
+    BadRequestException,
+    PayloadTooLargeException,
+    UnsupportedMediaTypeException,
+)
 
 from .ControllerContract import ControllerContract
 from .ControllerResponse import ControllerResponse
@@ -44,6 +51,26 @@ CURSOR_PAGE_PARAMETERS: tuple[dict[str, Any], ...] = (
     },
 )
 
+# What reading a request body answers, whatever the action does with it: a
+# malformed body (400), one over the size limit (413), one in a media type the
+# framework does not parse (415). The framework's request raises them while it
+# reads, so every operation that takes a body lists them — here, once, not
+# where a controller happens to read the body itself.
+_BODY_ERROR_STATUSES: tuple[int, ...] = tuple(
+    exception.status_code
+    for exception in (
+        BadRequestException,
+        PayloadTooLargeException,
+        UnsupportedMediaTypeException,
+    )
+)
+
+# A middleware alias's error statuses: fixed, or read from the route for a
+# gate only some routes meet (the tenant middleware's billing write gate).
+_MiddlewareStatuses = (
+    tuple[int, ...] | list[int] | Callable[[dict[str, Any]], Iterable[int]]
+)
+
 
 def build_spec(
     *,
@@ -61,7 +88,7 @@ def build_spec(
     controller_contracts: dict[str, ControllerContract] | None = None,
     security_schemes: dict[str, dict[str, Any]] | None = None,
     middleware_security: dict[str, list[dict[str, list[str]]]] | None = None,
-    middleware_error_statuses: dict[str, tuple[int, ...] | list[int]] | None = None,
+    middleware_error_statuses: dict[str, _MiddlewareStatuses] | None = None,
     middleware_headers: dict[str, MiddlewareHeaders] | None = None,
 ) -> dict[str, Any]:
     """Build the OpenAPI document from already-extracted inputs.
@@ -70,10 +97,14 @@ def build_spec(
     ``Controller@action -> (resource, is_list)``, ``routes`` is the flattened
     route table, and ``envelope_components`` are the application's own shared
     components (meta / error bodies), appended after the resource schemas in
-    the order the application declares them. ``middleware_headers`` names the
-    response headers a middleware alias stamps (``family:*`` matches a family,
-    as in the other middleware maps); only headers a response references are
-    published under ``components.headers``.
+    the order the application declares them. ``middleware_error_statuses``
+    maps an alias to the statuses it answers — a tuple, or a callable given
+    the route row when only some routes meet the gate. ``middleware_headers``
+    names the response headers a middleware alias stamps (``family:*``
+    matches a family, as in the other middleware maps); only headers a
+    response references are published under ``components.headers``. An
+    operation with a request body also lists what reading it answers
+    (``_BODY_ERROR_STATUSES``).
     """
     request_schemas = request_schemas or {}
     controller_contracts = controller_contracts or {}
@@ -209,36 +240,56 @@ def build_spec(
             },
         }
 
-        variants = (
+        variants = list(
             contract.responses
             if contract is not None
             else (ControllerResponse(200, "envelope"),)
         )
-        passed = [header for stamp in stamps for header in stamp.passed]
-        responses: dict[str, Any] = {}
-        for variant in variants:
-            referenced_headers.update(passed)
-            responses[str(variant.status)] = _with_headers(
-                _error_response(
-                    variant.status,
-                    envelope.error,
-                    f"{HTTPStatus(variant.status).phrase}.",
-                )
-                if variant.kind == "error"
-                else _controller_response(variant, body_schema=body_schema),
-                passed,
+        if "requestBody" in operation:
+            answered = {variant.status for variant in variants}
+            variants.extend(
+                ControllerResponse(status, "error")
+                for status in _BODY_ERROR_STATUSES
+                if status not in answered
             )
+        passed = [header for stamp in stamps for header in stamp.passed]
         middleware_statuses = {
             status
             for name in middleware
-            for status in _middleware_lookup(middleware_error_statuses, name) or ()
+            for status in _middleware_statuses(middleware_error_statuses, name, route)
         }
+        responses: dict[str, Any] = {}
+        for variant in variants:
+            if variant.kind == "error":
+                # A raised error unwinds the middleware to the exception
+                # handler, so a middleware's stamp on the response it gets
+                # back never runs: a raised status carries none of the
+                # ``passed`` headers. A status the route's middleware also
+                # refuses with keeps that refusal's headers (an action's own
+                # 429 beside the throttle's).
+                refused = (
+                    _refused_headers(stamps, variant.status)
+                    if variant.status in middleware_statuses
+                    else []
+                )
+                referenced_headers.update(refused)
+                responses[str(variant.status)] = _with_headers(
+                    _error_response(
+                        variant.status,
+                        envelope.error,
+                        f"{HTTPStatus(variant.status).phrase}.",
+                    ),
+                    refused,
+                )
+                continue
+            referenced_headers.update(passed)
+            responses[str(variant.status)] = _with_headers(
+                _controller_response(variant, body_schema=body_schema), passed
+            )
         for status in sorted(middleware_statuses):
             if str(status) in responses:
                 continue
-            refused = [
-                header for stamp in stamps for header in stamp.refused.get(status, ())
-            ]
+            refused = _refused_headers(stamps, status)
             referenced_headers.update(refused)
             responses[str(status)] = _with_headers(
                 _error_response(status, envelope.error, "Middleware error."), refused
@@ -301,6 +352,14 @@ def _middleware_lookup(mapping: dict[str, Any], name: str) -> Any:
     return mapping.get(name, mapping.get(name.partition(":")[0] + ":*"))
 
 
+def _middleware_statuses(
+    mapping: dict[str, _MiddlewareStatuses], name: str, route: dict[str, Any]
+) -> tuple[int, ...]:
+    """What the ``name`` middleware answers on ``route``."""
+    found = _middleware_lookup(mapping, name)
+    return tuple(found(route) if callable(found) else found or ())
+
+
 def _security_requirements(
     middleware: list[str],
     mapping: dict[str, list[dict[str, list[str]]]],
@@ -350,6 +409,11 @@ def _error_response(status: int, error_component: str, description: str) -> dict
         "content": {"application/json": {"schema": resource_ref(error_component)}},
         "x-http-status": status,
     }
+
+
+def _refused_headers(stamps: list[MiddlewareHeaders], status: int) -> list[str]:
+    """The headers the route's middleware sends when it refuses with ``status``."""
+    return [header for stamp in stamps for header in stamp.refused.get(status, ())]
 
 
 def _with_headers(response: dict[str, Any], headers: list[str]) -> dict[str, Any]:

@@ -79,6 +79,7 @@ def _qb_get_grammar(self):
     grammar_instance._lock_modifier = getattr(
         self, "_lock_modifier", {"skip_locked": False, "nowait": False, "of": []}
     )
+    grammar_instance._returning = getattr(self, "_returning", ())
 
     # Pass upsert data to grammar if it's an upsert action
     if hasattr(self, "_upsert_values"):

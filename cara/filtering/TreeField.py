@@ -105,6 +105,13 @@ VALUES_HARD_CAP = 100
 # window while keeping the interval arithmetic bounded.
 LAST_DAYS_MAX = 3650
 
+# PostgreSQL ``numeric``'s reach: 131072 digits before the point (an
+# adjusted exponent of at most 131071), 16383 after. ``Decimal`` reads
+# ``1e999999`` as finite and in a few characters, so without this a number
+# the parse accepted died at execution.
+_NUMERIC_MAX_ADJUSTED = 131071
+_NUMERIC_MAX_SCALE = 16383
+
 
 class TreeField:
     """One filterable field of a :class:`~cara.filtering.TreeSchema.TreeSchema`.
@@ -251,7 +258,18 @@ class TreeField:
             return f"'{self.id}' expects numbers."
         if not number.is_finite():
             return f"'{self.id}' expects finite numbers."
-        if self.integer and number != number.to_integral_value():
+        exponent = number.as_tuple().exponent
+        if (
+            number.adjusted() > _NUMERIC_MAX_ADJUSTED
+            or not isinstance(exponent, int)
+            or exponent < -_NUMERIC_MAX_SCALE
+        ):
+            return f"'{self.id}' expects numbers."
+        if self.integer and not _reads_as_int(value):
+            # The compiler and the evaluator bind a whole-number field with
+            # ``int(value)``, so the parse asks that question, not "is the
+            # Decimal whole": ``10.0`` and ``1e1`` are whole to ``Decimal``
+            # and unreadable to ``int``, and passed here only to 500 there.
             return f"'{self.id}' expects whole numbers."
         if self.min_value is not None and number < Decimal(str(self.min_value)):
             return f"'{self.id}' must be at least {self.min_value}."
@@ -295,6 +313,16 @@ def _is_iso_date(value: str) -> bool:
         return False
     try:
         _datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _reads_as_int(value: str) -> bool:
+    """Whether ``int(value)`` — the whole-number field's bind in the
+    compiler and the evaluator — reads ``value``."""
+    try:
+        int(value)
     except ValueError:
         return False
     return True

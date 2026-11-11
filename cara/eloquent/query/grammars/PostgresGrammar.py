@@ -45,7 +45,7 @@ class PostgresGrammar(BaseGrammar):
         return "SELECT {keyword} {columns} FROM {table} {joins} {wheres} {group_by} {having} {order_by} {limit} {offset} {lock}"
 
     def update_format(self):
-        return "UPDATE {table} SET {key_equals} {wheres}"
+        return "UPDATE {table} SET {key_equals} {wheres} {returning}"
 
     def insert_format(self):
         return "INSERT INTO {table} ({columns}) VALUES ({values}) RETURNING *"

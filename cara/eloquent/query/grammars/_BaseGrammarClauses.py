@@ -211,6 +211,19 @@ def _grammar_process_offset(self):
     return self.offset_string().format(offset=self._offset, limit=self._limit or 1)
 
 
+def _grammar_process_returning(self):
+    """``RETURNING`` for the columns an UPDATE must hand back, or nothing.
+
+    The builder asks for it only on a loaded model's UPDATE, for the columns
+    whose written value only the database knows (see ``_qb_update``). Every
+    other statement keeps answering with its affected-row count.
+    """
+    if not self._returning:
+        return ""
+    columns = ", ".join(self._table_column_string(column) for column in self._returning)
+    return f"RETURNING {columns}"
+
+
 def _grammar_process_locks(self):
     base = self.locks.get(self.lock, "")
     if not base:

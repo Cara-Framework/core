@@ -44,6 +44,7 @@ class BaseGrammar:
     process_limit = _BaseGrammarClauses._grammar_process_limit
     process_offset = _BaseGrammarClauses._grammar_process_offset
     process_locks = _BaseGrammarClauses._grammar_process_locks
+    process_returning = _BaseGrammarClauses._grammar_process_returning
     _lock_modifier_sql = _BaseGrammarClauses._lock_modifier_sql
     process_having = _BaseGrammarClauses._grammar_process_having
     process_wheres = _BaseGrammarClauses._grammar_process_wheres

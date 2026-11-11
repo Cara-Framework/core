@@ -41,7 +41,8 @@ class SQLiteGrammar(BaseGrammar):
         return "SELECT {columns} {lock}"
 
     def update_format(self):
-        return "UPDATE {table} SET {key_equals} {wheres}"
+        # ``{returning}`` needs SQLite 3.35 or newer (released 2021).
+        return "UPDATE {table} SET {key_equals} {wheres} {returning}"
 
     def insert_format(self):
         return "INSERT INTO {table} ({columns}) VALUES ({values})"

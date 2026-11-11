@@ -65,6 +65,8 @@ class QueryBuilder(ObservesEvents):
         self._scopes = scopes or {}
         self.lock = False
         self._lock_modifier = {"skip_locked": False, "nowait": False, "of": []}
+        # Columns a loaded model's UPDATE reads back (``_qb_update``).
+        self._returning = ()
         self._schema = schema
         self._eager_relation = EagerRelations()
         if model:

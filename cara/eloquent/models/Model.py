@@ -372,6 +372,7 @@ class Model(
     is_loaded = _ModelPresentation._model_is_loaded
     is_created = _ModelPresentation._model_is_created
     hydrate = classmethod(_ModelPresentation._model_hydrate)
+    hydrated_values = _ModelPresentation._model_hydrated_values
     fill = _ModelPresentation._model_fill
     fill_original = _ModelPresentation._model_fill_original
     new_collection = classmethod(_ModelPresentation._model_new_collection)

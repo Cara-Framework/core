@@ -100,7 +100,13 @@ def _qb_update(
         ignore_mass_assignment {bool, optional}: Whether the update should ignore mass assignment on the model
 
     Returns:
-        self
+        A loaded model's update answers with the model, refreshed with the
+        values the row now holds (it reads back its ``updated_at`` and any
+        column expression through ``RETURNING``), or ``None`` when its UPDATE
+        matched no row, which leaves the model as it was read. Any other
+        update (``DB.table(...)``, or a model query with no loaded instance
+        such as ``Model.where(...).update(...)``) answers with the matched-row
+        count. ``self`` for a dry run.
     """
     model = None
 
@@ -112,7 +118,11 @@ def _qb_update(
         if not ignore_mass_assignment:
             updates = model.filter_mass_assignment(updates)
 
-    if model and model.is_loaded():
+    # Taken before the write: filling a model query's throwaway instance
+    # below makes it look loaded.
+    loaded = bool(model and model.is_loaded())
+
+    if loaded:
         self.where(
             model.get_primary_key(),
             model.get_primary_key_value(),
@@ -151,9 +161,12 @@ def _qb_update(
                 )
             }
 
-        # Do not execute query if no changes
+        # Do not execute query if no changes. A loaded model has nothing left
+        # to write; a model query wrote no row.
         if not updates:
-            return self if dry or self.dry else model
+            if dry or self.dry:
+                return self
+            return model if loaded else 0
 
         # Cast date fields
         date_fields = model.get_dates()
@@ -184,6 +197,9 @@ def _qb_update(
 
     self._updates = (UpdateQueryExpression(updates),)
     self.set_action("update")
+    # Set before the dry return so a dry run shows the statement that runs.
+    read_back = _read_back_columns(model, updates) if loaded else ()
+    self._returning = read_back
     if dry or self.dry:
         return self
 
@@ -201,9 +217,8 @@ def _qb_update(
 
     # Column-reference expressions are computed by the database from the
     # CURRENT row — there is no concrete Python value to write back onto
-    # the model. Strip them from the dict used to refresh in-memory state
-    # so the model never carries a stale ``F`` object as an attribute.
-    # (The SQL itself still updates the column server-side.)
+    # the model, so the model never carries an ``F`` object as an
+    # attribute. A loaded model reads the computed value back instead.
     materialized = {
         key: value for key, value in updates.items() if not _is_column_expression(value)
     }
@@ -211,16 +226,61 @@ def _qb_update(
     additional.update(materialized)
 
     result = self.new_connection().query(self.to_qmark(), self._bindings)
+    if loaded and not result:
+        # The row is gone or out of scope, or a compare-and-set ``where``
+        # lost to another writer. ``result`` is the RETURNING rows, or the
+        # matched count when nothing is read back: empty either way means
+        # nothing was written. Answering with the always-truthy model made
+        # ``save()`` report a write that never landed, and filling it first
+        # left the model claiming values no row holds. It stays as it was
+        # read, fires no ``updated``, and ``save()`` keeps its change pending.
+        return None
     if model:
-        model.fill(materialized)
+        written = {**materialized, **_returned_values(model, read_back, result)}
+        model.fill(written)
         self.observe_events(model, "updated")
-        model.fill_original(materialized)
-        return model
-    # Laravel parity: a non-model (table-level) update returns the
-    # affected row count. Queue/outbox CAS transitions depend on it —
-    # the old ``additional`` dict return was always truthy, so a losing
-    # CAS (0 rows matched) still claimed the job.
+        model.fill_original(written)
+        if loaded:
+            return model
+    # Laravel parity: an update with no loaded instance returns the matched
+    # row count. Queue/outbox CAS transitions depend on it — the old
+    # ``additional`` dict return was always truthy, so a losing CAS (0 rows
+    # matched) still claimed the job. A model query
+    # (``Model.where(...).update()``) answered with its throwaway instance,
+    # truthy the same way, so its compare-and-sets always read as won.
     return result
+
+
+def _read_back_columns(model, updates: dict[str, Any]) -> tuple[str, ...]:
+    """The columns of a model UPDATE whose written value only the database knows.
+
+    ``TimeStampsScope`` adds ``updated_at`` while the statement compiles, after
+    ``materialized`` was taken from the caller's values, and a column
+    expression (``F("hits") + 1``) is computed from the current row. Filling
+    the model from ``materialized`` alone left both stale: every
+    ``model.update()`` kept the old ``updated_at``. Both are read back with
+    ``RETURNING`` instead, so the model holds what the row holds.
+    """
+    columns = [
+        column for column, value in updates.items() if _is_column_expression(value)
+    ]
+    if model.__timestamps__ and model.date_updated_at not in columns:
+        columns.append(model.date_updated_at)
+    return tuple(columns)
+
+
+def _returned_values(model, columns: tuple[str, ...], result) -> dict[str, Any]:
+    """The read-back columns of the RETURNING row, stored as ``hydrate`` stores them.
+
+    Only reached for an UPDATE that matched its row (a miss returns before
+    the model is touched). Only the requested columns are taken from the row.
+    """
+    if not columns or not isinstance(result, list) or not result:
+        return {}
+    row = result[0]
+    return model.hydrated_values(
+        {column: row[column] for column in columns if column in row}
+    )
 
 
 def _qb_force_update(self, updates: dict, dry=False):

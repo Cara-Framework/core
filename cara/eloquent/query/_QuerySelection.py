@@ -172,6 +172,9 @@ def _qb_reset(self) -> Self:
     self._unions = []
     self.lock = False
     self._lock_modifier = {"skip_locked": False, "nowait": False, "of": []}
+    # A leaked read-back would put RETURNING on the next UPDATE this
+    # builder runs, and its affected-row count would become a row list.
+    self._returning = ()
 
     return self
 

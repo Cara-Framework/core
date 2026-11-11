@@ -86,11 +86,7 @@ def _model_hydrate(cls, result, relations=None) -> Any:
 
     elif isinstance(result, dict):
         model = cls()
-        dic = {}
-        for key, value in result.items():
-            if key in model.get_dates() and value:
-                value = model.get_new_date(value)
-            dic.update({key: value})
+        dic = model.hydrated_values(result)
 
         model.observe_events(model, "hydrating")
         model.__attributes__.update(dic or {})
@@ -111,6 +107,20 @@ def _model_hydrate(cls, result, relations=None) -> Any:
         model.__original_attributes__.update(dict(result))
         model.observe_events(model, "hydrated")
         return model
+
+
+def _model_hydrated_values(self, row) -> dict[str, Any]:
+    """The attribute values ``hydrate`` stores for a database row.
+
+    One rule for every value read from the database, so a row read back by an
+    UPDATE's ``RETURNING`` is stored exactly like a row read by a SELECT: a
+    date column becomes a UTC ``pendulum`` instant.
+    """
+    dates = self.get_dates()
+    return {
+        key: self.get_new_date(value) if key in dates and value else value
+        for key, value in row.items()
+    }
 
 
 def _model_fill(self, attributes) -> Self:

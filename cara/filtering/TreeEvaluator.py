@@ -9,6 +9,11 @@ buckets). Same honesty contract, mirrored: a group toggle is a real OR,
 includes the rows where X was never computed, exactly as the SQL
 compiler includes NULLs on nullable columns.
 
+A row may hold a SET for a field (a product sold on several marketplaces
+is on each of them): ``in`` keeps it when it holds any of the values,
+``not_in`` when it holds none, and an empty set is a missing value. Only
+set membership compares a set; any other operator on one raises.
+
 Entity values evaluate through the SAME ``resolutions`` mapping the app
 built by resolving + AUTHORIZING every public id in the tree. A missing
 resolution raises — it must never degrade into an unfiltered feed.
@@ -179,6 +184,19 @@ def _apply_operator(
     actual: Any,
     zone: ZoneInfo | None,
 ) -> bool:
+    # ── a row holding several values ────────────────────────────────
+    if isinstance(actual, (set, frozenset)):
+        if not actual:
+            actual = None
+        elif operator in (OP_IN, OP_NOT_IN):
+            held = not actual.isdisjoint(bound)
+            return held if operator == OP_IN else not held
+        else:
+            raise FilterTreeCompileError(
+                f"Field {field.id!r} holds several values; only in / not_in"
+                " compare a set."
+            )
+
     # ── value-less ──────────────────────────────────────────────────
     if operator == OP_EMPTY:
         return actual is None

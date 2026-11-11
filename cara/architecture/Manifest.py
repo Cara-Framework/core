@@ -181,6 +181,17 @@ class Manifest:
     registry_size_bounds: tuple[int, int] | None = None
     single_layer_domains: frozenset[str] = frozenset()
 
+    @property
+    def kernel_aliases(self) -> dict[str, str]:
+        """``app.<pkg>`` -> ``commons.<pkg>`` for every kernel package: the
+        name a dev barrel mirrors its kernel package's submodules under, so a
+        source reader (``cara.openapi.SourceIndex``) resolves ``from
+        app.gates.Apps import x`` to ``commons/gates/Apps.py`` as the import
+        does."""
+        app = self.roots.app_namespace
+        kernel = self.roots.kernel_dev_root_name
+        return {f"{app}.{pkg}": f"{kernel}.{pkg}" for pkg in sorted(self.kernel_packages)}
+
     @classmethod
     def load(cls, path: Path) -> Manifest:
         """Boot-free load of a product's ``app/architecture_manifest.py``.
