@@ -147,6 +147,105 @@ class SettingsUpdateRequest(SettingsRequest):
     assert inherited["additionalProperties"]["nullable"] is True
 
 
+def test_a_filter_tree_query_parameter_documents_its_grammar_and_schema(
+    tmp_path: Path,
+):
+    """``filter_tree:<schema>`` is the framework's own grammar (``cara.filtering``),
+    so the query parameter it guards says what to send: the schema it is judged
+    against, the wire grammar, and the parser's length cap. It used to land in
+    ``x-cara-unsupported-rules`` and leave ``filters`` a bare string, and an API
+    customer had no way to learn the grammar from the published reference."""
+    from cara.filtering import RAW_LENGTH_CAP
+    from cara.openapi import request_query_parameters
+
+    requests = _write_source(
+        tmp_path,
+        "requests",
+        '''
+class IndexRequest(FormRequest):
+    """GET /things query params."""
+
+    def rules(self):
+        return {"filters": "nullable|string|filter_tree:things.index"}
+''',
+    )
+
+    schema = FormRequestSchemaExtractor(requests).extract()["IndexRequest"]
+    filters = schema["properties"]["filters"]
+    assert "x-cara-unsupported-rules" not in filters
+    assert filters["x-cara-filter-tree"] == "things.index"
+    assert filters["maxLength"] == RAW_LENGTH_CAP
+
+    (parameter,) = request_query_parameters(schema)
+    assert parameter["name"] == "filters"
+    assert parameter["x-filter-schema"] == "things.index"
+    assert parameter["schema"] == {"type": "string", "maxLength": RAW_LENGTH_CAP}
+    description = parameter["description"]
+    assert '"f"' in description and '"o"' in description and '"v"' in description
+    assert '{"any": [' in description
+    assert "x-filter-schemas" in description
+
+
+def test_the_filter_grammar_says_what_every_operator_and_kind_takes(
+    tmp_path: Path,
+):
+    """A field's kind and operators (``x-filter-schemas``) do not say what goes in
+    ``v``: how many values ``between`` takes, how a date or a boolean is written,
+    how big a tree may grow. Without that sentence an API customer learned the
+    grammar from 422s (api-consumer review, 2026-11-12). Each claim is pinned to
+    the parser's own table, so the description cannot drift from what it refuses."""
+    from cara.filtering import (
+        LAST_DAYS_MAX,
+        MAX_CONDITIONS,
+        MAX_GROUP_CHILDREN,
+        MAX_ROOT_NODES,
+        OPERATOR_ARITY,
+        RAW_LENGTH_CAP,
+        VALUES_HARD_CAP,
+    )
+    from cara.openapi import request_query_parameters
+
+    requests = _write_source(
+        tmp_path,
+        "requests",
+        '''
+class IndexRequest(FormRequest):
+    """GET /things query params."""
+
+    def rules(self):
+        return {"filters": "nullable|string|filter_tree:things.index"}
+''',
+    )
+    schema = FormRequestSchemaExtractor(requests).extract()["IndexRequest"]
+    (parameter,) = request_query_parameters(schema)
+    description = parameter["description"]
+
+    by_arity: dict[tuple[int, int | None], set[str]] = {}
+    for operator, arity in OPERATOR_ARITY.items():
+        by_arity.setdefault(arity, set()).add(operator)
+    assert by_arity.pop((1, None)) == {"in", "not_in"}
+    assert by_arity.pop((2, 2)) == {"between"}
+    assert by_arity.pop((0, 0)) == {"empty", "not_empty"}
+    assert set(by_arity) == {(1, 1)}
+    assert "`in` / `not_in` take one or more values" in description
+    assert "`between` takes two" in description
+    assert "`empty` / `not_empty` take none" in description
+    assert "every other operator takes one" in description
+
+    assert '"true" or "false"' in description
+    assert "YYYY-MM-DD" in description
+    assert f"from 1 to {LAST_DAYS_MAX}" in description
+    assert "`prefix`" in description
+    for ceiling in (
+        f"{MAX_ROOT_NODES} top-level nodes",
+        f"{MAX_GROUP_CHILDREN} conditions in a group",
+        f"{MAX_CONDITIONS} conditions in all",
+        f"{VALUES_HARD_CAP} values in a condition",
+        f"{RAW_LENGTH_CAP} characters",
+    ):
+        assert ceiling in description, ceiling
+
+
 def test_controller_contracts_capture_request_and_every_response_status(
     tmp_path: Path,
 ):

@@ -28,4 +28,10 @@ class DigitsBetweenRule(BaseRule):
         return lo <= len(s) <= hi
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
-        return f"'{field}' must be between {params.get('digits_between', '?')} digits."
+        # Bounds said as words, as ``BetweenRule`` says them: "between 3,8
+        # digits" is the rule literal, not a sentence.
+        raw = str(params.get("digits_between", "?"))
+        low, separator, high = raw.partition(",")
+        if separator and low.strip() and high.strip():
+            return f"'{field}' must have between {low.strip()} and {high.strip()} digits."
+        return f"'{field}' must have between {raw} digits."

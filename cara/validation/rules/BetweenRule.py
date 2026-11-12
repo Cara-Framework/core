@@ -74,5 +74,10 @@ class BetweenRule(BaseRule):
         return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
-        between_param = params.get("between", "")
+        # "between 1,100" read as one thousand one hundred to the API
+        # customer who sent ``limit=0``; the bounds are said as words.
+        between_param = str(params.get("between", ""))
+        low, separator, high = between_param.partition(",")
+        if separator and low.strip() and high.strip():
+            return f"'{field}' must be between {low.strip()} and {high.strip()}."
         return f"'{field}' must be between {between_param}."

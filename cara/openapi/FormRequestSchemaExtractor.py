@@ -14,9 +14,52 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from cara.filtering import (
+    LAST_DAYS_MAX,
+    MAX_CONDITIONS,
+    MAX_GROUP_CHILDREN,
+    MAX_ROOT_NODES,
+    RAW_LENGTH_CAP,
+    VALUES_HARD_CAP,
+)
+
 _CURSOR_TOKEN_MAX = 4096
 _MODIFIERS = frozenset({"bail", "confirmed", "distinct", "sometimes"})
 _FORBIDDEN = frozenset({"missing", "prohibited"})
+
+#: The wire grammar of a ``filter_tree:<schema>`` parameter, said once for
+#: every operation that takes one. The grammar is the framework's
+#: (``cara.filtering.FilterTree``); the vocabulary — fields, operators, options
+#: — is the app's schema, published beside the paths as ``x-filter-schemas``
+#: and named on the parameter by ``x-filter-schema``. What goes in ``v`` (each
+#: operator's arity, each kind's value form) and the tree's ceilings are the
+#: parser's too, so they are said here from its own constants: a field's kind
+#: and operators alone left a customer learning them from 422s (api-consumer
+#: review, 2026-11-12). The ceilings are ``TreeSchema``'s defaults.
+_FILTER_TREE_GRAMMAR = (
+    "A filter expression as compact JSON (URL-encoded in the query string). "
+    'A condition is {"f": "<field>", "o": "<operator>", "v": ["<value>", ...]} '
+    "and every value is a string: `in` / `not_in` take one or more values, "
+    "`between` takes two (low, high; both ends included), `empty` / `not_empty` "
+    "take none, and every other operator takes one. A value follows the field's "
+    "kind: select, one of its option values; entity, a public id starting with "
+    'its `prefix`; boolean, "true" or "false"; number, a decimal such as '
+    '"12.50"; text, the text itself; date, a calendar day YYYY-MM-DD in the '
+    "time zone the API reports in (`before` is earlier than that day, `after` "
+    "later than it), and for `last_days` a day count from 1 to "
+    f"{LAST_DAYS_MAX} that includes today. The root is an array of conditions "
+    'and groups joined with AND, or {"any": [...]} to join them with OR. A '
+    'group is {"any": [conditions]} (OR) or {"all": [conditions]} (AND) and '
+    f"holds conditions only. At most {MAX_ROOT_NODES} top-level nodes, "
+    f"{MAX_GROUP_CHILDREN} conditions in a group, {MAX_CONDITIONS} conditions "
+    f"in all, {VALUES_HARD_CAP} values in a condition and {RAW_LENGTH_CAP} "
+    'characters. Example: [{"f": "status", "o": "in", "v": ["active"]}, '
+    '{"any": [{"f": "tag", "o": "contains", "v": ["red"]}, {"f": "brand", '
+    '"o": "empty"}]}]. The fields this operation accepts, each with its '
+    "operators and options, are listed under the document's `x-filter-schemas` "
+    "by the name in this parameter's `x-filter-schema`; an expression the "
+    "schema refuses answers 422 naming the first problem."
+)
 
 
 @dataclass(slots=True)
@@ -286,6 +329,12 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
             )
         elif name in {"gt", "lt"}:
             schema[f"x-cara-{name}"] = argument
+        elif name == "filter_tree" and argument:
+            # The parser refuses anything longer, whatever the rule says.
+            schema["x-cara-filter-tree"] = argument
+            schema["maxLength"] = min(
+                schema.get("maxLength", RAW_LENGTH_CAP), RAW_LENGTH_CAP
+            )
 
     unsupported = sorted(
         name
@@ -303,6 +352,7 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
             "decimal_text",
             "dict",
             "email",
+            "filter_tree",
             "gt",
             "in",
             "in_csv",
@@ -589,6 +639,9 @@ def request_query_parameters(schema: dict[str, Any]) -> list[dict[str, Any]]:
             "required": name in required,
             "schema": query_schema,
         }
+        if tree := property_schema.get("x-cara-filter-tree"):
+            parameter["description"] = _FILTER_TREE_GRAMMAR
+            parameter["x-filter-schema"] = tree
         if property_schema.get("type") == "object":
             parameter.update({"style": "deepObject", "explode": True})
         elif property_schema.get("type") == "array":
