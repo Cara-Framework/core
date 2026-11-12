@@ -11,6 +11,7 @@ from cara.queues.serializers import SignedJsonJobSerializer
 from . import (
     _DeliveryConfiguration,
     _DeliveryDiagnostics,
+    _DeliveryExecution,
     _DeliveryHooks,
     _DeliveryPublishing,
     _DeliveryRecovery,
@@ -138,6 +139,12 @@ class QueueJobDeliveryStore:
     _PUBLISH_QUARANTINE_FILTER = (
         f"starts_with(terminal_reason, '{PUBLISH_QUARANTINE_REASON_PREFIX}')"
     )
+
+    #: How often one relay asks the broker whether aged published rows still
+    #: have a copy waiting (``requeue_lost_broker_copies``).
+    LOST_COPY_CHECK_INTERVAL_SECONDS = 30.0
+    #: Process-local: when this relay last asked (monotonic seconds).
+    _lost_copy_checked_at = float("-inf")
 
     _PUBLISH_BACKOFF_SECONDS = (1, 5, 30, 60, 300)
     _HOOK_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600, 86400)
@@ -439,16 +446,23 @@ class QueueJobDeliveryStore:
     _claim_publish = _DeliveryConfiguration._delivery_claim_publish
 
     _claim_next_publish = _DeliveryPublishing._delivery_claim_next_publish
+    _claim_publish_batch = _DeliveryPublishing._delivery_claim_publish_batch
     publish_due = _DeliveryPublishing._delivery_publish_due
+    _publish_batch = _DeliveryPublishing._delivery_publish_batch
+    _publish_rows = _DeliveryPublishing._delivery_publish_rows
     _publish_claimed = _DeliveryPublishing._delivery_publish_claimed
+    _publish_to_broker = _DeliveryPublishing._delivery_publish_to_broker
+    _mark_published = _DeliveryPublishing._delivery_mark_published
+    _unclaim_publish = _DeliveryPublishing._delivery_unclaim_publish
+    _json_ids = staticmethod(_DeliveryPublishing._delivery_json_ids)
     _release_publish = _DeliveryPublishing._delivery_release_publish
     _quarantine_publish = _DeliveryPublishing._delivery_quarantine_publish
-    claim_execution = _DeliveryPublishing._delivery_claim_execution
-    renew_execution = _DeliveryPublishing._delivery_renew_execution
-    _reconcile_broker_receipt = _DeliveryPublishing._delivery_reconcile_broker_receipt
-    complete = _DeliveryPublishing._delivery_complete
-    complete_with_tracker = _DeliveryPublishing._delivery_complete_with_tracker
-    dead_letter = _DeliveryPublishing._delivery_dead_letter
+    claim_execution = _DeliveryExecution._delivery_claim_execution
+    renew_execution = _DeliveryExecution._delivery_renew_execution
+    _reconcile_broker_receipt = _DeliveryExecution._delivery_reconcile_broker_receipt
+    complete = _DeliveryExecution._delivery_complete
+    complete_with_tracker = _DeliveryExecution._delivery_complete_with_tracker
+    dead_letter = _DeliveryExecution._delivery_dead_letter
 
     dead_letter_with_tracker = _DeliverySettlement._delivery_dead_letter_with_tracker
     _settle_execution_with_tracker = (
@@ -473,6 +487,7 @@ class QueueJobDeliveryStore:
     _settle = _DeliveryHooks._delivery_settle
     expire_due = _DeliveryHooks._delivery_expire_due
     recover_stale_executions = _DeliveryHooks._delivery_recover_stale_executions
+    requeue_lost_broker_copies = _DeliveryHooks._delivery_requeue_lost_broker_copies
     prune_terminal = _DeliveryHooks._delivery_prune_terminal
     execution_timeout_for = _DeliveryHooks._delivery_execution_timeout_for
 
@@ -510,6 +525,7 @@ class QueueJobDeliveryStore:
 
 _DeliveryConfiguration._bind_store(QueueJobDeliveryStore)
 _DeliveryPublishing._bind_store(QueueJobDeliveryStore)
+_DeliveryExecution._bind_store(QueueJobDeliveryStore)
 _DeliverySettlement._bind_store(QueueJobDeliveryStore)
 _DeliveryHooks._bind_store(QueueJobDeliveryStore)
 _DeliveryRecovery._bind_store(QueueJobDeliveryStore)

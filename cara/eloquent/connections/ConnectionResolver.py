@@ -366,12 +366,17 @@ class ConnectionResolver:
         """Rollback the transaction opened in this context on ``connection_name``."""
         connection = self._get_active_connection(connection_name)
         level_before = int(getattr(connection, "transaction_level", 0) or 0)
-        connection.rollback()
-        # Mirror ``commit``: a nested rollback only unwinds its SAVEPOINT, so
-        # keep the connection pinned for the still-open enclosing transaction.
-        if getattr(connection, "transaction_level", 0) <= 0:
-            self._remove_active_connection(connection_name)
-            self._safe_close(connection)
+        try:
+            connection.rollback()
+        finally:
+            # Mirror ``commit``: a nested rollback only unwinds its SAVEPOINT,
+            # so keep the connection pinned for the still-open enclosing
+            # transaction. In ``finally``: a rollback that raises at the
+            # outermost level must still unpin and hand the pool permit
+            # back, or the permit is lost with this context's registry.
+            if getattr(connection, "transaction_level", 0) <= 0:
+                self._remove_active_connection(connection_name)
+                self._safe_close(connection)
         callbacks = self._discard_callbacks_from_level(
             _get_after_rollback_registry(),
             connection_name,

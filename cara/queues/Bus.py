@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import functools
 import inspect
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -116,7 +117,20 @@ class Bus:
                 dispatch_call.with_unique_key(unique_key)
             # The terminal call is mandatory: builder destruction never
             # queues work, and dispatch failures must reach the caller.
-            job_id = dispatch_call.dispatch()
+            #
+            # It is synchronous database work (the tracking row and the
+            # delivery row, committed). On the event loop it held every other
+            # request of the process for that commit: the api serves from one
+            # loop, so its webhook ingress ran one commit at a time and a
+            # WAL-flush stall froze it for seconds (ingest stress 2026-11-12).
+            # Outside a transaction the write shares nothing with its caller
+            # and runs in a worker thread with the caller's context. Inside
+            # one it stays on the caller's pinned connection, so the delivery
+            # commits or rolls back with the caller's own writes.
+            if Bus._caller_holds_transaction():
+                job_id = dispatch_call.dispatch()
+            else:
+                job_id = await ExecutionContext.run_in_thread(dispatch_call.dispatch)
 
             if reserved_job_id is not None:
                 outcome = "fresh" if str(job_id) == reserved_job_id else "collision"
@@ -325,27 +339,32 @@ class Bus:
         return None
 
     @staticmethod
-    def get_dispatch_params(job: Queueable) -> dict:
-        """
-        Extract the constructor-owned state required to rebuild a job.
+    def _caller_holds_transaction() -> bool:
+        """Whether this execution context has a DB transaction open.
 
-        Args:
-            job: Job instance
+        Unknown counts as open: running inline is always correct, only
+        slower, while committing on another connection would split a
+        transactional outbox write from its caller's."""
+        try:
+            return int(facades.DB.transaction_level() or 0) > 0
+        except Exception:
+            return True
 
-        Returns:
-            Dict of parameters for dispatch
-        """
-        if not hasattr(job, "__dict__"):
-            return {}
+    @staticmethod
+    @functools.lru_cache(maxsize=4096)
+    def _constructor_parameters(job_class: type) -> tuple[tuple[str, ...], bool]:
+        """The constructor-chain parameter names of ``job_class`` and whether
+        any constructor takes ``**kwargs``.
 
-        state = vars(job)
-        parameter_names: set[str] = set()
+        A subclass commonly accepts ``**kwargs`` and forwards framework-owned
+        options to a base job, so the complete chain is walked and those base
+        parameters stay part of the durable wire contract. Walked once per
+        class: every dispatch serializes its job three times and each walk is
+        an ``inspect.signature`` per constructor (~0.7 ms of a webhook request
+        on the api's event loop, ingest stress 2026-11-12)."""
+        names: dict[str, None] = {}
         accepts_stored_kwargs = False
-
-        # A subclass commonly accepts ``**kwargs`` and forwards framework-owned
-        # options to a base job. Walk the complete constructor chain so those
-        # explicit base parameters remain part of the durable wire contract.
-        for base in job.__class__.__mro__:
+        for base in job_class.__mro__:
             constructor = base.__dict__.get("__init__")
             if constructor is None:
                 continue
@@ -360,9 +379,29 @@ class Bus:
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     inspect.Parameter.KEYWORD_ONLY,
                 ):
-                    parameter_names.add(name)
+                    names[name] = None
                 elif parameter.kind is inspect.Parameter.VAR_KEYWORD:
                     accepts_stored_kwargs = True
+        return tuple(names), accepts_stored_kwargs
+
+    @staticmethod
+    def get_dispatch_params(job: Queueable) -> dict:
+        """
+        Extract the constructor-owned state required to rebuild a job.
+
+        Args:
+            job: Job instance
+
+        Returns:
+            Dict of parameters for dispatch
+        """
+        if not hasattr(job, "__dict__"):
+            return {}
+
+        state = vars(job)
+        parameter_names, accepts_stored_kwargs = Bus._constructor_parameters(
+            job.__class__
+        )
 
         params = {name: state[name] for name in parameter_names if name in state}
 

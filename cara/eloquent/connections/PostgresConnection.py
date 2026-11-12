@@ -462,21 +462,61 @@ class PostgresConnection(BaseConnection):
         return self
 
     def rollback(self):
-        """Transaction with savepoint support for nesting."""
+        """Transaction with savepoint support for nesting.
+
+        A session the server already ended (restart, failover, network drop,
+        ``pg_terminate_backend``, ``idle_in_transaction_session_timeout``)
+        took every open transaction level with it, so there is nothing to
+        roll back. Calling ``rollback()`` on it raised ``InterfaceError:
+        connection already closed``, which hid the real error and skipped the
+        resolver's unpin-and-close. Each such rollback then kept a pool permit
+        for the life of the process (db-chaos, 2026-11-12: three killed
+        sessions exhausted a pool of three). Each level now unwinds without
+        raising, and the last one drops the dead handle and frees its permit.
+        """
         if self.transaction_level <= 0:
+            return
+        if self._session_is_dead():
+            self._unwind_dead_session()
             return
         if self.transaction_level > 1:
             # Nested — rollback to savepoint.
             # rollback_to_savepoint() already decrements transaction_level,
             # so we must NOT decrement again here.
-            self.rollback_to_savepoint(f"sp_{self.transaction_level - 1}")
+            try:
+                self.rollback_to_savepoint(f"sp_{self.transaction_level - 1}")
+            except Exception:
+                if not self._session_is_dead():
+                    raise
+                self._unwind_dead_session()
             return
         if self.transaction_level == 1:
             try:
                 self._connection.rollback()
                 self._connection.autocommit = True
-            finally:
-                self.transaction_level -= 1
+            except Exception:
+                if not self._session_is_dead():
+                    self.transaction_level -= 1
+                    raise
+                self._unwind_dead_session()
+                return
+            self.transaction_level -= 1
+
+    def _session_is_dead(self) -> bool:
+        """psycopg2 sets ``closed`` once the server side of the session is gone."""
+        return self._connection is None or bool(self._connection.closed)
+
+    def _unwind_dead_session(self) -> None:
+        """Unwind one transaction level of a dead session; the last frees its permit."""
+        self.transaction_level -= 1
+        if self.transaction_level > 0:
+            # The enclosing transaction's own rollback drops the handle.
+            return
+        dead, self._connection = self._connection, None
+        if dead is not None:
+            with contextlib.suppress(Exception):
+                dead.close()
+        self._release_pool_slot()
 
     def get_transaction_level(self):
         """Transaction."""

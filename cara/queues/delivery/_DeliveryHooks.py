@@ -512,6 +512,107 @@ def _delivery_recover_stale_executions(
     return result
 
 
+def _delivery_requeue_lost_broker_copies(self, batch_size: int = 5000) -> int:
+    """Return published rows whose broker copy is provably gone to the outbox.
+
+    ``recover_stale_executions`` returns a published, never-claimed row only
+    after a full ``execution_lease_seconds`` (2 h by default), because a copy
+    may wait in the broker that long behind busy workers. A LOST copy waits
+    just as long while its row holds a slot of the queue's broker window
+    (db-chaos, 2026-11-12: vhost deleted and recreated mid-burst — the four
+    copies in flight were gone, the four rows kept the ``sync`` window full,
+    and 197 jobs of 20 tenants sat with two idle workers until the 2-h
+    recovery).
+
+    The broker can prove the loss: workers consume with ``prefetch_count=1``
+    and claim on receipt, so once a row has stayed published and unclaimed
+    for a heartbeat lease while its queue holds NO ready message, no copy
+    is waiting for it. Those rows go back to the outbox now. A copy that was
+    in fact still delivering is a duplicate ``claim_execution`` already
+    fences. A queue whose depth cannot be read is left alone.
+    """
+    counts_for = getattr(self.driver, "broker_ready_counts", None)
+    if counts_for is None:
+        return 0
+    # At most one check per interval per relay: an aged row behind slow
+    # workers is normal, and each check costs a broker round trip per queue.
+    checked = time.monotonic()
+    if checked - self._lost_copy_checked_at < self.LOST_COPY_CHECK_INTERVAL_SECONDS:
+        return 0
+    self._lost_copy_checked_at = checked
+    limit = self._bounded_int(
+        batch_size,
+        minimum=1,
+        maximum=10000,
+        field="delivery_lost_copy_batch",
+    )
+    now = pendulum.now("UTC")
+    aged_before = now.subtract(seconds=self.execution_heartbeat_seconds)
+    database = self._db()
+    aged = (
+        database.select(
+            f"SELECT queue, COUNT(*) AS aged FROM {self.table} "
+            "WHERE status = %s AND publish_status = %s "
+            "AND published_at <= %s AND expires_at > %s GROUP BY queue",
+            [self.STATUS_PENDING, self.PUBLISH_PUBLISHED, aged_before, now],
+        )
+        or []
+    )
+    queues = [str(self._row_value(row, "queue")) for row in aged]
+    if not queues:
+        return 0
+    try:
+        ready = counts_for(queues)
+    except Exception as exc:  # broker unreachable: the 2-h recovery still applies
+        Log.warning(
+            "Lost broker copy check skipped: queue depth unavailable: %s",
+            exc,
+            category="cara.queue.delivery",
+        )
+        return 0
+    empty = [queue for queue in queues if ready.get(queue) == 0]
+    if not empty:
+        return 0
+    with database.transaction():
+        requeued = database.statement(
+            f"UPDATE {self.table} AS delivery SET publish_status = %s, "
+            "publish_retry_at = %s, published_at = NULL, updated_at = %s "
+            f"FROM (SELECT job_id FROM {self.table} "
+            "WHERE queue = ANY(%s) AND status = %s AND publish_status = %s "
+            "AND published_at <= %s AND expires_at > %s "
+            "ORDER BY published_at LIMIT %s FOR UPDATE SKIP LOCKED"
+            ") AS lost WHERE delivery.job_id = lost.job_id "
+            "AND delivery.status = %s AND delivery.publish_status = %s",
+            [
+                self.PUBLISH_PENDING,
+                now,
+                now,
+                empty,
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                aged_before,
+                now,
+                limit,
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+            ],
+        )
+    try:
+        count = int(requeued or 0)
+    except TypeError, ValueError:
+        count = 0
+    if count:
+        Log.warning(
+            "%s published queue deliveries on empty broker queue(s) %s went "
+            "unclaimed for a heartbeat lease; their broker copies were lost and "
+            "they returned to the durable publication outbox.",
+            count,
+            ", ".join(sorted(empty)),
+            category="cara.queue.delivery",
+        )
+    return count
+
+
 def _delivery_prune_terminal(self, batch_size: int = 5000) -> int:
     """Delete terminal audit rows only after the configured retention."""
     limit = self._bounded_int(

@@ -160,14 +160,14 @@ def test_a_publish_error_with_no_text_still_leaves_a_reason(monkeypatch):
     monkeypatch.setattr(store, "expire_due", lambda _limit: 0)
     monkeypatch.setattr(
         store,
-        "_claim_next_publish",
-        lambda: ({"job_id": "job-1", "publish_attempts": 0}, "token"),
+        "_claim_publish_batch",
+        lambda _limit: ([{"job_id": "job-1", "publish_attempts": 0}], "token"),
     )
 
-    def _boom(_row, _token):
+    def _boom(_row):
         raise _SilentError()
 
-    monkeypatch.setattr(store, "_publish_claimed", _boom)
+    monkeypatch.setattr(store, "_publish_to_broker", _boom)
     monkeypatch.setattr(
         store,
         "_release_publish",

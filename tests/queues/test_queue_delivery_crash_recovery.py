@@ -111,13 +111,31 @@ class _CrashDB:
                 and self.row["publish_status"] == "pending"
             ):
                 # [now, aging, broker window, tenant window, urgent slots,
-                #  queues, queues, token, lease expiry, now] — the
-                #  tenant-fair claim's order.
+                #  batch limit, queues, queues, token, lease expiry, now] —
+                #  the tenant-fair batch claim's order.
                 self.row["publish_status"] = "processing"
-                self.row["publish_lease_token"] = params[7]
-                self.row["publish_lease_expires_at"] = params[8]
-                return dict(self.row)
-            return None
+                self.row["publish_lease_token"] = params[8]
+                self.row["publish_lease_expires_at"] = params[9]
+                return {"claimed_rows": [dict(self.row)]}
+            return {"claimed_rows": []}
+        if sql.startswith("WITH settled AS (UPDATE queue_job_delivery"):
+            if (
+                self.row["job_id"] in params[3]
+                and self.row["publish_status"] == params[4]
+                and self.row.get("publish_lease_token") == params[5]
+            ):
+                self.row["publish_status"] = params[0]
+                self.row["published_at"] = params[1]
+                self.row["publish_lease_token"] = None
+                return {"ids": [self.row["job_id"]]}
+            return {"ids": []}
+        if sql.startswith("SELECT COALESCE(json_agg(job_id)"):
+            settled = (
+                self.row["job_id"] in params[0]
+                and self.row["publish_status"] == params[1]
+                and self.row.get("published_at") is not None
+            )
+            return {"ids": [self.row["job_id"]] if settled else []}
         if sql.startswith("UPDATE queue_job_delivery SET publish_status = %s"):
             if (
                 self.row["status"] == "pending"

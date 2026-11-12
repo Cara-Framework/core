@@ -307,6 +307,35 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
                 connection.close()
         self._runtime_health_cache[cache_key] = now
 
+    def broker_ready_counts(self, queue_names: Any) -> dict[str, int]:
+        """Ready (undelivered) message count per canonical queue, from the broker.
+
+        A passive declare on a dedicated connection, like
+        :meth:`verify_runtime_health`, so a broker-closed channel never
+        poisons the publisher pool. Read by the relay's lost-copy recovery
+        (``QueueJobDeliveryStore.requeue_lost_broker_copies``).
+        """
+        names = sorted({self.require_canonical_queue(name) for name in queue_names})
+        counts: dict[str, int] = {}
+        if not names:
+            return counts
+        connection, bootstrap = self.open_topology_connection()
+        with contextlib.suppress(Exception):
+            bootstrap.close()
+        try:
+            for name in names:
+                channel = connection.channel()
+                try:
+                    declared = channel.queue_declare(queue=name, passive=True)
+                    counts[name] = int(declared.method.message_count)
+                finally:
+                    with contextlib.suppress(Exception):
+                        channel.close()
+        finally:
+            with contextlib.suppress(Exception):
+                connection.close()
+        return counts
+
     @property
     def delivery_store(self) -> QueueJobDeliveryStore:
         return self._delivery_store

@@ -435,7 +435,13 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     assert db.locked
     assert "SKIP LOCKED" not in db.sql
     assert "tenant_keys(queue, priority, base_rank, tenant_key) AS" in db.sql
-    assert "ORDER BY heads.held, heads.last_served_at NULLS FIRST" in db.sql
+    assert (
+        "tenant_best.is_oldest DESC, tenant_best.held, "
+        "tenant_best.last_served_at NULLS FIRST" in db.sql
+    )
+    # One batch: each queue's FREE window slots, one head per tenant.
+    assert "SELECT DISTINCT ON (heads.queue, heads.tenant_key)" in db.sql
+    assert "ranked.queue_rank <= queue_room.room" in db.sql
     assert "priority_lanes(priority, base_rank) AS (VALUES" in db.sql
     assert "('critical', 0)" in db.sql
     assert "('high', 1)" in db.sql
@@ -450,11 +456,14 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     assert db.params[3] == 0
     # No urgent slots unless configured: the tenant window binds every row.
     assert db.params[4] == 0
+    # A single-row claim is a batch of one.
+    assert db.params[5] == 1
     assert "eligible_queues AS" in db.sql
     assert "unnest(%s::varchar[])" in db.sql
-    assert db.params[5] == ["connector", "sync"]
+    assert db.params[6] == ["connector", "sync"]
     assert "outstanding.publish_lease_expires_at > settings.now" in db.sql
-    assert "< settings.broker_window" in db.sql
+    assert "settings.broker_window - " in db.sql
+    assert "WHERE queue_room.room > 0" in db.sql
     assert "WHERE EXISTS" not in db.sql
     assert "status IN ('pending', 'processing')" in db.sql
 
@@ -488,7 +497,7 @@ def test_urgent_slots_open_past_the_tenant_window_for_declared_urgent_rows_only(
     assert store._claim_next_publish() is None
     assert db.params[2:5] == [2, 1, 1]
     assert "%s::integer AS urgent_slots" in db.sql
-    heads_filter = db.sql.split(") AS head ", 1)[1].split("candidate AS", 1)[0]
+    heads_filter = db.sql.split(") AS head ", 1)[1].split("oldest AS", 1)[0]
     assert "COALESCE(outstanding.held, 0) < settings.tenant_window " in heads_filter
     assert (
         "+ CASE WHEN tenant_keys.base_rank <= 1 "
@@ -497,7 +506,7 @@ def test_urgent_slots_open_past_the_tenant_window_for_declared_urgent_rows_only(
     # The aged tier only ORDERS heads; it never widens the window.
     assert "aging_seconds" not in heads_filter
     # The broker window still bounds the whole queue, urgent or not.
-    assert "< settings.broker_window" in db.sql
+    assert "ranked.queue_rank <= queue_room.room" in db.sql
 
 
 class _DeliveryMetricsDB:
@@ -736,16 +745,28 @@ def test_publish_outage_stops_after_one_broker_attempt():
         "unclaimed": 0,
     }
     store.expire_due = lambda _limit: 0
-    store._claim_next_publish = lambda: claim_calls.append(True) or (row, "publish-token")
-    store._publish_claimed = lambda *_args: (_ for _ in ()).throw(
+    untried_row = {"job_id": "never-tried", "publish_attempts": 0}
+    unclaimed = []
+    store._claim_publish_batch = lambda _limit: (
+        claim_calls.append(True)
+        or (
+            [row, untried_row],
+            "publish-token",
+        )
+    )
+    store._publish_to_broker = lambda *_args: (_ for _ in ()).throw(
         ConnectionError("broker unavailable")
     )
     store._release_publish = lambda *args: release_calls.append(args) or True
+    store._unclaim_publish = lambda ids, token: unclaimed.append((ids, token))
 
     result = store.publish_due()
 
     assert len(claim_calls) == 1
     assert len(release_calls) == 1
+    # The row after the outage was never tried: back to the outbox, no
+    # publish attempt counted against it.
+    assert unclaimed == [(["never-tried"], "publish-token")]
     assert result["claimed"] == 1
     assert result["retried"] == 1
 

@@ -1,7 +1,8 @@
-"""Broker publication, envelope validation and dead-letter operations."""
+"""Relay-side publication: the tenant-fair batch claim, broker publish, settle and quarantine."""
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -11,10 +12,8 @@ from cara.exceptions import QueueException
 from cara.facades import Log
 from cara.queues.serializers import SignedJsonJobSerializer
 
-from .DeliveryClaim import DeliveryClaim
 from .DeliveryEnvelopeExpired import DeliveryEnvelopeExpired
 from .DeliveryEnvelopeMismatch import DeliveryEnvelopeMismatch
-from .DeliveryLeaseLost import DeliveryLeaseLost
 
 QueueJobDeliveryStore: type
 
@@ -25,7 +24,28 @@ def _bind_store(store_type: type) -> None:
 
 
 def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
-    """Atomically lease the next due row: fair across tenants, then by aged priority.
+    """Lease the single next due row — :meth:`_claim_publish_batch` of one."""
+    claimed = self._claim_publish_batch(1)
+    if claimed is None:
+        return None
+    rows, token = claimed
+    return rows[0], token
+
+
+def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | None:
+    """Atomically lease up to ``limit`` due rows: fair across tenants, then by aged priority.
+
+    ONE statement leases a whole batch. Finding the tenants with due work
+    costs a few index probes per tenant (below), so leasing one row per
+    statement made every published row pay for walking every backlogged
+    tenant: at 1,000 tenants with a backlog the claim took 12-20 ms and the
+    relay — the one publisher of the whole fleet — topped out at 35-65
+    rows/s however many workers or window slots there were (stress
+    2026-11-12). The batch takes each tenant's single best head (at most
+    one row per tenant per queue per statement, so the tenant window is
+    re-checked by the next statement), ranks those heads in the fair order
+    below, and fills each queue's FREE broker-window slots from the top.
+    A batch of one is exactly the old single-row pick.
 
     A bounded per-queue broker window keeps the backlog in this ledger
     instead of preloading RabbitMQ, so THIS statement is the scheduler: the
@@ -81,6 +101,7 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
     advisory transaction lock; ``publish_status=processing`` is the durable
     window reservation, so replicas cannot overfill RabbitMQ concurrently.
     """
+    limit = max(1, int(limit))
     token = uuid.uuid4().hex
     now = pendulum.now("UTC")
     database = self._db()
@@ -109,7 +130,8 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
         row = database.select_one(
             "WITH RECURSIVE settings AS (SELECT %s::timestamptz AS now, "
             "%s::numeric AS aging_seconds, %s::integer AS broker_window, "
-            "%s::integer AS tenant_window, %s::integer AS urgent_slots), "
+            "%s::integer AS tenant_window, %s::integer AS urgent_slots, "
+            "%s::integer AS batch_limit), "
             "priority_lanes(priority, base_rank) AS (VALUES "
             "('critical', 0), ('high', 1), ('default', 2), ('low', 3)), "
             "outstanding AS (SELECT outstanding.queue, "
@@ -121,11 +143,12 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
             "(outstanding.publish_status = 'processing' AND "
             "outstanding.publish_lease_expires_at > settings.now)) "
             "GROUP BY outstanding.queue, COALESCE(outstanding.tenant_id, 0)), "
-            "eligible_queues AS (SELECT candidate.queue "
-            "FROM unnest(%s::varchar[]) AS candidate(queue) CROSS JOIN settings "
-            "WHERE COALESCE((SELECT SUM(outstanding.held) FROM outstanding "
-            "WHERE outstanding.queue = candidate.queue), 0) "
-            "< settings.broker_window), "
+            "queue_room AS (SELECT candidate.queue, settings.broker_window - "
+            "COALESCE((SELECT SUM(outstanding.held) FROM outstanding "
+            "WHERE outstanding.queue = candidate.queue), 0) AS room "
+            "FROM unnest(%s::varchar[]) AS candidate(queue) CROSS JOIN settings), "
+            "eligible_queues AS (SELECT queue_room.queue FROM queue_room "
+            "WHERE queue_room.room > 0), "
             "tenant_keys(queue, priority, base_rank, tenant_key) AS ("
             "SELECT eligible_queues.queue, priority_lanes.priority, "
             "priority_lanes.base_rank, first_key.tenant_key "
@@ -148,8 +171,12 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
             "AND COALESCE(delivery.tenant_id, 0) > tenant_keys.tenant_key "
             "ORDER BY COALESCE(delivery.tenant_id, 0) LIMIT 1) AS next_key), "
             "heads AS (SELECT head.job_id, head.available_at, head.created_at, "
-            "tenant_keys.base_rank, COALESCE(outstanding.held, 0) AS held, "
-            "last_served.published_at AS last_served_at "
+            "tenant_keys.queue, tenant_keys.tenant_key, "
+            "COALESCE(outstanding.held, 0) AS held, "
+            "last_served.published_at AS last_served_at, "
+            "GREATEST(tenant_keys.base_rank - FLOOR(EXTRACT(EPOCH FROM "
+            "(settings.now - head.available_at)) / "
+            "settings.aging_seconds), 0) AS aged_rank "
             "FROM tenant_keys CROSS JOIN settings "
             "LEFT JOIN outstanding ON outstanding.queue = tenant_keys.queue "
             "AND outstanding.tenant_key = tenant_keys.tenant_key "
@@ -174,18 +201,29 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
             "+ CASE WHEN tenant_keys.base_rank <= "
             f"{int(self._PRIORITY_RANKS['high'])} "
             "THEN settings.urgent_slots ELSE 0 END), "
-            "candidate AS (SELECT picked.job_id FROM ((SELECT 0 AS turn, "
-            "heads.job_id FROM heads CROSS JOIN settings "
+            # The oldest-overdue turn: this head ranks first in its batch.
+            "oldest AS (SELECT heads.job_id FROM heads CROSS JOIN settings "
             f"WHERE {serve_oldest} AND 2 * EXTRACT(EPOCH FROM "
             "(settings.now - heads.available_at)) >= settings.aging_seconds "
-            "ORDER BY heads.available_at LIMIT 1) UNION ALL (SELECT 1 AS turn, "
-            "heads.job_id FROM heads CROSS JOIN settings "
-            "ORDER BY heads.held, heads.last_served_at NULLS FIRST, "
-            "GREATEST(heads.base_rank - FLOOR(EXTRACT(EPOCH FROM "
-            "(settings.now - heads.available_at)) / "
-            "settings.aging_seconds), 0), heads.available_at, "
-            "heads.created_at LIMIT 1)) AS picked ORDER BY picked.turn LIMIT 1) "
-            f"UPDATE {self.table} AS delivery "
+            "ORDER BY heads.available_at LIMIT 1), "
+            # One head per tenant per queue: its own best by aged tier, age.
+            "tenant_best AS (SELECT DISTINCT ON (heads.queue, heads.tenant_key) "
+            "heads.*, (oldest.job_id IS NOT NULL) AS is_oldest "
+            "FROM heads LEFT JOIN oldest ON oldest.job_id = heads.job_id "
+            "ORDER BY heads.queue, heads.tenant_key, "
+            "(oldest.job_id IS NOT NULL) DESC, heads.aged_rank, "
+            "heads.available_at, heads.created_at), "
+            "ranked AS (SELECT tenant_best.job_id, tenant_best.queue, "
+            "row_number() OVER (PARTITION BY tenant_best.queue "
+            f"ORDER BY {_FAIR_ORDER}) AS queue_rank, "
+            f"row_number() OVER (ORDER BY {_FAIR_ORDER}) AS claim_order "
+            "FROM tenant_best), "
+            # Each queue's FREE window slots, filled from the top.
+            "candidate AS (SELECT ranked.job_id, ranked.claim_order "
+            "FROM ranked JOIN queue_room ON queue_room.queue = ranked.queue "
+            "CROSS JOIN settings WHERE ranked.queue_rank <= queue_room.room "
+            "ORDER BY ranked.claim_order LIMIT (SELECT batch_limit FROM settings)), "
+            f"claimed AS (UPDATE {self.table} AS delivery "
             "SET publish_status = 'processing', "
             "publish_lease_token = %s, publish_lease_expires_at = %s, "
             "updated_at = %s FROM candidate, settings "
@@ -195,13 +233,17 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
             "RETURNING delivery.job_id, delivery.db_job_id, "
             "delivery.payload_sha256, delivery.signed_envelope, "
             "delivery.tenant_mode, delivery.tenant_id, delivery.queue, "
-            "delivery.priority, delivery.publish_attempts",
+            "delivery.priority, delivery.publish_attempts, "
+            "candidate.claim_order) "
+            "SELECT COALESCE(json_agg(claimed ORDER BY claimed.claim_order), "
+            "'[]'::json) AS claimed_rows FROM claimed",
             [
                 now,
                 self.priority_aging_seconds,
                 self.broker_window_per_queue,
                 self.tenant_window_per_queue,
                 self.tenant_urgent_slots_per_queue,
+                limit,
                 list(self.canonical_queues),
                 list(self.canonical_queues),
                 token,
@@ -209,14 +251,28 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
                 now,
             ],
         )
-    if row is None:
+    rows = self._row_value(row, "claimed_rows") if row is not None else None
+    if isinstance(rows, (str, bytes)):
+        rows = json.loads(rows)
+    if not rows:
         return None
-    return row, token
+    return list(rows), token
+
+
+#: The relay's fair order (see :meth:`_claim_publish_batch`), over
+#: ``tenant_best``: the oldest-overdue turn, fewest held window slots, least
+#: recently served, aged tier, then age.
+_FAIR_ORDER = (
+    "tenant_best.is_oldest DESC, tenant_best.held, "
+    "tenant_best.last_served_at NULLS FIRST, tenant_best.aged_rank, "
+    "tenant_best.available_at, tenant_best.created_at"
+)
 
 
 def _delivery_publish_due(self) -> dict[str, int]:
-    """Claim and publish due rows one-at-a-time with bounded leases."""
+    """Claim and publish up to ``claim_batch`` due rows in leased batches."""
     recovery = self.recover_stale_executions(self.claim_batch)
+    lost_requeued = self.requeue_lost_broker_copies(self.claim_batch)
     expired = self.expire_due(self.claim_batch)
     result = {
         "claimed": 0,
@@ -228,16 +284,51 @@ def _delivery_publish_due(self) -> dict[str, int]:
         "stale_requeued": recovery["requeued"],
         "stale_reconciled": recovery["reconciled"],
         "unclaimed_requeued": recovery["unclaimed"],
+        "lost_requeued": lost_requeued,
     }
-    for _ in range(self.claim_batch):
-        claimed = self._claim_next_publish()
+    remaining = self.claim_batch
+    while remaining > 0:
+        claimed = self._claim_publish_batch(remaining)
         if claimed is None:
             break
-        row, token = claimed
+        rows, token = claimed
+        remaining -= len(rows)
+        result["claimed"] += len(rows)
+        stop = self._publish_batch(rows, token, result)
+        if stop:
+            break
+    return result
+
+
+def _delivery_publish_batch(self, rows: list[Any], token: str, result: dict) -> bool:
+    """Publish one claimed batch, then settle every broker-confirmed row at once.
+
+    Returns True when the relay iteration must stop (a systemic publish
+    failure, or a settlement this relay lost). Rows after a failed publish
+    were never attempted: they go straight back to ``pending`` without a
+    publish attempt counted against them.
+
+    The rows go out one after another on the relay's one confirm channel;
+    every row is broker-confirmed before it is settled. Publishing a batch
+    on several threads (one confirm channel and broker connection each) was
+    measured and rejected (integration stress 2026-11-12): with the batch
+    claim the relay out-publishes the workers, so 8 confirm threads changed
+    nothing at 4 workers (397/385 vs 394/386 rows/s) and cost 8 broker
+    connections per relay — the resource whose exhaustion took the broker
+    down that day.
+    """
+    outcomes = self._publish_rows(rows)
+    sent: list[str] = []
+    stop = False
+    untried: list[str] = []
+    for row, exc in zip(rows, outcomes, strict=True):
         job_id = str(self._row_value(row, "job_id"))
-        result["claimed"] += 1
+        if exc is _UNTRIED:
+            untried.append(job_id)
+            continue
         try:
-            settled = self._publish_claimed(row, token)
+            if exc is not None:
+                raise exc
         except DeliveryEnvelopeExpired as exc:
             self._expire_publish(
                 job_id,
@@ -276,16 +367,119 @@ def _delivery_publish_due(self) -> dict[str, int]:
             )
             # A generic publish exception is treated as a systemic relay
             # failure. Continuing would multiply reconnect/socket timeout
-            # cost by claim_batch and stampede the broker during outages.
-            break
+            # cost by claim_batch and stampede the broker during outages:
+            # rows not yet started are skipped (``_UNTRIED``) and handed back.
+            stop = True
         else:
-            result["published" if settled else "settle_lost"] += 1
-            if not settled:
-                break
-    return result
+            sent.append(job_id)
+    if untried:
+        self._unclaim_publish(untried, token)
+        result["claimed"] -= len(untried)
+    if sent:
+        settled = self._mark_published(sent, token)
+        result["published"] += len(settled)
+        lost = len(sent) - len(settled)
+        if lost:
+            result["settle_lost"] += lost
+            stop = True
+    return stop
+
+
+#: A row the batch never started because an earlier publish failed.
+_UNTRIED = object()
+
+
+def _delivery_publish_rows(self, rows: list[Any]) -> list[Any]:
+    """Publish ``rows``; return per row None (confirmed), its error, or ``_UNTRIED``.
+
+    After the first error other than an invalid/expired envelope, the rest
+    are skipped: a broker outage costs one publish attempt, not one per row.
+    """
+    outcomes: list[Any] = []
+    failed = False
+    for row in rows:
+        if failed:
+            outcomes.append(_UNTRIED)
+            continue
+        try:
+            self._publish_to_broker(row)
+        except (DeliveryEnvelopeExpired, DeliveryEnvelopeMismatch) as exc:
+            outcomes.append(exc)
+        except Exception as exc:
+            failed = True
+            outcomes.append(exc)
+        else:
+            outcomes.append(None)
+    return outcomes
 
 
 def _delivery_publish_claimed(self, row: Any, token: str) -> bool:
+    """Publish one claimed row and settle it (the single-row path)."""
+    job_id = self._publish_to_broker(row)
+    return job_id in self._mark_published([job_id], token)
+
+
+def _delivery_mark_published(self, job_ids: list[str], token: str) -> set[str]:
+    """Settle broker-confirmed rows in one statement; return the settled ids.
+
+    A worker that already received a row settles its publication itself
+    (the receipt closes the confirm/ledger crash window), so a row this
+    UPDATE misses still counts when it reads ``published``.
+    """
+    now = pendulum.now("UTC")
+    database = self._db()
+    done = database.select_one(
+        f"WITH settled AS (UPDATE {self.table} SET publish_status = %s, "
+        "published_at = %s, "
+        "publish_lease_token = NULL, publish_lease_expires_at = NULL, "
+        "last_publish_error = NULL, updated_at = %s "
+        "WHERE job_id = ANY(%s::varchar[]) AND publish_status = %s "
+        "AND publish_lease_token = %s RETURNING job_id) "
+        "SELECT COALESCE(json_agg(settled.job_id), '[]'::json) AS ids FROM settled",
+        [
+            self.PUBLISH_PUBLISHED,
+            now,
+            now,
+            list(job_ids),
+            self.PUBLISH_PROCESSING,
+            token,
+        ],
+    )
+    settled = self._json_ids(self._row_value(done, "ids") if done is not None else None)
+    missing = [job_id for job_id in job_ids if job_id not in settled]
+    if missing:
+        current = database.select_one(
+            "SELECT COALESCE(json_agg(job_id), '[]'::json) AS ids "
+            f"FROM {self.table} WHERE job_id = ANY(%s::varchar[]) "
+            "AND publish_status = %s AND published_at IS NOT NULL",
+            [missing, self.PUBLISH_PUBLISHED],
+        )
+        settled |= self._json_ids(
+            self._row_value(current, "ids") if current is not None else None
+        )
+    return settled
+
+
+def _delivery_json_ids(value: Any) -> set[str]:
+    if isinstance(value, (str, bytes)):
+        value = json.loads(value)
+    return {str(item) for item in (value or ())}
+
+
+def _delivery_unclaim_publish(self, job_ids: list[str], token: str) -> None:
+    """Hand claimed rows this relay never tried back to the outbox, unpenalised."""
+    now = pendulum.now("UTC")
+    self._db().statement(
+        f"UPDATE {self.table} SET publish_status = %s, "
+        "publish_lease_token = NULL, publish_lease_expires_at = NULL, "
+        "updated_at = %s WHERE job_id = ANY(%s::varchar[]) "
+        "AND publish_status = %s AND publish_lease_token = %s",
+        [self.PUBLISH_PENDING, now, list(job_ids), self.PUBLISH_PROCESSING, token],
+    )
+
+
+def _delivery_publish_to_broker(self, row: Any) -> str:
+    """Verify one claimed row's signed envelope and publish it with confirms."""
     body = self._envelope_bytes(self._row_value(row, "signed_envelope"))
     try:
         envelope = SignedJsonJobSerializer.inspect_envelope(
@@ -333,32 +527,7 @@ def _delivery_publish_claimed(self, row: Any, token: str) -> bool:
         payload,
         capability=self,
     )
-    now = pendulum.now("UTC")
-    affected = self._db().statement(
-        f"UPDATE {self.table} SET publish_status = %s, published_at = %s, "
-        "publish_lease_token = NULL, publish_lease_expires_at = NULL, "
-        "last_publish_error = NULL, updated_at = %s "
-        "WHERE job_id = %s AND publish_status = %s "
-        "AND publish_lease_token = %s",
-        [
-            self.PUBLISH_PUBLISHED,
-            now,
-            now,
-            str(payload["job_id"]),
-            self.PUBLISH_PROCESSING,
-            token,
-        ],
-    )
-    if self._affected(affected):
-        return True
-    current = self._db().select_one(
-        f"SELECT publish_status, published_at FROM {self.table} WHERE job_id = %s",
-        [str(payload["job_id"])],
-    )
-    return (
-        self._row_value(current, "publish_status") == self.PUBLISH_PUBLISHED
-        and self._row_value(current, "published_at") is not None
-    )
+    return str(payload["job_id"])
 
 
 def _delivery_release_publish(
@@ -427,270 +596,3 @@ def _delivery_quarantine_publish(self, job_id: str, token: str, error: str) -> N
             int(self._row_value(row, "db_job_id")),
             now,
         )
-
-
-def _delivery_claim_execution(
-    self,
-    *,
-    body: bytes | str | dict[str, Any],
-    payload: dict[str, Any],
-) -> DeliveryClaim:
-    """Atomically validate identity and lease one delivery for execution."""
-    digest = SignedJsonJobSerializer.canonical_envelope_sha256(body)
-    job_id = str(payload["job_id"])
-    # The signed budget fitted the lease policy it was signed under; a later,
-    # shorter policy wins instead of failing every redelivery of trusted work.
-    # The worker runs the job for min(signed, current class timeout), which
-    # ``execution_timeout_for`` keeps inside the current lease, so the clamped
-    # lease still covers the whole execution.
-    timeout_seconds = min(
-        self._bounded_int(
-            payload.get("timeout_seconds"),
-            minimum=1,
-            maximum=86400,
-            field="timeout_seconds",
-        ),
-        self.execution_lease_seconds - self.execution_lease_grace_seconds,
-    )
-    # ``timeout + grace`` is the run's whole budget and so the lease's
-    # CEILING; the lease itself is the short heartbeat lease the worker
-    # renews while the job runs (``renew_execution``), so a dead worker's
-    # row lapses within one heartbeat lease, not within the whole budget.
-    budget_seconds = timeout_seconds + self.execution_lease_grace_seconds
-    lease_seconds = min(budget_seconds, self.execution_heartbeat_seconds)
-    now = pendulum.now("UTC")
-    database = self._db()
-    with database.transaction():
-        row = database.select_one(
-            f"SELECT job_id, db_job_id, payload_sha256, tenant_mode, "
-            f"tenant_id, status, attempts, "
-            f"lease_token, lease_expires_at, expires_at, available_at, "
-            f"terminal_reason "
-            f"FROM {self.table} "
-            "WHERE job_id = %s FOR UPDATE",
-            [job_id],
-        )
-        if row is None:
-            return DeliveryClaim("unknown")
-        if (
-            self._row_value(row, "payload_sha256") != digest
-            or self._row_value(row, "db_job_id") != payload.get("db_job_id")
-            or self._row_value(row, "tenant_mode") != payload.get("_tenant_mode")
-            or self._row_value(row, "tenant_id") != payload.get("_tenant")
-        ):
-            return DeliveryClaim("mismatch")
-
-        status = str(self._row_value(row, "status"))
-        available_at = self._as_datetime(self._row_value(row, "available_at"))
-        if available_at is None:
-            return DeliveryClaim("mismatch")
-        if available_at > now:
-            affected = database.statement(
-                f"UPDATE {self.table} SET publish_status = %s, "
-                "publish_retry_at = %s, published_at = NULL, "
-                "publish_lease_token = NULL, "
-                "publish_lease_expires_at = NULL, updated_at = %s "
-                "WHERE job_id = %s AND status = %s",
-                [
-                    self.PUBLISH_PENDING,
-                    available_at,
-                    now,
-                    job_id,
-                    self.STATUS_PENDING,
-                ],
-            )
-            if not self._affected(affected):
-                raise QueueException(
-                    f"Queue delivery {job_id} early-publication recovery was lost."
-                )
-            return DeliveryClaim("not_ready")
-
-        self._reconcile_broker_receipt(database, job_id, now)
-        if status in self.TERMINAL_STATUSES:
-            return DeliveryClaim(
-                status,
-                terminal_reason=self._row_value(row, "terminal_reason"),
-            )
-        reclaimed = False
-        if status == self.STATUS_PROCESSING:
-            lease_expiry = self._as_datetime(self._row_value(row, "lease_expires_at"))
-            if lease_expiry is not None and lease_expiry > now:
-                return DeliveryClaim("live_lease")
-            reclaimed = True
-        elif status != self.STATUS_PENDING:
-            return DeliveryClaim("mismatch")
-
-        expires_at = self._as_datetime(self._row_value(row, "expires_at"))
-        if expires_at is None:
-            return DeliveryClaim("mismatch")
-        refused: tuple[str, str] | None = None
-        if expires_at <= now:
-            refused = (self.STATUS_EXPIRED, "envelope_expired_before_execution")
-        elif (
-            reclaimed
-            and int(self._row_value(row, "attempts") or 0) >= self.CRASH_RECLAIM_CEILING
-            and self._tracker_is_open(database, int(payload["db_job_id"]))
-        ):
-            # A surviving broker copy reached the row before the relay's
-            # recovery did: the same ceiling, on the other way back in. A
-            # finished tracker is not refused; the worker reconciles it.
-            refused = (self.STATUS_DEAD_LETTERED, self.CRASH_LOOP_REASON)
-        if refused is not None:
-            refused_status, refused_reason = refused
-            affected = database.statement(
-                f"UPDATE {self.table} SET status = %s, completed_at = %s, "
-                "terminal_reason = %s, lease_token = NULL, "
-                "lease_expires_at = NULL, publish_lease_token = NULL, "
-                "publish_lease_expires_at = NULL, updated_at = %s "
-                "WHERE job_id = %s AND status IN (%s, %s)",
-                [
-                    refused_status,
-                    now,
-                    refused_reason,
-                    now,
-                    job_id,
-                    self.STATUS_PENDING,
-                    self.STATUS_PROCESSING,
-                ],
-            )
-            if not self._affected(affected):
-                raise QueueException("Queue delivery expiry settlement was lost.")
-            self._mark_tracker_failed(
-                database,
-                int(payload["db_job_id"]),
-                now,
-            )
-            Log.error(
-                "Queue delivery %s refused before execution (%s); retained in "
-                "the ledger for audit and operator replay.",
-                job_id,
-                refused_reason,
-                category="cara.queue.delivery",
-            )
-            return DeliveryClaim(refused_status, terminal_reason=refused_reason)
-
-        token = uuid.uuid4().hex
-        affected = database.statement(
-            f"UPDATE {self.table} SET status = %s, attempts = attempts + 1, "
-            "lease_token = %s, lease_expires_at = %s, updated_at = %s "
-            "WHERE job_id = %s AND status IN (%s, %s)",
-            [
-                self.STATUS_PROCESSING,
-                token,
-                now.add(seconds=lease_seconds),
-                now,
-                job_id,
-                self.STATUS_PENDING,
-                self.STATUS_PROCESSING,
-            ],
-        )
-        if not self._affected(affected):
-            raise QueueException("Queue delivery execution lease was lost.")
-    return DeliveryClaim(
-        "claimed",
-        token,
-        reclaimed=reclaimed,
-        lease_deadline=now.add(seconds=budget_seconds),
-    )
-
-
-def _delivery_renew_execution(
-    self,
-    job_id: str,
-    lease_token: str,
-    *,
-    deadline: Any | None = None,
-) -> bool:
-    """Heartbeat: extend this worker's execution lease while its job runs.
-
-    Compare-and-set on ``lease_token`` while the row is still
-    ``processing``: a lease that lapsed and was recovered (the relay
-    returned the row to the outbox) or re-claimed by another worker is never
-    extended. ``deadline`` — the claim's ``timeout + grace`` budget — caps
-    the extension, so the heartbeat can never hold a row longer than the
-    pre-heartbeat lease did. Returns False once the lease is no longer this
-    worker's, or the budget is spent; the heartbeat then stops.
-    """
-    now = pendulum.now("UTC")
-    expiry = now.add(seconds=self.execution_heartbeat_seconds)
-    if deadline is not None:
-        if deadline <= now:
-            return False
-        expiry = min(expiry, deadline)
-    affected = self._db().statement(
-        f"UPDATE {self.table} SET lease_expires_at = %s, updated_at = %s "
-        "WHERE job_id = %s AND status = %s AND lease_token = %s",
-        [
-            expiry,
-            now,
-            job_id,
-            self.STATUS_PROCESSING,
-            lease_token,
-        ],
-    )
-    return self._affected(affected)
-
-
-def _delivery_reconcile_broker_receipt(
-    self,
-    database: Any,
-    job_id: str,
-    now: pendulum.DateTime,
-) -> None:
-    """Close the publisher-confirm/ledger-CAS crash window on receipt."""
-    affected = database.statement(
-        f"UPDATE {self.table} SET publish_status = %s, "
-        "published_at = COALESCE(published_at, %s), "
-        "publish_lease_token = NULL, publish_lease_expires_at = NULL, "
-        "last_publish_error = NULL, updated_at = %s "
-        "WHERE job_id = %s AND publish_status IN (%s, %s, %s, %s)",
-        [
-            self.PUBLISH_PUBLISHED,
-            now,
-            now,
-            job_id,
-            self.PUBLISH_PENDING,
-            self.PUBLISH_PROCESSING,
-            self.PUBLISH_PUBLISHED,
-            self.PUBLISH_FAILED,
-        ],
-    )
-    if not self._affected(affected):
-        raise DeliveryLeaseLost(
-            f"Queue delivery {job_id} broker receipt was not reconciled."
-        )
-
-
-def _delivery_complete(self, job_id: str, lease_token: str) -> None:
-    self._settle_with_retry(job_id, lease_token, self.STATUS_COMPLETED)
-
-
-def _delivery_complete_with_tracker(
-    self,
-    job_id: str,
-    lease_token: str,
-    *,
-    db_job_id: int,
-) -> None:
-    self._settle_execution_with_tracker(
-        job_id,
-        lease_token,
-        db_job_id=db_job_id,
-        status=self.STATUS_COMPLETED,
-        tracker_status="completed",
-    )
-
-
-def _delivery_dead_letter(
-    self,
-    job_id: str,
-    lease_token: str,
-    *,
-    reason: str,
-) -> None:
-    self._settle_with_retry(
-        job_id,
-        lease_token,
-        self.STATUS_DEAD_LETTERED,
-        reason=reason,
-    )

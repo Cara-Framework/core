@@ -11,6 +11,7 @@ container functionality.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import threading
 import types
@@ -25,6 +26,58 @@ from . import _ContainerResolution
 
 _resolving_stack_var: ContextVar[list[Any]] = ContextVar("cara.container.resolving_stack")
 
+_MISS = object()
+
+
+class _BindingTable(dict):
+    """``Container.objects``: a plain dict that counts its own mutations.
+
+    ``_find_obj``'s type-match scan walks every binding, and the answer for a
+    given key can only change when a binding is added, replaced or removed.
+    The version lets that answer be memoised without trusting every writer to
+    remember an invalidation call — direct ``container.objects[...] = ...``
+    writes bump it too.
+    """
+
+    __slots__ = ("version",)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.version = 0
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        self.version += 1
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: Any) -> None:
+        self.version += 1
+        super().__delitem__(key)
+
+    def pop(self, *args: Any) -> Any:
+        self.version += 1
+        return super().pop(*args)
+
+    def popitem(self) -> Any:
+        self.version += 1
+        return super().popitem()
+
+    def clear(self) -> None:
+        self.version += 1
+        super().clear()
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        self.version += 1
+        super().update(*args, **kwargs)
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        self.version += 1
+        return super().setdefault(key, default)
+
+    def __ior__(self, other: Any) -> _BindingTable:
+        self.version += 1
+        super().__ior__(other)
+        return self
+
 
 class Container:
     """
@@ -37,7 +90,16 @@ class Container:
 
     def __init__(self) -> None:
         # (1) Direct bindings: name → value (could be a class, callable, or instance)
-        self.objects: dict[Any, Any] = {}
+        self.objects: dict[Any, Any] = _BindingTable()
+
+        # Memo of the type-match scan in ``_find_obj``: key → (bindings
+        # version, provider or _MISS). An autowired (unbound) class used to
+        # re-walk every binding on every ``make`` — ~20 per API request.
+        self._scan_memo: dict[Any, tuple[int, Any]] = {}
+
+        # Constructor signatures by callable, keyed with the class's current
+        # ``__init__`` so a patched constructor is re-read.
+        self._signature_memo: dict[Any, tuple[Any, Any]] = {}
 
         # (2) If strict=True, existing bindings cannot be overridden
         self.strict: bool = False
@@ -253,8 +315,42 @@ class Container:
         ):
             return self.objects[obj.__name__]
 
-        # Strategy 4: Match by type/instance/subclass (original logic)
-        for provider_obj in self.objects.values():
+        # Strategy 4: Match by type/instance/subclass, memoised per bindings
+        # version (the answer cannot change until a binding does).
+        objects = self.objects
+        version = getattr(objects, "version", None)
+        if version is not None:
+            try:
+                memo = self._scan_memo.get(obj)
+            except TypeError:
+                memo = None
+            if memo is not None and memo[0] == version:
+                if memo[1] is not _MISS:
+                    return memo[1]
+                self._raise_missing(obj)
+        found = self._scan_bindings(obj)
+        if version is not None:
+            # An unhashable key cannot be memoised; it is simply rescanned.
+            with contextlib.suppress(TypeError):
+                self._scan_memo[obj] = (version, found)
+        if found is not _MISS:
+            return found
+        self._raise_missing(obj)
+
+    def _raise_missing(self, obj: Any) -> None:
+        (
+            GenericContainerException,
+            MissingContainerBindingException,
+            StrictContainerException,
+        ) = _ContainerResolution._get_container_exceptions()
+        raise MissingContainerBindingException(
+            f"The dependency with the '{obj}' annotation could not be resolved by the container"
+        )
+
+    def _scan_bindings(self, obj: Any) -> Any:
+        """The first binding that matches ``obj`` by instance, identity or
+        subclass, or ``_MISS``."""
+        for provider_obj in list(self.objects.values()):
             # (1) Class–instance match
             try:
                 if inspect.isclass(obj) and isinstance(provider_obj, obj):
@@ -286,14 +382,7 @@ class Container:
             except TypeError:
                 pass
 
-        (
-            GenericContainerException,
-            MissingContainerBindingException,
-            StrictContainerException,
-        ) = _ContainerResolution._get_container_exceptions()
-        raise MissingContainerBindingException(
-            f"The dependency with the '{obj}' annotation could not be resolved by the container"
-        )
+        return _MISS
 
     def _find_concrete_binding(self, abstract_obj: Any) -> Any:
         """Find a concrete subclass for an abstract binding.
@@ -326,8 +415,24 @@ class Container:
         return None
 
     def get_parameters(self, obj: Any) -> Any:
-        """Return inspect.signature(obj).parameters.items() for parameter inspection."""
-        return inspect.signature(obj).parameters.items()
+        """Return inspect.signature(obj).parameters.items() for parameter inspection.
+
+        Classes and plain functions are memoised (classes keyed with their
+        current ``__init__``); bound methods and other callables are parsed
+        each time.
+        """
+        if inspect.isclass(obj):
+            stamp = obj.__dict__.get("__init__", getattr(obj, "__init__", None))
+        elif inspect.isfunction(obj):
+            stamp = getattr(obj, "__code__", None)
+        else:
+            return inspect.signature(obj).parameters.items()
+        memo = self._signature_memo.get(obj)
+        if memo is not None and memo[0] is stamp:
+            return memo[1]
+        items = tuple(inspect.signature(obj).parameters.items())
+        self._signature_memo[obj] = (stamp, items)
+        return items
 
     @staticmethod
     def _unwrap_annotation(ann: Any) -> Any:

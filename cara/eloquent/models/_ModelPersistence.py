@@ -101,7 +101,29 @@ def _model_get_connection_details(self) -> dict[str, Any]:
     return DB.get_connection_details()
 
 
+#: Per-class boot outcome: (macro names, global scopes, macros). The
+#: ``boot_Makes*`` hooks only register class-level scopes/macros, so every
+#: instance of a class boots to the same snapshot. Building a QueryBuilder per
+#: instance to rediscover it cost a 10k-row bulk-edit preview ~55k builders
+#: (stress run 2026-11-12, ``tests/eloquent/test_model_boot_cost.py``); an
+#: instance now copies the snapshot and builds its builder lazily, seeded from
+#: it (``QueryBuilder.__init__`` copies ``model._global_scopes``/``_macros``).
+_BOOT_SNAPSHOTS: dict[type, tuple[list[str], dict[str, dict], dict]] = {}
+
+
 def _model_boot(self) -> None:
+    if self._booted:
+        return
+    snapshot = _BOOT_SNAPSHOTS.get(type(self))
+    if snapshot is not None:
+        passthrough, scopes, macros = snapshot
+        self.observe_events(self, "booting")
+        self._booted = True
+        self.observe_events(self, "booted")
+        self.append_passthrough(passthrough)
+        self._global_scopes = {action: dict(names) for action, names in scopes.items()}
+        self._macros = dict(macros)
+        return
     if not self._booted:
         self.observe_events(self, "booting")
         for base_class in inspect.getmro(self.__class__):
@@ -146,6 +168,11 @@ def _model_boot(self) -> None:
             action: dict(scopes) for action, scopes in booted._global_scopes.items()
         }
         self._macros = dict(booted._macros)
+        _BOOT_SNAPSHOTS[type(self)] = (
+            list(booted._macros.keys()),
+            {action: dict(scopes) for action, scopes in booted._global_scopes.items()},
+            dict(booted._macros),
+        )
 
 
 def _model_append_passthrough(self, passthrough) -> Self:
