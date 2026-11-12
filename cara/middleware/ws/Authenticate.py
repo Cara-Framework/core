@@ -46,15 +46,22 @@ class Authenticate(Middleware):
                 await socket.close(code=4003)
             raise WebSocketException("Origin not allowed", 4003)
 
+        # Only the credential check is guarded. ``next_fn`` is everything
+        # behind this middleware — ``ws.throttle`` and the controller's whole
+        # session — and wrapping it turned a throttled reconnect (4008) and any
+        # benign session end into an ERROR "auth error" with a traceback, and
+        # a controller crash into 4006 Unauthorized (live 2026-11-11: 387 such
+        # errors, each burst the dashboard reconnecting after an API reload).
         try:
-            if await self._authenticate_socket(socket):
-                return await next_fn(socket)
+            authenticated = await self._authenticate_socket(socket)
         except Exception as e:
             Log.error(
                 "WebSocket auth error: %s", e, category="cara.websocket", exc_info=True
             )
             # Don't try to send close message on error - just raise the exception
             raise WebSocketException("Unauthorized WebSocket", 4006) from e
+        if authenticated:
+            return await next_fn(socket)
 
         # If we get here authentication failed
         try:

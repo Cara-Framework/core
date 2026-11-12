@@ -10,9 +10,7 @@ import asyncio
 import contextlib
 import inspect
 import json
-import os
 import signal
-import sys
 import threading
 import time
 import traceback
@@ -24,6 +22,7 @@ import cara.facades as facades
 from cara.broadcasting import drained
 from cara.commands.CommandBase import CommandBase
 from cara.commands.MakesAutoReload import MakesAutoReload
+from cara.commands.ProcessReload import replace_process_when_bootable
 from cara.configuration import config
 from cara.configuration import config as global_config
 from cara.context import Tenancy
@@ -156,8 +155,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
     @staticmethod
     def _restart_scheduler_process() -> None:
-        """Replace the stopped scheduler with the same interpreter/arguments."""
-        os.execv(sys.executable, [sys.executable, *sys.argv])
+        """Replace the stopped scheduler with the same interpreter/arguments,
+        once the edited tree boots (``ProcessReload``)."""
+        replace_process_when_bootable()
 
     def _run_main_loop(self, *args, **kwargs):
         """Main scheduler loop - called by MakesAutoReload on restart."""

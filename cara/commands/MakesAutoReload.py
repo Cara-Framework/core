@@ -29,21 +29,50 @@ def _auto_reload_handler(command: Any, debounce_delay: float = 0.3) -> Any:
             self.last_reload = 0.0
             super().__init__()
 
+        # Every kind of change counts, not only an in-place write. An atomic
+        # save (``Name.py.tmp.<pid>.<id>`` written beside the file, then
+        # renamed over it — editors and the agents' Edit/Write tools) reaches
+        # macOS FSEvents as created/modified for the temp name, moved
+        # temp -> ``Name.py`` and deleted ``Name.py``: no ``modified`` for
+        # ``Name.py`` at all. Answering ``on_modified`` alone, the scheduler
+        # missed every such save (live 2026-11-12: no reload from 11:28 to
+        # 12:05 across 30+ edits, so it dispatched job shapes the tree no
+        # longer had). A new or removed source file changes what the
+        # process imports just the same.
         def on_modified(self, event: Any) -> None:
-            """Handle file modification events."""
+            self._on_change(event)
+
+        def on_created(self, event: Any) -> None:
+            self._on_change(event)
+
+        def on_deleted(self, event: Any) -> None:
+            self._on_change(event)
+
+        def on_moved(self, event: Any) -> None:
+            self._on_change(event)
+
+        def _on_change(self, event: Any) -> None:
             if event.is_directory:
                 return
-            if not self._should_watch_file(event.src_path):
+            changed = next(
+                (
+                    path
+                    for path in (getattr(event, "dest_path", ""), event.src_path)
+                    if path
+                    and self._should_watch_file(path)
+                    and not self._is_temp_file(path)
+                ),
+                None,
+            )
+            if changed is None:
                 return
 
             current_time = time.time()
             if current_time - self.last_reload < debounce_delay:
                 return
-            if self._is_temp_file(event.src_path):
-                return
 
             self.last_reload = current_time
-            command.info(f"🔄 File changed: {os.path.relpath(event.src_path)}")
+            command.info(f"🔄 File changed: {os.path.relpath(changed)}")
             command._trigger_auto_reload()
 
         @staticmethod

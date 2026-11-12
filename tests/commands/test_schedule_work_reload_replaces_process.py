@@ -56,7 +56,13 @@ def test_disabled_reload_does_nothing():
 
 def test_the_stopped_scheduler_is_replaced_with_the_same_arguments(monkeypatch):
     calls = []
-    monkeypatch.setattr(module.os, "execv", lambda path, argv: calls.append((path, argv)))
+    reload_module = importlib.import_module("cara.commands.ProcessReload")
+    # The tree boots (``test_reload_waits_for_a_bootable_tree`` owns the rest).
+    monkeypatch.setattr(reload_module, "boot_failure", lambda _argv: None)
+    monkeypatch.setattr(reload_module.signal, "signal", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        reload_module.os, "execv", lambda path, argv: calls.append((path, argv))
+    )
     monkeypatch.setattr(sys, "argv", ["craft", "schedule:work"])
     ScheduleWorkCommand._restart_scheduler_process()
     assert calls == [(sys.executable, [sys.executable, "craft", "schedule:work"])]

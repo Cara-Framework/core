@@ -511,6 +511,7 @@ def _delivery_defer_terminal_hook(
     with database.transaction():
         row = database.select_one(
             f"SELECT post_hooks_completed_at, post_hooks_lease_token, "
+            "post_hooks_lease_expires_at, "
             "post_hooks_attempts, post_hooks_quarantined_at, "
             "post_hooks_last_error "
             f"FROM {self.table} WHERE job_id = %s FOR UPDATE",
@@ -525,17 +526,39 @@ def _delivery_defer_terminal_hook(
         if self._row_value(row, "post_hooks_quarantined_at") is not None:
             return "quarantined"
         current_token = self._row_value(row, "post_hooks_lease_token")
-        if current_token is None or (
-            expected_lease_token is not None and current_token != expected_lease_token
-        ):
+        lease_expiry = self._as_datetime(
+            self._row_value(row, "post_hooks_lease_expires_at")
+        )
+        # The hook child claims its own row (``queue:hooks`` leaves the lease
+        # free for it), so a child that died before claiming — an interpreter
+        # that could not even import — left no lease, or only the parent's
+        # previous, expired backoff lease. Its failure is still an attempt:
+        # raising here aborted the whole hooks iteration with no attempt and
+        # no backoff, and the next iteration booted the same child for the
+        # same row first (live 2026-11-12, delivery 5bbe806f: 88 failed
+        # iterations in three minutes while a mid-edit tree could not import).
+        child_never_claimed = expected_lease_token is None and (
+            current_token is None or (lease_expiry is not None and lease_expiry <= now)
+        )
+        if expected_lease_token is not None and current_token != expected_lease_token:
             raise DeliveryLeaseLost(
                 f"Queue delivery {job_id} lost its terminal-hook retry lease."
             )
         if (
             skip_if_already_deferred
+            and not child_never_claimed
             and self._row_value(row, "post_hooks_last_error") is not None
         ):
             return "already_deferred"
+
+        # The UPDATE matches the lease exactly as it was read, and a backoff
+        # taken for a child that never claimed runs under the parent's own
+        # fresh token, so the row is not due again until it expires.
+        if current_token is None:
+            lease_guard, lease_params = "post_hooks_lease_token IS NULL", []
+        else:
+            lease_guard, lease_params = "post_hooks_lease_token = %s", [current_token]
+        backoff_token = uuid.uuid4().hex if child_never_claimed else current_token
 
         attempts = int(self._row_value(row, "post_hooks_attempts") or 0) + 1
         safe_error = self._safe_error(error)
@@ -547,14 +570,14 @@ def _delivery_defer_terminal_hook(
                 "post_hooks_lease_expires_at = NULL, "
                 "post_hooks_last_error = %s, updated_at = %s "
                 "WHERE job_id = %s AND post_hooks_completed_at IS NULL "
-                "AND post_hooks_lease_token = %s",
+                f"AND {lease_guard}",
                 [
                     attempts,
                     now,
                     safe_error,
                     now,
                     job_id,
-                    current_token,
+                    *lease_params,
                 ],
             )
             outcome = "quarantined"
@@ -566,16 +589,18 @@ def _delivery_defer_terminal_hook(
             affected = database.statement(
                 f"UPDATE {self.table} SET post_hooks_attempts = %s, "
                 "post_hooks_lease_expires_at = %s, "
-                "post_hooks_last_error = %s, updated_at = %s "
+                "post_hooks_last_error = %s, updated_at = %s, "
+                "post_hooks_lease_token = %s "
                 "WHERE job_id = %s AND post_hooks_completed_at IS NULL "
-                "AND post_hooks_lease_token = %s",
+                f"AND {lease_guard}",
                 [
                     attempts,
                     now.add(seconds=self._HOOK_BACKOFF_SECONDS[index]),
                     safe_error,
                     now,
+                    backoff_token,
                     job_id,
-                    current_token,
+                    *lease_params,
                 ],
             )
             outcome = "deferred"

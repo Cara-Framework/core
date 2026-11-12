@@ -79,6 +79,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "Violation": (".core", "Violation"),
     "WARN": (".core", "WARN"),
     "audit_migrations": (".core", "audit_migrations"),
+    "boot_failure": (".ProcessReload", "boot_failure"),
     "check_app_key_set": (".core", "check_app_key_set"),
     "check_debug_off_in_prod": (".core", "check_debug_off_in_prod"),
     "check_required_config_present": (".core", "check_required_config_present"),
@@ -89,6 +90,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "missing_optional": (".OptionalDependencyError", "missing_optional"),
     "ok": (".core", "ok"),
     "parse_migration_file": (".core", "parse_migration_file"),
+    "replace_process_when_bootable": (".ProcessReload", "replace_process_when_bootable"),
     "warn": (".core", "warn"),
 }
 
@@ -165,6 +167,7 @@ __all__ = [
     "Violation",
     "WARN",
     "audit_migrations",
+    "boot_failure",
     "check_app_key_set",
     "check_debug_off_in_prod",
     "check_required_config_present",
@@ -175,6 +178,7 @@ __all__ = [
     "missing_optional",
     "ok",
     "parse_migration_file",
+    "replace_process_when_bootable",
     "warn",
 ]
 

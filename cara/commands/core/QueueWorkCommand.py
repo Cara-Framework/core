@@ -11,12 +11,12 @@ import contextlib
 import logging
 import os
 import signal
-import sys
 import threading
 import traceback
 
 from cara.commands.CommandBase import CommandBase
 from cara.commands.MakesAutoReload import MakesAutoReload
+from cara.commands.ProcessReload import replace_process_when_bootable
 from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import (
@@ -349,8 +349,9 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
     @staticmethod
     def _restart_worker_process() -> None:
-        """Replace the drained worker with the same interpreter/arguments."""
-        os.execv(sys.executable, [sys.executable, *sys.argv])
+        """Replace the drained worker with the same interpreter/arguments,
+        once the edited tree boots (``ProcessReload``)."""
+        replace_process_when_bootable()
 
     _prepare_config = _QueueWorkConfiguration._queue_work_prepare_config
     _resolve_pool = _QueueWorkConfiguration._queue_work_resolve_pool
