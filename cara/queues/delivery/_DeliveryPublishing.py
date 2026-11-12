@@ -409,7 +409,7 @@ def _delivery_quarantine_publish(self, job_id: str, token: str, error: str) -> N
             [
                 self.STATUS_DEAD_LETTERED,
                 now,
-                self._safe_error(f"publish_envelope_invalid:{safe_error}"),
+                self._safe_error(f"{self.PUBLISH_QUARANTINE_REASON_PREFIX}{safe_error}"),
                 self.PUBLISH_FAILED,
                 safe_error,
                 now,

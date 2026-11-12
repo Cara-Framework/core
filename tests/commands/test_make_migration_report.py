@@ -60,10 +60,14 @@ class _Comparator:
 
 
 class _Generator:
-    """A generator whose write path is a tripwire, not a stub."""
+    """A generator whose write path is a tripwire, not a stub.
 
-    def __init__(self):
+    Rendering is an in-memory read the report compares a generated file
+    against; ``rendered`` holds the canned content per table."""
+
+    def __init__(self, rendered=None):
         self.lock_entered = 0
+        self.rendered = dict(rendered or {})
 
     @contextlib.contextmanager
     def generation_lock(self):
@@ -73,8 +77,8 @@ class _Generator:
     def create_migration_file(self, *args, **kwargs):
         raise AssertionError("bare make:migration wrote a migration file")
 
-    def generate_create_migration(self, *args, **kwargs):
-        raise AssertionError("bare make:migration rendered a migration")
+    def generate_create_migration(self, model_info):
+        return self.rendered.get(model_info["table"], "")
 
     def generate_update_migration(self, *args, **kwargs):  # pragma: no cover
         raise AssertionError("the update emitter is supposed to be deleted")
@@ -166,6 +170,50 @@ def test_orphaned_generated_file_is_reported(tmp_path):
     out = _text(command)
     assert "create_ghost_table" in out
     assert "no model owns this file" in out
+
+
+def test_a_generated_file_identical_to_the_render_is_in_sync(tmp_path):
+    rendered = "CREATE INDEX product_sku_idx ON product (sku)\n"
+    target = tmp_path / "0001_01_01_000000_create_product_table.py"
+    target.write_text(rendered, encoding="utf-8")
+    command = _Report([_model("Product", "product")], _Comparator(existing={"product"}))
+    command.generator = _Generator({"product": rendered})
+    command._migrations_dir = lambda: tmp_path
+    assert command.handle() == 0
+    assert target.read_text(encoding="utf-8") == rendered
+
+
+def test_named_ddl_the_column_differ_cannot_see_is_drift(tmp_path):
+    """The column differ does not read ``__indexes__``. A model whose named
+    index changed (live 2026-11-12: ``queue_job_delivery_expiry_status_idx``
+    replaced by ``queue_job_delivery_open_expiry_idx``) was reported "in
+    sync" while its generated file still carried the old DDL; only
+    ``schema:check`` against a live database caught it."""
+    stale = (
+        "CREATE INDEX IF NOT EXISTS queue_job_delivery_expiry_status_idx "
+        "ON queue_job_delivery (expires_at, status)\n"
+    )
+    fresh = (
+        "CREATE INDEX IF NOT EXISTS queue_job_delivery_open_expiry_idx "
+        "ON queue_job_delivery (expires_at) "
+        "WHERE status IN ('pending','processing')\n"
+    )
+    target = tmp_path / "0066_01_01_000065_create_queue_job_delivery_table.py"
+    target.write_text(stale, encoding="utf-8")
+    command = _Report(
+        [_model("QueueJobDelivery", "queue_job_delivery")],
+        _Comparator(existing={"queue_job_delivery"}),
+    )
+    command.generator = _Generator({"queue_job_delivery": fresh})
+    command._migrations_dir = lambda: tmp_path
+    assert command.handle() == 1
+    out = _text(command)
+    assert "0066_01_01_000065_create_queue_job_delivery_table.py" in out
+    assert "queue_job_delivery_open_expiry_idx" in out
+    assert "queue_job_delivery_expiry_status_idx" in out
+    assert "--overwrite" in out
+    # A report: the stale file is untouched.
+    assert target.read_text(encoding="utf-8") == stale
 
 
 # ── mode routing and the production refusal ─────────────────────────────────

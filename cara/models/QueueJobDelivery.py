@@ -447,12 +447,19 @@ class QueueJobDelivery(Model):
             "down": "DROP INDEX IF EXISTS queue_job_delivery_active_stats_idx",
         },
         {
-            "name": "queue_job_delivery_expiry_status_idx",
+            # The expiry sweep (``expire_due``, every relay cycle) reads open
+            # rows past their envelope expiry. Keyed on ``(expires_at,
+            # status)`` over the whole table, every probe walked the entry of
+            # every retained row whose envelope had expired — 317k entries,
+            # ~2k pages a call, 260 ms p50 at 2.5 calls a second (live
+            # 2026-11-12). Open rows only, it reads what can still expire.
+            "name": "queue_job_delivery_open_expiry_idx",
             "up": (
-                "CREATE INDEX IF NOT EXISTS queue_job_delivery_expiry_status_idx "
-                "ON queue_job_delivery (expires_at, status)"
+                "CREATE INDEX IF NOT EXISTS queue_job_delivery_open_expiry_idx "
+                "ON queue_job_delivery (expires_at) "
+                "WHERE status IN ('pending','processing')"
             ),
-            "down": "DROP INDEX IF EXISTS queue_job_delivery_expiry_status_idx",
+            "down": "DROP INDEX IF EXISTS queue_job_delivery_open_expiry_idx",
         },
         {
             "name": "queue_job_delivery_terminal_retention_idx",
@@ -511,6 +518,42 @@ class QueueJobDelivery(Model):
                 "WHERE tenant_mode = 'tenant'"
             ),
             "down": "DROP INDEX IF EXISTS queue_job_delivery_tenant_audit_idx",
+        },
+        {
+            # The scheduler watchdog's "seconds since the last publish"
+            # (``outbox_health_metrics``): one backward probe, never a walk
+            # of every published row in the retained ledger.
+            "name": "queue_job_delivery_last_publish_idx",
+            "up": (
+                "CREATE INDEX IF NOT EXISTS queue_job_delivery_last_publish_idx "
+                "ON queue_job_delivery (published_at) "
+                "WHERE published_at IS NOT NULL"
+            ),
+            "down": "DROP INDEX IF EXISTS queue_job_delivery_last_publish_idx",
+        },
+        {
+            # The relay gauge's "dead letters awaiting replay": an index-only
+            # read of the failed rows, anti-joined to ``replay_idx`` — never
+            # a walk of their heap pages (``delivery_metrics``).
+            "name": "queue_job_delivery_awaiting_replay_idx",
+            "up": (
+                "CREATE INDEX IF NOT EXISTS queue_job_delivery_awaiting_replay_idx "
+                "ON queue_job_delivery (status, job_id) "
+                "WHERE status IN ('dead_lettered','expired')"
+            ),
+            "down": "DROP INDEX IF EXISTS queue_job_delivery_awaiting_replay_idx",
+        },
+        {
+            # The relay gauge's publish quarantine; the predicate is the
+            # store's ``_PUBLISH_QUARANTINE_FILTER`` verbatim.
+            "name": "queue_job_delivery_publish_quarantine_idx",
+            "up": (
+                "CREATE INDEX IF NOT EXISTS queue_job_delivery_publish_quarantine_idx "
+                "ON queue_job_delivery (job_id) "
+                "WHERE status = 'dead_lettered' "
+                "AND starts_with(terminal_reason, 'publish_envelope_invalid:')"
+            ),
+            "down": "DROP INDEX IF EXISTS queue_job_delivery_publish_quarantine_idx",
         },
         {
             "name": "queue_job_delivery_replay_idx",

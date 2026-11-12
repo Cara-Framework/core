@@ -55,10 +55,14 @@ def test_terminal_totals_count_only_rows_without_a_replay_child():
 
     sql, _params = db.aggregate
     predicate = _awaiting(store.table)
-    assert f"WHERE status = %s AND {predicate}) AS dead_lettered" in sql
-    assert f"WHERE status = %s AND {predicate}) AS expired" in sql
-    # Completed and retry_scheduled stay whole-ledger totals.
+    # Both failure statuses are counted inside the awaiting-replay scope.
+    assert f"WHERE status IN (%s, %s) AND {predicate}) AS failed_rows" in sql
+    assert "COUNT(*) FILTER (WHERE status = %s) AS dead_lettered" in sql
+    assert "COUNT(*) FILTER (WHERE status = %s) AS expired" in sql
+    # Completed and retry_scheduled stay whole-ledger totals (every terminal
+    # row carries completed_at: queue_job_delivery_execution_state_check).
     assert "COUNT(*) FILTER (WHERE status = %s) AS completed" in sql
+    assert "WHERE status IN (%s, %s) AND completed_at IS NOT NULL" in sql
     assert "replay_child.replay_of = queue_job_delivery.job_id" in predicate
     assert snapshot["statuses"]["dead_lettered"] == 2
     assert snapshot["statuses"]["expired"] == 1

@@ -6,7 +6,9 @@ The command has exactly two modes, and only one of them writes:
 * **Bare (report).** Compares every model against the generated directory
   with the structured differ and PRINTS the typed changes — added / removed /
   altered / renamed columns, missing create files, orphaned files whose model
-  is gone. Exit 1 when anything drifts, 0 when the directory is exactly the
+  is gone — and, where the columns agree, compares the file with an
+  in-memory render of its model, so named DDL the column differ cannot see
+  (``__indexes__``) is drift too. Exit 1 when anything drifts, 0 when the directory is exactly the
   models. It never creates a file: the bare mode used to emit incremental
   ``add_x_to_y`` migrations from this same diff, which is precisely the file
   class ``migrations:check`` bans — one command manufacturing what the other
@@ -45,6 +47,7 @@ stray.
 from __future__ import annotations
 
 import contextlib
+import difflib
 import os
 import re
 import shutil
@@ -196,7 +199,18 @@ class MakeMigrationCommand(CommandBase):
             table_name = model_info["table"]
             diff = self.comparator.compare_model_with_migrations(model_info)
             if not diff:
-                in_sync += 1
+                stale = self._stale_generated_file(model_info)
+                if stale is None:
+                    in_sync += 1
+                    continue
+                drifted += 1
+                file_name, changed_lines = stale
+                self.warning(
+                    f"{model_info['name']} → {table_name}  ({file_name} differs "
+                    "from what the model renders)"
+                )
+                for line in changed_lines:
+                    self.info(f"   {line}")
                 continue
             drifted += 1
             if self.comparator.table_exists_in_migrations(table_name):
@@ -234,6 +248,42 @@ class MakeMigrationCommand(CommandBase):
             f"All {in_sync} model(s) in sync — the directory is exactly the models."
         )
         return 0
+
+    def _stale_generated_file(self, model_info) -> tuple[str, list[str]] | None:
+        """The model's generated file when it is not what the model renders.
+
+        The column differ cannot see named DDL (``__indexes__``: partial
+        indexes, triggers, named constraints) or table options, so a model
+        whose index changed read "in sync" while its file still carried the
+        old DDL (live 2026-11-12, ``queue_job_delivery``). The file IS the
+        render — ``--overwrite`` writes it verbatim — so comparing against an
+        in-memory render answers "is this file a function of the model"
+        exactly. Returns the file name and the changed lines, or None.
+        """
+        migrations_dir = self._migrations_dir()
+        if migrations_dir is None:
+            return None
+        files = sorted(
+            Path(migrations_dir).glob(f"*_create_{model_info['table']}_table.py")
+        )
+        if len(files) != 1:
+            # None is the column differ's "no create file"; several is a
+            # convention violation migrations:check owns.
+            return None
+        on_disk = files[0].read_text(encoding="utf-8")
+        rendered = self.generator.generate_create_migration(model_info)
+        if not rendered or on_disk == rendered:
+            return None
+        changed = [
+            line
+            for line in difflib.unified_diff(
+                on_disk.splitlines(), rendered.splitlines(), lineterm="", n=0
+            )
+            if line[:1] in "+-"
+            and not line.startswith(("+++", "---"))
+            and line[1:].strip()
+        ]
+        return files[0].name, changed[:12]
 
     def _orphaned_files(self, model_tables: set[str]) -> list[str]:
         """Generated create-files whose table no model declares any more.

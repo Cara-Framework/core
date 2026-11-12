@@ -84,7 +84,7 @@ def _delivery_retry_quarantined_terminal_hooks(
                 f"Queue delivery {job_id} terminal hooks are not quarantined."
             )
         if str(self._row_value(row, "terminal_reason") or "").startswith(
-            "publish_envelope_invalid:"
+            self.PUBLISH_QUARANTINE_REASON_PREFIX
         ):
             raise QueueException(
                 "Invalid signed envelopes cannot execute terminal hooks; "

@@ -178,29 +178,41 @@ def _delivery_outbox_health_metrics(self) -> dict[str, float]:
     back by the per-queue broker window are counted on purpose, because
     an alarm that drops them cannot report how much work is waiting.
     Do not "align" the two: they answer different questions.
+
+    Each half reads only the rows its predicate can match, through the
+    index that predicate names: pending rows (``execution_lease``), due
+    hooks (``post_hook_due``, whose partial predicate IS the hook-due
+    filter's), the newest publish (one backward probe of
+    ``last_publish``). It was one ``FILTER`` pass over the whole retained
+    ledger — 125k heap pages (1 GB) read every minute at 700k rows (live
+    2026-11-12), evicting the hot pages the relay itself runs on.
     """
     due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
     hook_due = self._HOOK_DUE_FILTER_TEMPLATE.format(now="NOW()")
     hook_statuses = list(self.HOOK_TERMINAL_STATUSES)
+    table = self.table
     row = self._db().select_one(
+        "SELECT due_rows.*, hook_rows.*, "
+        "COALESCE(EXTRACT(EPOCH FROM (NOW() - ("
+        f"SELECT MAX(published_at) FROM {table} "
+        "WHERE published_at IS NOT NULL))), -1) AS last_publish_age "
+        "FROM ("
         f"SELECT COUNT(*) FILTER (WHERE {due}) AS due_pending, "
         "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
         f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
-        "AS oldest_due_age, "
-        "COALESCE(EXTRACT(EPOCH FROM (NOW() - MAX(published_at))), -1) "
-        "AS last_publish_age, "
-        f"COUNT(*) FILTER (WHERE {hook_due}) AS hook_due_pending, "
+        f"AS oldest_due_age FROM {table} WHERE status = %s"
+        ") AS due_rows CROSS JOIN ("
+        "SELECT COUNT(*) AS hook_due_pending, "
         "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
-        "MIN(COALESCE(post_hooks_lease_expires_at, completed_at, created_at)) "
-        f"FILTER (WHERE {hook_due}))), 0) "
-        "AS hook_oldest_due_age "
-        f"FROM {self.table}",
+        "MIN(COALESCE(post_hooks_lease_expires_at, completed_at, created_at))"
+        f")), 0) AS hook_oldest_due_age FROM {table} WHERE {hook_due}"
+        ") AS hook_rows",
         [
             self.STATUS_PENDING,
             self.PUBLISH_PUBLISHED,
             self.STATUS_PENDING,
             self.PUBLISH_PUBLISHED,
-            hook_statuses,
+            self.STATUS_PENDING,
             hook_statuses,
         ],
     )

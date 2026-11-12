@@ -23,16 +23,40 @@ def _bind_store(store_type: type) -> None:
 def _delivery_delivery_metrics(self) -> dict[str, Any]:
     """Return one aggregate snapshot for relay-owned metrics.
 
-    The status totals span the whole retained ledger, so this is a scan the
-    driver runs on a cadence (``AMQPDriver.refresh_delivery_metrics``), never
-    once per relay iteration. ``dead_lettered``/``expired`` count the rows
-    AWAITING REPLAY (``_AWAITING_REPLAY_FILTER_TEMPLATE``), as the operator
-    tools do: a replay never touches its source, so counting every terminal
-    row kept ``QueueDeliveryTerminalFailure`` firing for the whole 90-day
-    retention after one dead letter, recovered or not.
+    The driver runs this on a cadence (``AMQPDriver.refresh_delivery_metrics``),
+    never once per relay iteration. ``dead_lettered``/``expired`` count the
+    rows AWAITING REPLAY (``_AWAITING_REPLAY_FILTER_TEMPLATE``), as the
+    operator tools do: a replay never touches its source, so counting every
+    terminal row kept ``QueueDeliveryTerminalFailure`` firing for the whole
+    90-day retention after one dead letter, recovered or not.
+
+    No part of it reads the ledger without a predicate an index answers.
+    It used to be one ``COUNT(*) FILTER``
+    pass over the whole table: at 700k retained rows (1.5 GB of heap, live
+    2026-11-12) that sequential scan took 0.6 s warm and up to 12 s cold,
+    every 15 s, in the relay AND the hooks runner, inline in the relay loop.
+    Each family now reads its own scope, and the predicates that make a
+    scope index-served are implied by the table's CHECK constraints, so
+    every count means exactly what it did over the whole table:
+
+    * open rows — ``status IN (pending, processing)``: the
+      ``active_stats``/``execution_lease`` indexes;
+    * publish leases — ``publish_status = processing``: ``publish_due``;
+    * terminal hooks — ``status`` hook-terminal AND
+      ``post_hooks_completed_at IS NULL``: ``post_hook_stats``. A quarantined
+      hook always has a NULL completion stamp
+      (``queue_job_delivery_post_hook_quarantine_check``);
+    * settled history — ``completed``/``retry_scheduled`` AND
+      ``completed_at IS NOT NULL``, which every terminal row carries
+      (``queue_job_delivery_execution_state_check``): an index-only count of
+      ``terminal_retention``, never the heap;
+    * failures awaiting replay — ``awaiting_replay`` anti-joined to
+      ``replay``, both index-only;
+    * publish quarantine — the ``publish_quarantine`` partial index.
     """
     due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
     awaiting_replay = self._AWAITING_REPLAY_FILTER_TEMPLATE.format(table=self.table)
+    table = self.table
     priority_columns: list[str] = []
     priority_params: list[Any] = []
     for priority in self._PRIORITY_RANKS:
@@ -57,83 +81,96 @@ def _delivery_delivery_metrics(self) -> dict[str, Any]:
             )
         )
     priority_select = ", ".join(priority_columns)
+    hook_statuses = list(self.HOOK_TERMINAL_STATUSES)
+    # One statement, so every family reads the same snapshot.
     row = self._db().select_one(
-        f"SELECT "
-        "COUNT(*) FILTER (WHERE status = %s) AS pending, "
-        "COUNT(*) FILTER (WHERE status = %s) AS processing, "
-        "COUNT(*) FILTER (WHERE status = %s) AS completed, "
-        "COUNT(*) FILTER (WHERE status = %s) AS retry_scheduled, "
-        f"COUNT(*) FILTER (WHERE status = %s AND {awaiting_replay}) "
-        "AS dead_lettered, "
-        f"COUNT(*) FILTER (WHERE status = %s AND {awaiting_replay}) AS expired, "
-        "COUNT(*) FILTER (WHERE status = %s AND publish_status = %s) "
-        "AS publish_pending, "
-        "COUNT(*) FILTER (WHERE publish_status = %s) "
-        "AS publish_processing, "
-        "COUNT(*) FILTER (WHERE status = %s AND "
-        # psycopg2 interpolates every lone %, so the LIKE wildcard must be
-        # doubled — a bare % here is read as a placeholder and detonates
-        # with "IndexError: list index out of range" at execute time.
-        "terminal_reason LIKE 'publish_envelope_invalid:%%') "
-        "AS publish_quarantined, "
-        "COUNT(*) FILTER (WHERE publish_status = %s AND "
-        "publish_lease_expires_at <= NOW()) AS stale_publish, "
-        "COUNT(*) FILTER (WHERE status = %s AND "
-        "lease_expires_at <= NOW()) AS stale_execution, "
-        "COUNT(*) FILTER (WHERE status = ANY(%s) AND "
-        "post_hooks_completed_at IS NULL AND "
-        "post_hooks_lease_token IS NULL) AS hook_pending, "
-        "COUNT(*) FILTER (WHERE status = ANY(%s) AND "
-        "post_hooks_completed_at IS NULL AND "
-        "post_hooks_lease_token IS NOT NULL AND "
-        "post_hooks_lease_expires_at > NOW()) AS hook_processing, "
-        "COUNT(*) FILTER (WHERE status = ANY(%s) AND "
-        "post_hooks_completed_at IS NULL AND "
-        "post_hooks_lease_token IS NOT NULL AND "
-        "post_hooks_lease_expires_at <= NOW()) AS hook_stale, "
-        "COUNT(*) FILTER (WHERE status = ANY(%s) AND "
-        "post_hooks_completed_at IS NULL AND "
-        "post_hooks_last_error IS NOT NULL) AS hook_failed, "
-        "COUNT(*) FILTER (WHERE status = ANY(%s) AND "
-        "post_hooks_quarantined_at IS NOT NULL) AS hook_quarantined, "
-        "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
-        f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
-        "AS oldest_due_age, "
-        f"{priority_select}, "
+        "SELECT open_rows.*, publish_rows.*, hook_rows.*, settled_rows.*, "
+        "failed_rows.*, quarantined_rows.*, "
         "COALESCE((SELECT MAX(window_count) FROM ("
-        f"SELECT COUNT(*) AS window_count FROM {self.table} AS window_row "
+        f"SELECT COUNT(*) AS window_count FROM {table} AS window_row "
         "WHERE window_row.status IN (%s, %s) AND ("
         "window_row.publish_status = %s OR "
         "(window_row.publish_status = %s AND "
         "window_row.publish_lease_expires_at > NOW())) "
         "GROUP BY window_row.queue) AS broker_windows), 0) "
         "AS broker_max_outstanding "
-        f"FROM {self.table}",
+        "FROM ("
+        "SELECT COUNT(*) FILTER (WHERE status = %s) AS pending, "
+        "COUNT(*) FILTER (WHERE status = %s) AS processing, "
+        "COUNT(*) FILTER (WHERE status = %s AND publish_status = %s) "
+        "AS publish_pending, "
+        "COUNT(*) FILTER (WHERE status = %s AND "
+        "lease_expires_at <= NOW()) AS stale_execution, "
+        "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
+        f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
+        "AS oldest_due_age, "
+        f"{priority_select} "
+        f"FROM {table} WHERE status IN (%s, %s)) AS open_rows "
+        "CROSS JOIN ("
+        "SELECT COUNT(*) AS publish_processing, "
+        "COUNT(*) FILTER (WHERE publish_lease_expires_at <= NOW()) "
+        f"AS stale_publish FROM {table} WHERE publish_status = %s"
+        ") AS publish_rows "
+        "CROSS JOIN ("
+        "SELECT COUNT(*) FILTER (WHERE post_hooks_lease_token IS NULL) "
+        "AS hook_pending, "
+        "COUNT(*) FILTER (WHERE post_hooks_lease_token IS NOT NULL AND "
+        "post_hooks_lease_expires_at > NOW()) AS hook_processing, "
+        "COUNT(*) FILTER (WHERE post_hooks_lease_token IS NOT NULL AND "
+        "post_hooks_lease_expires_at <= NOW()) AS hook_stale, "
+        "COUNT(*) FILTER (WHERE post_hooks_last_error IS NOT NULL) "
+        "AS hook_failed, "
+        "COUNT(*) FILTER (WHERE post_hooks_quarantined_at IS NOT NULL) "
+        f"AS hook_quarantined FROM {table} WHERE status = ANY(%s) "
+        "AND post_hooks_completed_at IS NULL"
+        ") AS hook_rows "
+        "CROSS JOIN ("
+        "SELECT COUNT(*) FILTER (WHERE status = %s) AS completed, "
+        "COUNT(*) FILTER (WHERE status = %s) AS retry_scheduled "
+        f"FROM {table} WHERE status IN (%s, %s) AND completed_at IS NOT NULL"
+        ") AS settled_rows "
+        "CROSS JOIN ("
+        "SELECT COUNT(*) FILTER (WHERE status = %s) AS dead_lettered, "
+        "COUNT(*) FILTER (WHERE status = %s) AS expired "
+        f"FROM {table} WHERE status IN (%s, %s) AND {awaiting_replay}"
+        ") AS failed_rows "
+        "CROSS JOIN ("
+        "SELECT COUNT(*) AS publish_quarantined "
+        f"FROM {table} WHERE status = %s AND "
+        f"{self._PUBLISH_QUARANTINE_FILTER}"
+        ") AS quarantined_rows",
         [
             self.STATUS_PENDING,
             self.STATUS_PROCESSING,
-            self.STATUS_COMPLETED,
-            self.STATUS_RETRY_SCHEDULED,
-            self.STATUS_DEAD_LETTERED,
-            self.STATUS_EXPIRED,
+            self.PUBLISH_PUBLISHED,
+            self.PUBLISH_PROCESSING,
+            # open_rows
+            self.STATUS_PENDING,
+            self.STATUS_PROCESSING,
             self.STATUS_PENDING,
             self.PUBLISH_PENDING,
-            self.PUBLISH_PROCESSING,
-            self.STATUS_DEAD_LETTERED,
-            self.PUBLISH_PROCESSING,
             self.STATUS_PROCESSING,
-            list(self.HOOK_TERMINAL_STATUSES),
-            list(self.HOOK_TERMINAL_STATUSES),
-            list(self.HOOK_TERMINAL_STATUSES),
-            list(self.HOOK_TERMINAL_STATUSES),
-            list(self.HOOK_TERMINAL_STATUSES),
             self.STATUS_PENDING,
             self.PUBLISH_PUBLISHED,
             *priority_params,
             self.STATUS_PENDING,
             self.STATUS_PROCESSING,
-            self.PUBLISH_PUBLISHED,
+            # publish_rows
             self.PUBLISH_PROCESSING,
+            # hook_rows
+            hook_statuses,
+            # settled_rows
+            self.STATUS_COMPLETED,
+            self.STATUS_RETRY_SCHEDULED,
+            self.STATUS_COMPLETED,
+            self.STATUS_RETRY_SCHEDULED,
+            # failed_rows
+            self.STATUS_DEAD_LETTERED,
+            self.STATUS_EXPIRED,
+            self.STATUS_DEAD_LETTERED,
+            self.STATUS_EXPIRED,
+            # quarantined_rows
+            self.STATUS_DEAD_LETTERED,
         ],
     )
     # Every column reads open rows or the last five minutes of completions,

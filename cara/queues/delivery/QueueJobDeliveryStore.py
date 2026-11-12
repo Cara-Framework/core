@@ -127,6 +127,18 @@ class QueueJobDeliveryStore:
         "WHERE replay_child.replay_of = {table}.job_id)"
     )
 
+    #: ``terminal_reason`` of a row the relay dead-lettered because its
+    #: signed envelope failed verification at publish time.
+    PUBLISH_QUARANTINE_REASON_PREFIX = "publish_envelope_invalid:"
+    #: The ONE definition of "publish-quarantined", written exactly as the
+    #: ``queue_job_delivery_publish_quarantine_idx`` predicate so the gauge
+    #: read is an index probe instead of a walk of every dead letter.
+    #: ``starts_with`` rather than ``LIKE '...%'``: no wildcard for psycopg2
+    #: to mistake for a placeholder, in the query or in the index DDL.
+    _PUBLISH_QUARANTINE_FILTER = (
+        f"starts_with(terminal_reason, '{PUBLISH_QUARANTINE_REASON_PREFIX}')"
+    )
+
     _PUBLISH_BACKOFF_SECONDS = (1, 5, 30, 60, 300)
     _HOOK_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600, 86400)
     _SETTLEMENT_BACKOFF_SECONDS = (0.05, 0.25, 1.0, 2.0, 5.0)
