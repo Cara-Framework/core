@@ -82,6 +82,40 @@ class TestResolution:
 
         assert store.reads == 2
 
+    def test_a_corrupt_cached_entry_reads_the_flag_store(self, cache):
+        """A cached entry the codec rejects (signed with another key — a
+        test run sharing the developer Redis, a rotated signing key) is
+        deleted by the driver and never deserialized; the flag then reads
+        from its store like a miss. Failing closed there read
+        ``sync_push_enabled`` as paused for one read and a marketplace
+        stock push was refused and never planned again (live 2026-11-12,
+        02:20:32). A cache that cannot answer at all still fails closed."""
+        from cara.exceptions import CacheConfigurationException
+
+        store = _Store({"x": {"value": True}})
+        manager = _manager(store)
+        healthy_get = cache.get
+        corrupt = {"test_feature:x"}
+
+        def get(key, default=None, **kwargs):
+            if key in corrupt:
+                corrupt.discard(key)  # the driver deletes what it rejects
+                raise CacheConfigurationException(f"Corrupt cache value for key '{key}'")
+            return healthy_get(key, default, **kwargs)
+
+        cache.get = get
+
+        assert manager.active("x") is True
+        assert store.reads == 1
+        assert manager.active("x") is True
+        assert store.reads == 1  # cached again, cleanly
+
+        def down(key, default=None, **kwargs):
+            raise ConnectionError("cache unavailable")
+
+        cache.get = down
+        assert manager.active("x") is False
+
 
 class TestPercentageRollout:
     def test_disabled_flag_beats_percentage(self, cache):

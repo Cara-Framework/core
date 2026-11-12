@@ -208,13 +208,27 @@ class FeatureManager:
         return bucket(key, identifier) < percentage
 
     def _resolve_state(self, key: str) -> Any:
-        """Cached read-through: cache → resolver, caching hits AND misses."""
+        """Cached read-through: cache → resolver, caching hits AND misses.
+
+        An entry the cache's codec rejects (signed with another key, damaged)
+        is a miss: the driver deletes it without deserializing it, and the
+        resolver — the flag's source of truth — answers and caches it again.
+        Failing closed there turned a self-healing cache event into a paused
+        kill switch: ``sync_push_enabled`` read off for one read and a
+        marketplace stock push was refused for good (2026-11-12). A cache
+        that cannot answer at all still raises, so the flag fails closed."""
+        from cara.exceptions import (  # local: cycle with cara.exceptions
+            CacheConfigurationException,
+        )
         from cara.facades import Cache  # local: cycle with cara.facades
 
         cache_key = f"{self._cache_prefix}{key}"
 
         _missing = object()
-        cached = Cache.get(cache_key, _missing, strict=True)
+        try:
+            cached = Cache.get(cache_key, _missing, strict=True)
+        except CacheConfigurationException:
+            cached = _missing
         if cached is not _missing:
             return cached
 
