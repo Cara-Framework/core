@@ -16,7 +16,10 @@ import traceback
 
 from cara.commands.CommandBase import CommandBase
 from cara.commands.MakesAutoReload import MakesAutoReload
-from cara.commands.ProcessReload import replace_process_when_bootable
+from cara.commands.ProcessReload import (
+    reloaded_boot_completed,
+    replace_process_when_bootable,
+)
 from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import (
@@ -213,6 +216,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         concurrency: str | None = None,
     ):
         """Handle queue worker execution with enhanced monitoring."""
+        reloaded_boot_completed()
         # ── Pool resolution ────────────────────────────────────────
         # --pool=<name> reads WORKER_POOLS from config/queue.py and
         # overrides --queue, --concurrency, and --timeout with pool

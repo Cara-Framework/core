@@ -286,6 +286,27 @@ class QueueOutboxHealth:
             category="queue.outbox.hook_stall",
         )
 
+    @staticmethod
+    def announce_retry_history(snapshot: dict[str, float]) -> str:
+        """Name a stalled prune of ``retry_scheduled`` history, with its age.
+
+        A retry row is settled history whose child row carries the work
+        (``QueueJobDeliveryStore._retry_history_metrics``), so its age is
+        not an outage; retry rows a day past audit retention are — the
+        prune that removes them has stopped. Returns ``reported`` or
+        ``quiet``.
+        """
+        overdue = int(snapshot.get("retry_scheduled_overdue_prune", 0))
+        if overdue <= 0:
+            return "quiet"
+        Log.warning(
+            "queue.delivery.retry_history_overdue_prune rows=%s oldest_age_s=%s",
+            overdue,
+            int(snapshot.get("retry_scheduled_oldest_age", 0)),
+            category="queue.outbox.retry_history",
+        )
+        return "reported"
+
     @classmethod
     def _stall_body(cls, snapshot: dict[str, float]) -> str:
         return (
@@ -472,12 +493,14 @@ class QueueOutboxHealth:
         cls.publish_metrics(snapshot, stalled, hook_stalled)
         outcome = cls.announce(snapshot, stalled)
         hook_outcome = cls.announce_hooks(snapshot, hook_stalled)
+        retry_history_outcome = cls.announce_retry_history(snapshot)
         return {
             "snapshot": snapshot,
             "stalled": stalled,
             "hook_stalled": hook_stalled,
             "outcome": outcome,
             "hook_outcome": hook_outcome,
+            "retry_history_outcome": retry_history_outcome,
         }
 
 

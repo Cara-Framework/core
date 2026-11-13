@@ -11,6 +11,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "ActiveJobCancellationRegistry": (".core", "ActiveJobCancellationRegistry"),
     "ArchBarrelsCommand": (".core", "ArchBarrelsCommand"),
     "ArchCheckCommand": (".core", "ArchCheckCommand"),
+    "BOOT_GUARD_ENV": (".ProcessReload", "BOOT_GUARD_ENV"),
     "BootlessCommandSpec": (".BootlessCommandSpec", "BootlessCommandSpec"),
     "CacheClearCommand": (".core", "CacheClearCommand"),
     "CheckResult": (".core", "CheckResult"),
@@ -86,10 +87,12 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "dispatch_architecture": (".BootlessCommandSpec", "dispatch_architecture"),
     "dispatch_bootless": (".BootlessCommandSpec", "dispatch_bootless"),
     "fail": (".core", "fail"),
+    "guard_reloaded_boot": (".ProcessReload", "guard_reloaded_boot"),
     "main": (".Cli", "main"),
     "missing_optional": (".OptionalDependencyError", "missing_optional"),
     "ok": (".core", "ok"),
     "parse_migration_file": (".core", "parse_migration_file"),
+    "reloaded_boot_completed": (".ProcessReload", "reloaded_boot_completed"),
     "replace_process_when_bootable": (".ProcessReload", "replace_process_when_bootable"),
     "warn": (".core", "warn"),
 }
@@ -99,6 +102,7 @@ __all__ = [
     "ActiveJobCancellationRegistry",
     "ArchBarrelsCommand",
     "ArchCheckCommand",
+    "BOOT_GUARD_ENV",
     "BootlessCommandSpec",
     "CacheClearCommand",
     "CheckResult",
@@ -174,12 +178,20 @@ __all__ = [
     "dispatch_architecture",
     "dispatch_bootless",
     "fail",
+    "guard_reloaded_boot",
     "main",
     "missing_optional",
     "ok",
     "parse_migration_file",
+    "reloaded_boot_completed",
     "replace_process_when_bootable",
     "warn",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)
+
+# Every entry script imports this package before ``bootstrap``: a process a
+# code reload ``execv``'d into must survive a tree edited while it boots.
+from cara.commands.ProcessReload import guard_reloaded_boot  # noqa: E402
+
+guard_reloaded_boot()

@@ -23,6 +23,7 @@ from cara.docs.ClaimSources import (
     _owned_markdowns,
     check_path_claim,
     declared_ports,
+    path_index,
     sibling_roots,
     strip_fences,
     workspace_names,
@@ -39,7 +40,108 @@ TILDE_RE = re.compile(r"~/[A-Za-z0-9._\-/]*[A-Za-z0-9._\-]")
 CRAFT_RE = re.compile(r"\bcraft\s+([a-z][a-z0-9_.\-]*(?::[a-z0-9_.:\-]+)*)")
 PORT_RE = re.compile(r"(?::(\d{4})\b|\bport[ =](\d{4})\b)", re.I)
 
+# A path cited with its lines — `api/app/X.py:42`, `P/orders/page.tsx:16-22`,
+# `D/lib/x.ts:3,18-20`. The suffix used to make the extension read ``.py:42``,
+# so the claim was silently skipped instead of judged.
+LINE_SUFFIX_RE = re.compile(
+    r"^(?P<path>.+\.[A-Za-z0-9]+):(?P<lines>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
+)
+# A legend paragraph declaring shorthand prefixes for the paths below it:
+# "Evidence paths: D = dashboard/src · P = …" or "Prefixes: E/ = services/…".
+LEGEND_START_RE = re.compile(
+    r"^\s*(?:Prefix(?:es)?|Evidence paths|Path prefixes|Shorthand)\s*:", re.I
+)
+LEGEND_PAIR_RE = re.compile(r"(?<![\w/])([A-Z][A-Z0-9]{0,5})/?\s+=\s+`?([^\s·;,`]+)")
+
 Finding = tuple[str, int, str, str, str]
+
+
+def path_legends(lines: list[str]) -> list[dict[str, str]]:
+    """The shorthand prefixes in force on each line.
+
+    A legend paragraph (it starts ``Prefixes:``/``Evidence paths:`` and runs to
+    the next blank line) replaces the map for every line after it: two tables
+    on one page may let ``P/`` mean two different trees.
+    """
+    active: dict[str, str] = {}
+    in_legend = False
+    out: list[dict[str, str]] = []
+    for line in lines:
+        if LEGEND_START_RE.match(line):
+            in_legend, active = True, {}
+        elif not line.strip():
+            in_legend = False
+        if in_legend:
+            for key, value in LEGEND_PAIR_RE.findall(line):
+                value = value.rstrip(".").rstrip("/")
+                if "/" in value or value.isidentifier():
+                    active = {**active, key: value}
+        out.append(active)
+    return out
+
+
+def expand_claim(token: str, legend: dict[str, str]) -> tuple[str, list[int], bool]:
+    """``(path, cited line numbers, rewritten?)`` of one backticked token."""
+    path = token.strip().strip("\"'").rstrip(".,;)")
+    lines: list[int] = []
+    if match := LINE_SUFFIX_RE.match(path):
+        path = match["path"]
+        lines = [int(number) for number in re.findall(r"\d+", match["lines"])]
+    head, slash, rest = path.partition("/")
+    expanded = bool(slash) and head in legend
+    if expanded:
+        path = f"{legend[head]}/{rest}"
+    return path, lines, expanded or bool(lines)
+
+
+def _line_count(path: Path) -> int | None:
+    try:
+        with path.open("rb") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return None
+
+
+def judge_path_claim(
+    token: str, roots: list[Path], legend: dict[str, str]
+) -> tuple[str, str] | None:
+    """``check_path_claim`` plus shorthand prefixes and cited line numbers.
+
+    The PATH is what the gate holds: a cited file that does not exist is
+    broken exactly like an uncited one. A cited line past the end of an
+    existing file is reported as unverifiable, never failed — line numbers
+    drift with every edit of the file, and evidence pages say so.
+    """
+    path, lines, rewritten = expand_claim(token, legend)
+    if not rewritten:
+        return check_path_claim(token, roots)
+    if "..." in path or "…" in path:
+        return ("unverifiable", "elided path")
+    if ":" in path:
+        return None  # ``<git rev>:path`` names a blob at a commit, not this tree
+    # Literal first: a Next.js segment such as ``[id]`` is a directory name,
+    # not a glob character class.
+    files = [root / path for root in roots if (root / path).is_file()]
+    verdict = ("ok", "") if files else check_path_claim(path, roots)
+    if verdict != ("ok", "") or not lines:
+        return verdict
+    if not files:
+        basename = path.rsplit("/", 1)[-1]
+        files = [
+            root / relative
+            for root in roots
+            for relative in path_index(root)[0].get(basename, ())
+            if relative == path or relative.endswith("/" + path)
+        ]
+    longest = max((n for n in map(_line_count, files) if n is not None), default=None)
+    if longest is None:
+        return ("unverifiable", "cited lines of something that is not a file")
+    if max(lines) > longest:
+        return (
+            "unverifiable",
+            f"line {max(lines)} is past the end ({longest} lines); line drift",
+        )
+    return ("ok", "")
 
 
 def command_names(root: Path) -> set[str]:
@@ -234,12 +336,16 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
             ),
             None,
         )
-        for number, line in enumerate(strip_fences(text), 1):
+        prose = strip_fences(text)
+        legends = path_legends(prose)
+        for number, line in enumerate(prose, 1):
             if IGNORE_LINE in line or not line.strip():
                 continue
+            legend = legends[number - 1]
             for span in INLINE_CODE.findall(line):
-                for token in re.split(r"[\s,;|]+", span):
-                    verdict = check_path_claim(token, [root])
+                # A comma inside a line list (`x.py:3,18-20`) is not a separator.
+                for token in re.split(r"[\s;|]+|,(?!\d)", span):
+                    verdict = judge_path_claim(token, [root], legend)
                     if verdict is None:
                         continue
                     kind, reason = verdict
@@ -248,7 +354,8 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                             (
                                 sibling.parent.name
                                 for sibling in roots[1:]
-                                if check_path_claim(token, [sibling]) == ("ok", "")
+                                if judge_path_claim(token, [sibling], legend)
+                                == ("ok", "")
                             ),
                             None,
                         )

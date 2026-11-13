@@ -22,7 +22,10 @@ import cara.facades as facades
 from cara.broadcasting import drained
 from cara.commands.CommandBase import CommandBase
 from cara.commands.MakesAutoReload import MakesAutoReload
-from cara.commands.ProcessReload import replace_process_when_bootable
+from cara.commands.ProcessReload import (
+    reloaded_boot_completed,
+    replace_process_when_bootable,
+)
 from cara.configuration import config
 from cara.configuration import config as global_config
 from cara.context import Tenancy
@@ -88,6 +91,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
     def handle(self, driver: str | None = None):
         """Handle schedule worker execution with enhanced monitoring."""
+        reloaded_boot_completed()
         self.console.print()  # Empty line for spacing
         self.console.print("[bold #e5c07b]╭─ Schedule Worker ─╮[/bold #e5c07b]")
         self.console.print()

@@ -27,6 +27,11 @@ class _Recording(DatabaseManager):
         self.calls.append((query, tuple(bindings)))
         return []
 
+    def transaction_level(self, connection=None) -> int:
+        # Inside the caller's transaction, as every real locker is
+        # (``test_cara_framework_advisory_lock_requires_transaction``).
+        return 1
+
 
 def test_no_keys_issue_no_statement():
     db = _Recording()

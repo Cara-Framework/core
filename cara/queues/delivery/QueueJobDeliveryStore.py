@@ -233,6 +233,18 @@ class QueueJobDeliveryStore:
             maximum=10000,
             field="delivery_tenant_urgent_slots_per_queue",
         )
+        # Slots per queue that only a DECLARED ``critical`` row may take —
+        # past the tenant window, the urgent slots AND the broker window
+        # (0 = off). Urgent slots are shared by ``high`` and ``critical``, so
+        # one channel's thousands of ``high`` rows filled them and a stock
+        # push of the same seller on another channel waited 15 minutes (live
+        # 2026-11-13). A product reserves ``critical`` for quantity work.
+        self.critical_reserve_per_queue = self._bounded_int(
+            options.get("delivery_critical_reserve_per_queue", 0),
+            minimum=0,
+            maximum=100,
+            field="delivery_critical_reserve_per_queue",
+        )
         self.execution_lease_seconds = self._bounded_int(
             options.get("delivery_execution_lease_seconds", 7200),
             minimum=60,
@@ -369,7 +381,8 @@ class QueueJobDeliveryStore:
             "ON held.queue = candidate.queue AND held.tenant_key = candidate.tenant_id "
             f"WHERE {due} AND available_at < NOW() - make_interval(secs => %s) "
             "AND %s > 0 AND held.slots >= %s + CASE WHEN candidate.priority "
-            "IN ('critical', 'high') THEN %s ELSE 0 END GROUP BY candidate.queue) "
+            "= 'critical' THEN %s + %s WHEN candidate.priority = 'high' "
+            "THEN %s ELSE 0 END GROUP BY candidate.queue) "
             "SELECT COUNT(*) FILTER (WHERE past_ceiling OR NOT moved) AS stuck_queues, "
             "COUNT(*) AS aged_queues, COALESCE(SUM(waiting) FILTER "
             "(WHERE (past_ceiling OR NOT moved) AND window_full), 0) "
@@ -394,12 +407,15 @@ class QueueJobDeliveryStore:
                 self.tenant_window_per_queue,
                 self.tenant_window_per_queue,
                 self.tenant_urgent_slots_per_queue,
+                self.critical_reserve_per_queue,
+                self.tenant_urgent_slots_per_queue,
             ],
         )
         aged_queues = int(self._row_value(row, "aged_queues") or 0)
         stuck_queues = int(self._row_value(row, "stuck_queues") or 0)
         return {
             **snapshot,
+            **self._retry_history_metrics(),
             "draining": 1.0 if aged_queues and not stuck_queues else 0.0,
             "behind_full_window": float(self._row_value(row, "behind_full_window") or 0),
             "behind_tenant_window": float(
@@ -409,6 +425,47 @@ class QueueJobDeliveryStore:
                 self._row_value(row, "behind_moving_queue") or 0
             ),
             "behind_no_window": float(self._row_value(row, "behind_no_window") or 0),
+        }
+
+    def _retry_history_metrics(self) -> dict[str, float]:
+        """How old the ``retry_scheduled`` history is, and whether pruning keeps up.
+
+        A ``retry_scheduled`` row is NOT waiting work. The worker settles the
+        failed execution into it and registers the retry as a NEW ledger row
+        (same ``db_job_id``) in ONE transaction
+        (``DurableDelayedJobStore``), so the work always lives on in that
+        child; the source is terminal audit history with ``completed_at`` and
+        its hooks stamped, kept ``audit_retention_days`` and then pruned.
+        Live 2026-11-13: tenant 3213's 16,662 ``sync`` retry rows dating
+        from 2026-10-30 all had a child, and every chain had ended completed
+        or dead-lettered — they read as "neither delivered nor expired" only
+        because their count sat beside the live statuses.
+
+        ``retry_scheduled_oldest_age`` is the age of the oldest such row
+        (one index probe); ``retry_scheduled_overdue_prune`` counts rows a
+        day past retention, which only a stalled prune explains.
+        """
+        row = self._db().select_one(
+            "SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - ("
+            f"SELECT MIN(completed_at) FROM {self.table} "
+            "WHERE status = %s AND completed_at IS NOT NULL))), 0) "
+            "AS retry_scheduled_oldest_age, "
+            f"(SELECT COUNT(*) FROM {self.table} WHERE status = %s "
+            "AND completed_at IS NOT NULL AND completed_at < NOW() - "
+            "make_interval(days => %s)) AS retry_scheduled_overdue_prune",
+            [
+                self.STATUS_RETRY_SCHEDULED,
+                self.STATUS_RETRY_SCHEDULED,
+                self.audit_retention_days + 1,
+            ],
+        )
+        return {
+            "retry_scheduled_oldest_age": max(
+                float(self._row_value(row, "retry_scheduled_oldest_age") or 0), 0.0
+            ),
+            "retry_scheduled_overdue_prune": float(
+                self._row_value(row, "retry_scheduled_overdue_prune") or 0
+            ),
         }
 
     def abandon_execution(self, job_id: str, lease_token: str) -> None:

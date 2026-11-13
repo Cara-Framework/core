@@ -93,6 +93,16 @@ def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | N
     fewest slots first. The declared priority decides, not the aged tier:
     a backlog that aged up does not earn the urgent slots.
 
+    A DECLARED ``critical`` row is the tenant's own best head before any
+    aged row (only the oldest-overdue turn goes before it), and
+    ``critical_reserve_per_queue`` (when > 0) gives it that many slots no
+    other tier may take: past the tenant window, the urgent slots and the
+    broker window. While a queue's window is full only the ``critical`` lane
+    is scanned, so the reserve costs a full queue one index probe. Live
+    2026-11-13: one channel's 9,488 ``high`` ends aged to the top tier and
+    held the seller's whole window; the same seller's stock push on another
+    channel waited 15 minutes behind them.
+
     The tenants with due work are found by a recursive skip scan over
     ``queue_job_delivery_tenant_head_idx`` and each one's last service by
     ``queue_job_delivery_tenant_served_idx`` — a few index probes per tenant
@@ -131,7 +141,9 @@ def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | N
             "WITH RECURSIVE settings AS (SELECT %s::timestamptz AS now, "
             "%s::numeric AS aging_seconds, %s::integer AS broker_window, "
             "%s::integer AS tenant_window, %s::integer AS urgent_slots, "
-            "%s::integer AS batch_limit), "
+            "%s::integer AS batch_limit, "
+            # A bounded config integer, inlined so the bind order is unchanged.
+            f"{int(self.critical_reserve_per_queue)}::integer AS critical_reserve), "
             "priority_lanes(priority, base_rank) AS (VALUES "
             "('critical', 0), ('high', 1), ('default', 2), ('low', 3)), "
             "outstanding AS (SELECT outstanding.queue, "
@@ -147,8 +159,9 @@ def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | N
             "COALESCE((SELECT SUM(outstanding.held) FROM outstanding "
             "WHERE outstanding.queue = candidate.queue), 0) AS room "
             "FROM unnest(%s::varchar[]) AS candidate(queue) CROSS JOIN settings), "
-            "eligible_queues AS (SELECT queue_room.queue FROM queue_room "
-            "WHERE queue_room.room > 0), "
+            "eligible_queues AS (SELECT queue_room.queue, queue_room.room "
+            "FROM queue_room CROSS JOIN settings "
+            "WHERE queue_room.room + settings.critical_reserve > 0), "
             "tenant_keys(queue, priority, base_rank, tenant_key) AS ("
             "SELECT eligible_queues.queue, priority_lanes.priority, "
             "priority_lanes.base_rank, first_key.tenant_key "
@@ -159,6 +172,8 @@ def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | N
             "AND delivery.priority = priority_lanes.priority "
             f"{open_row}"
             "ORDER BY COALESCE(delivery.tenant_id, 0) LIMIT 1) AS first_key "
+            # A full window is scanned for the reserve's lane alone.
+            "WHERE eligible_queues.room > 0 OR priority_lanes.base_rank = 0 "
             "UNION ALL "
             "SELECT tenant_keys.queue, tenant_keys.priority, "
             "tenant_keys.base_rank, next_key.tenant_key "
@@ -172,6 +187,7 @@ def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | N
             "ORDER BY COALESCE(delivery.tenant_id, 0) LIMIT 1) AS next_key), "
             "heads AS (SELECT head.job_id, head.available_at, head.created_at, "
             "tenant_keys.queue, tenant_keys.tenant_key, "
+            "(tenant_keys.base_rank = 0) AS declared_critical, "
             "COALESCE(outstanding.held, 0) AS held, "
             "last_served.published_at AS last_served_at, "
             "GREATEST(tenant_keys.base_rank - FLOOR(EXTRACT(EPOCH FROM "
@@ -197,8 +213,12 @@ def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | N
             ") AS head "
             "WHERE settings.tenant_window <= 0 OR tenant_keys.tenant_key = 0 "
             "OR COALESCE(outstanding.held, 0) < settings.tenant_window "
-            # The urgent slots: by DECLARED tier (base_rank), never aged.
-            "+ CASE WHEN tenant_keys.base_rank <= "
+            # The urgent slots and the critical reserve: by DECLARED tier
+            # (base_rank), never aged.
+            "+ CASE WHEN tenant_keys.base_rank = "
+            f"{int(self._PRIORITY_RANKS['critical'])} "
+            "THEN settings.urgent_slots + settings.critical_reserve "
+            "WHEN tenant_keys.base_rank = "
             f"{int(self._PRIORITY_RANKS['high'])} "
             "THEN settings.urgent_slots ELSE 0 END), "
             # The oldest-overdue turn: this head ranks first in its batch.
@@ -211,18 +231,26 @@ def _delivery_claim_publish_batch(self, limit: int) -> tuple[list[Any], str] | N
             "heads.*, (oldest.job_id IS NOT NULL) AS is_oldest "
             "FROM heads LEFT JOIN oldest ON oldest.job_id = heads.job_id "
             "ORDER BY heads.queue, heads.tenant_key, "
-            "(oldest.job_id IS NOT NULL) DESC, heads.aged_rank, "
-            "heads.available_at, heads.created_at), "
+            "(oldest.job_id IS NOT NULL) DESC, heads.declared_critical DESC, "
+            "heads.aged_rank, heads.available_at, heads.created_at), "
             "ranked AS (SELECT tenant_best.job_id, tenant_best.queue, "
+            "tenant_best.declared_critical, "
             "row_number() OVER (PARTITION BY tenant_best.queue "
             f"ORDER BY {_FAIR_ORDER}) AS queue_rank, "
             f"row_number() OVER (ORDER BY {_FAIR_ORDER}) AS claim_order "
             "FROM tenant_best), "
-            # Each queue's FREE window slots, filled from the top.
-            "candidate AS (SELECT ranked.job_id, ranked.claim_order "
-            "FROM ranked JOIN queue_room ON queue_room.queue = ranked.queue "
-            "CROSS JOIN settings WHERE ranked.queue_rank <= queue_room.room "
-            "ORDER BY ranked.claim_order LIMIT (SELECT batch_limit FROM settings)), "
+            # Each queue's FREE window slots, filled from the top; then the
+            # critical reserve, for declared-critical rows the room missed.
+            "placed AS (SELECT ranked.*, queue_room.room, SUM(CASE WHEN "
+            "ranked.declared_critical AND ranked.queue_rank > queue_room.room "
+            "THEN 1 ELSE 0 END) OVER (PARTITION BY ranked.queue "
+            "ORDER BY ranked.queue_rank ROWS UNBOUNDED PRECEDING) AS reserve_rank "
+            "FROM ranked JOIN queue_room ON queue_room.queue = ranked.queue), "
+            "candidate AS (SELECT placed.job_id, placed.claim_order "
+            "FROM placed CROSS JOIN settings WHERE placed.queue_rank <= placed.room "
+            "OR (placed.declared_critical AND placed.reserve_rank <= LEAST("
+            "settings.critical_reserve, placed.room + settings.critical_reserve)) "
+            "ORDER BY placed.claim_order LIMIT (SELECT batch_limit FROM settings)), "
             f"claimed AS (UPDATE {self.table} AS delivery "
             "SET publish_status = 'processing', "
             "publish_lease_token = %s, publish_lease_expires_at = %s, "

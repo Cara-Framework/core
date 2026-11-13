@@ -30,9 +30,14 @@ class HasMany(BaseRelationship):
         )
 
     def register_related(self, key, model, collection):
-        model.add_relation(
-            {key: collection.get(getattr(model, self.local_key)) or Collection()}
-        )
+        # ``group_by`` keeps each group as a plain list, so a parent with
+        # children used to get a ``list`` here while a childless parent, a
+        # single-parent eager load and the lazy path all get a Collection:
+        # ``.count()`` / ``.pluck()`` on an eager-loaded relation raised
+        # AttributeError only when it HAD rows. One type on every path.
+        local_value = getattr(model, self.local_key, None)
+        group = collection.all().get(local_value) if local_value is not None else None
+        model.add_relation({key: Collection(group or [])})
 
     def map_related(self, related_result):
         return related_result.group_by(self.foreign_key)

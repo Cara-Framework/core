@@ -441,7 +441,7 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     )
     # One batch: each queue's FREE window slots, one head per tenant.
     assert "SELECT DISTINCT ON (heads.queue, heads.tenant_key)" in db.sql
-    assert "ranked.queue_rank <= queue_room.room" in db.sql
+    assert "WHERE placed.queue_rank <= placed.room" in db.sql
     assert "priority_lanes(priority, base_rank) AS (VALUES" in db.sql
     assert "('critical', 0)" in db.sql
     assert "('high', 1)" in db.sql
@@ -463,7 +463,8 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     assert db.params[6] == ["connector", "sync"]
     assert "outstanding.publish_lease_expires_at > settings.now" in db.sql
     assert "settings.broker_window - " in db.sql
-    assert "WHERE queue_room.room > 0" in db.sql
+    assert "WHERE queue_room.room + settings.critical_reserve > 0" in db.sql
+    assert "WHERE eligible_queues.room > 0 OR priority_lanes.base_rank = 0" in db.sql
     assert "WHERE EXISTS" not in db.sql
     assert "status IN ('pending', 'processing')" in db.sql
 
@@ -500,13 +501,15 @@ def test_urgent_slots_open_past_the_tenant_window_for_declared_urgent_rows_only(
     heads_filter = db.sql.split(") AS head ", 1)[1].split("oldest AS", 1)[0]
     assert "COALESCE(outstanding.held, 0) < settings.tenant_window " in heads_filter
     assert (
-        "+ CASE WHEN tenant_keys.base_rank <= 1 "
+        "+ CASE WHEN tenant_keys.base_rank = 0 "
+        "THEN settings.urgent_slots + settings.critical_reserve "
+        "WHEN tenant_keys.base_rank = 1 "
         "THEN settings.urgent_slots ELSE 0 END" in heads_filter
     )
     # The aged tier only ORDERS heads; it never widens the window.
     assert "aging_seconds" not in heads_filter
     # The broker window still bounds the whole queue, urgent or not.
-    assert "ranked.queue_rank <= queue_room.room" in db.sql
+    assert "WHERE placed.queue_rank <= placed.room" in db.sql
 
 
 class _DeliveryMetricsDB:

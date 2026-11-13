@@ -17,6 +17,10 @@ _T = TypeVar("_T")
 _sync_mode: ContextVar[bool] = ContextVar("sync_mode", default=False)
 _job_id: ContextVar[str | None] = ContextVar("job_id", default=None)
 _correlation_id: ContextVar[str | None] = ContextVar("correlation_id", default=None)
+#: ``(scope id, {cache name: memo})`` of the running job or request.
+_scope_caches: ContextVar[tuple[str, dict[str, dict]] | None] = ContextVar(
+    "scope_caches", default=None
+)
 
 
 class ExecutionContext:
@@ -65,6 +69,35 @@ class ExecutionContext:
     def set_correlation_id(correlation_id: str):
         """Set correlation ID in context."""
         _correlation_id.set(correlation_id)
+
+    @staticmethod
+    def scope_cache(name: str, limit: int | None = None) -> dict | None:
+        """The ``name`` memo of the running job or request; ``None`` outside one.
+
+        A memo that must not outlive one unit of work (a recipe read once per
+        sweep, a tenant setting read once per request) lives here instead of
+        in a module dict keyed by an id: the correlation id is the client's
+        ``X-Request-ID`` and a retried job keeps its job id, so an id-keyed
+        module memo served a second request, or a retry, what an earlier one
+        read. The memo is held in a ``ContextVar``: each request and job runs
+        in its own context copy, so it starts empty there and dies with it;
+        the job or correlation id only gates whether a scope is running and
+        starts a fresh memo when the id changes inside one context.
+
+        ``limit`` bounds a long sweep: a memo holding ``limit`` entries starts
+        over rather than keeping a whole catalog in memory.
+        """
+        scope_id = _job_id.get() or _correlation_id.get()
+        if scope_id is None:
+            return None
+        held = _scope_caches.get()
+        if held is None or held[0] != scope_id:
+            held = (scope_id, {})
+            _scope_caches.set(held)
+        memo = held[1].setdefault(name, {})
+        if limit is not None and len(memo) >= limit:
+            memo.clear()
+        return memo
 
     @staticmethod
     def sync(job_id: str | None = None):
@@ -201,6 +234,10 @@ class _ExecutionContextManager:
 
     def __enter__(self):
         self._tokens.append(("sync", _sync_mode.set(self.sync)))
+        # A unit of work starts with no scope memo, even under a job id seen
+        # before (a retry): a context copied from one that already held a
+        # memo would otherwise share that dict by reference.
+        self._tokens.append(("scope", _scope_caches.set(None)))
         if self.job_id is not None:
             self._tokens.append(("job_id", _job_id.set(self.job_id)))
         if self.correlation_id is not None:
@@ -212,6 +249,7 @@ class _ExecutionContextManager:
             "sync": _sync_mode,
             "job_id": _job_id,
             "corr": _correlation_id,
+            "scope": _scope_caches,
         }
         for name, token in reversed(self._tokens):
             _var_map[name].reset(token)

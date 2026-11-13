@@ -1,7 +1,11 @@
 """Extract request contracts from :class:`FormRequest` rule dictionaries.
 
-The extractor reads source with :mod:`ast`; it never imports an application or
-boots its providers.  Literal Cara validation rules become JSON Schema and the
+The extractor reads source with :mod:`ast`; it never boots an application's
+providers or runs its functions. The one import it makes is the module a request
+names a constant from (``from app.models import Product`` for
+``in:{','.join(Product.CONDITIONS)}``), read for plain data only, so an ``in:``
+rule built from a kernel vocabulary publishes its enum like a literal one.
+Literal Cara validation rules become JSON Schema and the
 original rule is retained as an extension, so a construct that OpenAPI cannot
 express is visible instead of silently invented.
 """
@@ -21,6 +25,12 @@ from cara.filtering import (
     MAX_ROOT_NODES,
     RAW_LENGTH_CAP,
     VALUES_HARD_CAP,
+)
+
+from ._RequestConstants import (
+    _resolve_module_values,
+    _rule_expression,
+    _static_value,
 )
 
 _CURSOR_TOKEN_MAX = 4096
@@ -66,155 +76,6 @@ _FILTER_TREE_GRAMMAR = (
 class _RuleNode:
     rule: str | None = None
     children: dict[str, _RuleNode] = field(default_factory=dict)
-
-
-def _static_value(node: ast.AST, values: dict[str, Any]) -> Any:
-    """Evaluate only inert literal expressions used by request constants."""
-    if isinstance(node, ast.Constant):
-        return node.value
-    if isinstance(node, ast.Name):
-        return values.get(node.id)
-    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        resolved = [_static_value(item, values) for item in node.elts]
-        if any(value is None for value in resolved):
-            return None
-        return resolved
-    if isinstance(node, ast.Dict):
-        resolved_dict: dict[Any, Any] = {}
-        for key_node, value_node in zip(node.keys, node.values, strict=True):
-            value = _static_value(value_node, values)
-            if key_node is None:
-                if not isinstance(value, dict):
-                    return None
-                resolved_dict.update(value)
-                continue
-            key = _static_value(key_node, values)
-            if key is None or value is None:
-                return None
-            try:
-                resolved_dict[key] = value
-            except TypeError:
-                return None
-        return resolved_dict
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left = _static_value(node.left, values)
-        right = _static_value(node.right, values)
-        if left is not None and right is not None:
-            try:
-                return left + right
-            except TypeError:
-                return None
-    return None
-
-
-def _module_values(
-    tree: ast.Module, imported_values: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    values = dict(imported_values or {})
-    for node in tree.body:
-        target: ast.Name | None = None
-        value: ast.AST | None = None
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0] if isinstance(node.targets[0], ast.Name) else None
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            target = node.target
-            value = node.value
-        if target is None or value is None:
-            continue
-        resolved = _static_value(value, values)
-        if resolved is not None:
-            values[target.id] = resolved
-    return values
-
-
-def _module_name(root: Path, path: Path) -> str:
-    relative = path.relative_to(root).with_suffix("")
-    parts = list(relative.parts)
-    if parts[-1] == "__init__":
-        parts.pop()
-    return ".".join(parts)
-
-
-def _imported_module_name(
-    root: Path,
-    path: Path,
-    node: ast.ImportFrom,
-    known_modules: frozenset[str],
-) -> str | None:
-    if node.level:
-        package = list(path.relative_to(root).parent.parts)
-        ascend = node.level - 1
-        if ascend > len(package):
-            return None
-        base = package[: len(package) - ascend]
-        if node.module:
-            base.extend(node.module.split("."))
-        candidate = ".".join(base)
-        return candidate if candidate in known_modules else None
-    if not node.module:
-        return None
-    matches = [
-        module
-        for module in known_modules
-        if node.module == module or node.module.endswith(f".{module}")
-    ]
-    return max(matches, key=len) if matches else None
-
-
-def _resolve_module_values(
-    root: Path, modules: dict[Path, ast.Module]
-) -> dict[Path, dict[str, Any]]:
-    """Resolve inert constants, including imports between request modules."""
-
-    module_paths = {_module_name(root, path): path for path in modules}
-    known_modules = frozenset(module_paths)
-    resolved = {path: _module_values(tree) for path, tree in modules.items()}
-    for _ in range(len(modules) + 1):
-        changed = False
-        for path, tree in modules.items():
-            imported: dict[str, Any] = {}
-            for node in tree.body:
-                if not isinstance(node, ast.ImportFrom):
-                    continue
-                target_name = _imported_module_name(root, path, node, known_modules)
-                if target_name is None:
-                    continue
-                target_values = resolved[module_paths[target_name]]
-                for alias in node.names:
-                    if alias.name in target_values:
-                        imported[alias.asname or alias.name] = target_values[alias.name]
-            current = _module_values(tree, imported)
-            if current != resolved[path]:
-                resolved[path] = current
-                changed = True
-        if not changed:
-            break
-    return resolved
-
-
-def _rule_expression(node: ast.AST, values: dict[str, Any]) -> tuple[str, bool]:
-    """Render one rule string, marking unresolved f-string fragments partial."""
-    resolved = _static_value(node, values)
-    if isinstance(resolved, str):
-        return resolved, False
-    if not isinstance(node, ast.JoinedStr):
-        return ast.unparse(node), True
-
-    chunks: list[str] = []
-    partial = False
-    for part in node.values:
-        if isinstance(part, ast.Constant) and isinstance(part.value, str):
-            chunks.append(part.value)
-            continue
-        if isinstance(part, ast.FormattedValue):
-            value = _static_value(part.value, values)
-            if value is not None:
-                chunks.append(str(value))
-            else:
-                chunks.append("{" + ast.unparse(part.value) + "}")
-                partial = True
-    return "".join(chunks), partial
 
 
 def _number(value: str) -> int | float | None:

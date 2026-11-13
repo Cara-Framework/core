@@ -161,6 +161,17 @@ def _build_entry(node: ast.ClassDef, rel: str) -> _ClassEntry:
     init_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
     method_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
     for stmt in node.body:
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            # A class-body binding (``lock = staticmethod(shared_lock)``,
+            # ``read = partial(...)``) is a callable whose shape this scanner
+            # cannot see: certainty is unavailable, so calls to it are skipped,
+            # never reported as a missing method.
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    decorated.add(target.id)
+                    methods.pop(target.id, None)
+            continue
         if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         method_nodes.append(stmt)

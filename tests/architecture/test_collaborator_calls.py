@@ -308,6 +308,42 @@ class FooController:
     assert CollaboratorCalls.scan(make_manifest(tmp_path)) == []
 
 
+def test_class_body_bound_method_is_skipped(tmp_path):
+    """``lock = staticmethod(shared_lock)`` / ``partial(...)`` bind a real
+    method the AST cannot shape; reporting it absent was a false positive."""
+    write(
+        tmp_path / "app/repositories/FooRepository.py",
+        """
+from functools import partial
+
+
+def shared_lock(tenant_id, row_id):
+    return None
+
+
+class FooRepository:
+    lock = staticmethod(shared_lock)
+    lock_central = staticmethod(partial(shared_lock, None))
+""",
+    )
+    write(
+        tmp_path / "app/services/FooService.py",
+        """
+from app.repositories.FooRepository import FooRepository
+
+
+class FooService:
+    def __init__(self, repo: FooRepository) -> None:
+        self.repo = repo
+
+    def handle(self):
+        self.repo.lock(1, 2)
+        return self.repo.lock_central(2)
+""",
+    )
+    assert CollaboratorCalls.scan(make_manifest(tmp_path)) == []
+
+
 def test_type_not_defined_in_scanned_trees_is_skipped(tmp_path):
     write(
         tmp_path / "app/controllers/FooController.py",

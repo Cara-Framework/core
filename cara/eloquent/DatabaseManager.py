@@ -302,12 +302,19 @@ class DatabaseManager:
         trigger's ``ORDER BY stream_key`` — acquires a shared key set in one
         order, so two of them cannot deadlock on it.
 
-        The lock lives exactly as long as the caller's transaction; outside
-        one, Postgres releases it when the statement ends.
+        The lock lives exactly as long as the caller's transaction. Outside
+        one Postgres releases it when its own statement ends, so the caller
+        would serialize nothing while reading as if it did: that is refused
+        with ``RuntimeError`` instead of being a silent no-op.
         """
         names = [str(key) for key in keys]
         if not names:
             return
+        if self.transaction_level(connection) < 1:
+            raise RuntimeError(
+                "DB.advisory_xact_lock needs an open transaction: outside one the "
+                f"lock on {names[0]!r} ends with its own statement and guards nothing"
+            )
         if len(names) == 1:
             self.select_one(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0)) AS acquired",
