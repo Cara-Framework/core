@@ -371,6 +371,48 @@ class QueueJobDelivery(Model):
             ),
         },
         {
+            # The relay's claim must not depend on when ANALYZE last ran.
+            # ``status`` / ``publish_status`` describe the queue's moment: a
+            # quiet ledger is sampled with no open row, and the next burst's
+            # claim then prices every open-set index at one row, picks the
+            # smallest (``open_expiry_idx``) and filters the whole open set
+            # once per tenant — 5.8 s per claim at 20k open rows / 1,000
+            # tenants, and the fleet published nothing for the 60-90 s until
+            # autoanalyze caught up (stress 2026-11-12/13). Without a sample
+            # the planner uses its fixed default selectivity, under which the
+            # ordered tenant probes win at every moment (14-33 ms there).
+            # Target 0 alone keeps the sample already taken through every
+            # later ANALYZE, so the entry also clears it: PostgreSQL 18 has
+            # ``pg_clear_attribute_stats``; older servers drop a column's
+            # sample when its type is re-asserted (no rewrite, same type).
+            "name": "queue_job_delivery_queue_state_statistics",
+            "up": (
+                "DO $$ DECLARE state_column record; BEGIN "
+                "ALTER TABLE queue_job_delivery "
+                "ALTER COLUMN status SET STATISTICS 0, "
+                "ALTER COLUMN publish_status SET STATISTICS 0; "
+                "FOR state_column IN SELECT n.nspname, c.relname, a.attname, "
+                "format_type(a.atttypid, a.atttypmod) AS column_type "
+                "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE a.attrelid = 'queue_job_delivery'::regclass "
+                "AND a.attname IN ('status', 'publish_status') LOOP "
+                "IF to_regprocedure("
+                "'pg_clear_attribute_stats(text,text,text,boolean)') IS NOT NULL "
+                "THEN PERFORM pg_clear_attribute_stats(state_column.nspname::text, "
+                "state_column.relname::text, state_column.attname::text, false); "
+                "ELSE EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I TYPE %s', "
+                "state_column.nspname, state_column.relname, state_column.attname, "
+                "state_column.column_type); "
+                "END IF; END LOOP; END $$"
+            ),
+            "down": (
+                "ALTER TABLE queue_job_delivery "
+                "ALTER COLUMN status SET STATISTICS -1, "
+                "ALTER COLUMN publish_status SET STATISTICS -1"
+            ),
+        },
+        {
             "name": "queue_job_delivery_publish_due_idx",
             "up": (
                 "CREATE INDEX IF NOT EXISTS queue_job_delivery_publish_due_idx "

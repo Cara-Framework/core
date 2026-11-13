@@ -102,6 +102,11 @@ class LiveSchema:
     #: exactly what an index rebuilt by ``ALTER COLUMN TYPE`` or restored from
     #: a dump stores. Both sides are compared at that fixpoint.
     respelled_index_definitions: dict[str, dict[str, str]] | None = None
+    #: Explicit per-column statistics targets (``ALTER COLUMN ... SET
+    #: STATISTICS n``), per table and column. A target of 0 counts only while
+    #: no sample of the column remains: ANALYZE at target 0 skips the column
+    #: but keeps the sample it took before, which still steers the planner.
+    column_statistics: dict[str, dict[str, int]] | None = None
 
     def __post_init__(self):
         for name, empty in (
@@ -118,6 +123,7 @@ class LiveSchema:
             ("invalid_indexes", {}),
             ("declared_index_definitions", {}),
             ("respelled_index_definitions", {}),
+            ("column_statistics", {}),
         ):
             if getattr(self, name) is None:
                 object.__setattr__(self, name, empty)
@@ -158,6 +164,10 @@ class LiveSchema:
             | self.functions
             | {f"extension:{name}" for name in self.extensions}
             | {f"column:{name}" for name in self.tables.get(table, {})}
+            | {
+                f"statistics:{column}={target}"
+                for column, target in self.column_statistics.get(table, {}).items()
+            }
         )
 
 
@@ -316,6 +326,32 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         for row in run("SELECT extname AS extension_name FROM pg_extension") or []
     }
 
+    # NULL (17+) / -1 (older) is the default target; only an explicit one is
+    # declared. A 0 target over a sample that is still there is not the
+    # object a model declares (see ``LiveSchema.column_statistics``).
+    column_statistics: dict[str, dict[str, int]] = {}
+    for row in (
+        run(
+            "SELECT c.relname AS table_name, a.attname AS column_name, "
+            "a.attstattarget::int AS target, EXISTS (SELECT 1 FROM pg_stats s "
+            "WHERE s.schemaname = n.nspname AND s.tablename = c.relname "
+            "AND s.attname = a.attname) AS sampled "
+            "FROM pg_attribute a "
+            "JOIN pg_class c ON c.oid = a.attrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = '{sql_literal(target)}' "
+            "AND c.relkind IN ('r', 'p') AND a.attnum > 0 "
+            "AND NOT a.attisdropped AND a.attstattarget >= 0 "
+            "ORDER BY c.relname, a.attname"
+        )
+        or []
+    ):
+        if int(row["target"]) == 0 and row.get("sampled"):
+            continue
+        column_statistics.setdefault(row["table_name"], {})[row["column_name"]] = int(
+            row["target"]
+        )
+
     return LiveSchema(
         tables=tables,
         checks=checks,
@@ -330,6 +366,7 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         unique_constraints=unique_constraints,
         index_definitions=index_definitions,
         invalid_indexes=invalid_indexes,
+        column_statistics=column_statistics,
     )
 
 

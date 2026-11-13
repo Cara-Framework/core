@@ -70,6 +70,14 @@ _ADDS_COLUMN_RE = re.compile(
 )
 
 
+#: ``ALTER COLUMN c SET STATISTICS n`` reads as ``statistics:c=n``, matched
+#: against :attr:`LiveSchema.column_statistics`.
+_SETS_STATISTICS_RE = re.compile(
+    r"ALTER\s+COLUMN\s+\"?(?P<name>\w+)\"?\s+SET\s+STATISTICS\s+(?P<target>\d+)",
+    re.IGNORECASE,
+)
+
+
 def created_objects(up_sql: str) -> set[str] | None:
     """The objects this statement creates, or None when it cannot be read.
 
@@ -100,6 +108,10 @@ def created_objects(up_sql: str) -> set[str] | None:
     }
     found |= {
         f"column:{match.group('name')}" for match in _ADDS_COLUMN_RE.finditer(up_sql)
+    }
+    found |= {
+        f"statistics:{match.group('name')}={int(match.group('target'))}"
+        for match in _SETS_STATISTICS_RE.finditer(up_sql)
     }
     return found or None
 
@@ -538,7 +550,8 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
                 f"already has it. Left to guess it would either replan forever "
                 f"or silently drop a real object from the plan. Express it as "
                 f"DDL naming its object (CREATE [UNIQUE] INDEX, ADD CONSTRAINT, "
-                f"CREATE TRIGGER, CREATE FUNCTION, CREATE EXTENSION, ADD COLUMN) "
+                f"CREATE TRIGGER, CREATE FUNCTION, CREATE EXTENSION, ADD COLUMN, "
+                f"ALTER COLUMN ... SET STATISTICS) "
                 f"— a DO block wrapping one of those reads fine."
             )
         if created <= present:
