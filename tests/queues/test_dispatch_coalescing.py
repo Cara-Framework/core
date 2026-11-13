@@ -175,6 +175,27 @@ def test_a_push_hands_its_key_and_its_wait_to_the_ledger():
     (registered,) = driver._delivery_store.registered
     assert registered["coalesce_key"] == "read:42"
     assert registered["coalesce_within_seconds"] == 60
+    assert registered["coalesce_delay_seconds"] == 0  # off unless the job asks
+
+
+class QueueDebouncedReadJob(QueueCoalescedReadJob):
+    coalesce_delay_seconds = 3
+
+
+def test_a_push_hands_the_jobs_debounce_to_the_ledger():
+    from cara.queues.drivers import _AMQPDelivery
+
+    driver = _Driver()
+    _AMQPDelivery._amqp_delivery_register_immediate_delivery(
+        driver,
+        job=QueueDebouncedReadJob("42"),
+        job_id=str(uuid.uuid4()),
+        merged_opts=dict(_Driver.options),
+        job_opts={**_Driver.options, "queue": "sync"},
+    )
+
+    (registered,) = driver._delivery_store.registered
+    assert registered["coalesce_delay_seconds"] == 3
 
 
 class QueuePlainJob(ShouldQueue, Queueable):
@@ -197,6 +218,7 @@ def test_a_plain_push_has_no_key():
     (registered,) = driver._delivery_store.registered
     assert registered["coalesce_key"] is None
     assert registered["coalesce_within_seconds"] is None
+    assert registered["coalesce_delay_seconds"] is None
 
 
 def test_a_folded_push_returns_the_waiting_deliverys_id():
@@ -358,7 +380,9 @@ def ledger():
         connection.close()
 
 
-def _dispatch(store, db, *, delay: int = 0, within: int | None = 60) -> str:
+def _dispatch(
+    store, db, *, delay: int = 0, within: int | None = 60, debounce: int | None = None
+) -> str:
     """One ``push`` of the coalescing read: the delivery id the caller gets."""
     body, payload, envelope = _signed(delay=delay)
     try:
@@ -370,6 +394,7 @@ def _dispatch(store, db, *, delay: int = 0, within: int | None = 60) -> str:
                 db=db,
                 coalesce_key=QueueCoalescedReadJob().coalesce_id(),
                 coalesce_within_seconds=within,
+                **({} if debounce is None else {"coalesce_delay_seconds": debounce}),
             )
     except UniqueDeliveryConflict as conflict:
         return conflict.job_id
@@ -431,3 +456,98 @@ def test_a_delayed_dispatch_records_its_key_but_never_folds_itself(ledger):
     assert retry != waiting
     assert {r["coalesce_key"] for r in _rows(db)} == {"read:1"}
     assert _dispatch(store, db) == waiting  # due first: the earliest wins
+
+
+# ── the debounce: behind a running read, the next one waits a moment ──
+#
+# Woo storm, 2026-11-13: 301 product.updated in 4.2 s were 91 reads. The fold
+# only absorbs asks while a read WAITS, and the next read became due the
+# moment the running one finished (~0.1-0.5 s on a local store), so a burst
+# was about one read per read-time. With ``coalesce_delay_seconds`` the read
+# queued behind a running one is due that long later: the burst folds into
+# it, while a lone ask (nothing running) still starts at once.
+
+
+def _running(db, job_id: str) -> None:
+    db.statement(
+        "UPDATE queue_job_delivery SET status = 'processing', attempts = 1, "
+        "lease_token = 'lease', lease_expires_at = NOW() + INTERVAL '1 minute' "
+        "WHERE job_id = %s",
+        [job_id],
+    )
+
+
+def _due_in(db, job_id: str) -> float:
+    row = db.select_one(
+        "SELECT EXTRACT(EPOCH FROM (available_at - NOW())) AS due "
+        "FROM queue_job_delivery WHERE job_id = %s",
+        [job_id],
+    )
+    return float(row["due"])
+
+
+@_integration
+def test_a_lone_ask_starts_at_once_whatever_the_debounce(ledger):
+    store, db = ledger
+
+    first = _dispatch(store, db, debounce=3)
+
+    assert _due_in(db, first) <= 1
+
+
+@_integration
+def test_the_read_behind_a_running_one_waits_the_debounce(ledger):
+    store, db = ledger
+    first = _dispatch(store, db, debounce=3)
+    _running(db, first)
+
+    second = _dispatch(store, db, debounce=3)
+
+    assert second != first
+    assert 2 <= _due_in(db, second) <= 4
+    # Every later ask, during the run and after it ends, folds into it.
+    assert {_dispatch(store, db, debounce=3) for _ in range(200)} == {second}
+    db.statement(
+        "UPDATE queue_job_delivery SET status = 'completed', lease_token = NULL, "
+        "lease_expires_at = NULL, completed_at = NOW() WHERE job_id = %s",
+        [first],
+    )
+    assert _dispatch(store, db, debounce=3) == second
+    assert len(_rows(db)) == 2
+
+
+@_integration
+def test_a_storm_is_a_few_reads_not_one_per_read_time(ledger):
+    """301 asks while each read runs as soon as it is due: without the
+    debounce every ask arriving after a read finished queued a read due now."""
+    store, db = ledger
+    reads: list[str] = []
+    for index in range(301):
+        accepted = _dispatch(store, db, debounce=3)
+        if accepted not in reads:
+            reads.append(accepted)
+            # A worker picks up a read only when it is due.
+            if _due_in(db, accepted) <= 1:
+                _running(db, accepted)
+        if index % 30 == 29:
+            # A read finished: the next ask finds nothing running.
+            for job_id in reads:
+                db.statement(
+                    "UPDATE queue_job_delivery SET status = 'completed', "
+                    "lease_token = NULL, lease_expires_at = NULL, "
+                    "completed_at = NOW() WHERE job_id = %s AND status = 'processing'",
+                    [job_id],
+                )
+
+    assert len(reads) == 2
+
+
+@_integration
+def test_no_debounce_keeps_the_next_read_due_at_once(ledger):
+    store, db = ledger
+    first = _dispatch(store, db)
+    _running(db, first)
+
+    second = _dispatch(store, db)
+
+    assert _due_in(db, second) <= 1

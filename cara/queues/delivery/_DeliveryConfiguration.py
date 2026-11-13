@@ -39,6 +39,7 @@ def _delivery_register(
     db: Any | None = None,
     coalesce_key: str | None = None,
     coalesce_within_seconds: int | None = None,
+    coalesce_delay_seconds: int | None = None,
 ) -> bool:
     """Insert an immutable delivery row before any broker publication.
 
@@ -46,7 +47,10 @@ def _delivery_register(
     ``coalesce_within_seconds`` the dispatch first folds into a PENDING row
     of the same key due no later than that many seconds after this one, and
     raises ``UniqueDeliveryConflict`` naming it; a delayed dispatch passes
-    none and only records its key.
+    none and only records its key. A dispatch that cannot fold while a row
+    of its key RUNS is due ``coalesce_delay_seconds`` later (the debounce):
+    only the row's due time moves, the signed envelope's ``not_before`` stays
+    at or before it, so the relay publishes it then and the worker accepts it.
     """
     database = db or self._db()
     self._require_ledger_schema(database)
@@ -88,6 +92,16 @@ def _delivery_register(
                 tenant_id,
                 coalesce_key,
                 available_at.add(seconds=max(int(coalesce_within_seconds), 0)),
+            )
+            available_at = _debounced_due(
+                self,
+                database,
+                tenant_mode,
+                tenant_id,
+                coalesce_key,
+                available_at,
+                now,
+                int(coalesce_delay_seconds or 0),
             )
     insert_sql = (
         f"INSERT INTO {self.table} ("
@@ -207,6 +221,36 @@ def _fold_into_waiting_delivery(
     )
     if owner is not None:
         raise UniqueDeliveryConflict(str(self._row_value(owner, "job_id")))
+
+
+def _debounced_due(
+    self,
+    database: Any,
+    tenant_mode: str,
+    tenant_id: int | None,
+    coalesce_key: str,
+    available_at: Any,
+    now: Any,
+    delay_seconds: int,
+) -> Any:
+    """The due time of a delivery that could not fold: ``delay_seconds``
+    after ``now`` while a delivery of its key runs, else ``available_at``.
+
+    Read under the fold's advisory lock. Only running rows are asked for, a
+    handful at any time (``queue_job_delivery_execution_lease_idx`` leads
+    with ``status``), so a lone ask pays one indexed probe and no wait.
+    """
+    if delay_seconds <= 0:
+        return available_at
+    running = database.select_one(
+        f"SELECT 1 AS running FROM {self.table} WHERE status = %s "
+        "AND tenant_mode = %s AND COALESCE(tenant_id, 0) = %s "
+        "AND coalesce_key = %s LIMIT 1",
+        [self.STATUS_PROCESSING, tenant_mode, int(tenant_id or 0), coalesce_key],
+    )
+    if running is None:
+        return available_at
+    return max(available_at, now.add(seconds=int(delay_seconds)))
 
 
 def _delivery_publish_after_commit(self, job_id: str) -> None:

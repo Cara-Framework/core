@@ -14,6 +14,14 @@ and every later ask folds into that one. A delivery waits at most
 ``coalesce_within_seconds`` longer than its own due time for the one it
 folds into, so a back-off far in the future never swallows a fresh ask.
 
+The fold alone made a burst about one read per read-time: the delivery
+queued behind a running one became due the moment the run ended (Woo storm,
+2026-11-13: 301 notifications in 4.2 s, 91 reads of ~0.1-0.5 s). With
+``coalesce_delay_seconds`` that delivery is due that long after the dispatch
+that queued it, so the rest of the burst folds into it: a burst is about one
+read per delay, and a lone ask, with nothing of its key running, still starts
+at once.
+
 The fold is an optimisation, not a correctness fence: the ledger takes a
 transaction-scoped advisory lock on the key, and a dispatch that cannot fold
 simply queues its own delivery. A delayed dispatch (``later``/``schedule``,
@@ -35,6 +43,12 @@ class CoalescingJob:
     #: How much later than its own due time a dispatch may wait for the
     #: waiting delivery it folds into.
     coalesce_within_seconds: int = 60
+
+    #: The debounce: a delivery queued while one of its key RUNS is due this
+    #: many seconds later instead of at once, so the asks of a burst fold into
+    #: it rather than into one read per read-time. A lone ask (nothing of the
+    #: key running) still starts at once. 0 turns it off.
+    coalesce_delay_seconds: int = 0
 
     def coalesce_id(self) -> str:
         """The key a waiting delivery answers for; overridden by every job."""

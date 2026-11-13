@@ -144,6 +144,9 @@ def _amqp_delivery_register_immediate_delivery(
                 coalesce_within_seconds=(
                     int(job.coalesce_within_seconds) if coalescing else None
                 ),
+                coalesce_delay_seconds=(
+                    int(job.coalesce_delay_seconds) if coalescing else None
+                ),
             )
             self._delivery_store.publish_after_commit(job_id)
     except UniqueDeliveryConflict as conflict:
