@@ -37,8 +37,17 @@ def _delivery_register(
     replay_requested_by: str | None = None,
     replay_reason: str | None = None,
     db: Any | None = None,
+    coalesce_key: str | None = None,
+    coalesce_within_seconds: int | None = None,
 ) -> bool:
-    """Insert an immutable delivery row before any broker publication."""
+    """Insert an immutable delivery row before any broker publication.
+
+    ``coalesce_key`` (a ``CoalescingJob``) is recorded on the row. With
+    ``coalesce_within_seconds`` the dispatch first folds into a PENDING row
+    of the same key due no later than that many seconds after this one, and
+    raises ``UniqueDeliveryConflict`` naming it; a delayed dispatch passes
+    none and only records its key.
+    """
     database = db or self._db()
     self._require_ledger_schema(database)
     canonical = SignedJsonJobSerializer.canonical_envelope_bytes(body)
@@ -67,11 +76,24 @@ def _delivery_register(
         int(envelope["expires_at"]),
         tz="UTC",
     )
+    if coalesce_key is not None:
+        if unique_key is not None:
+            raise QueueException("A delivery is either unique or coalescing, not both.")
+        coalesce_key = self._bounded_text(coalesce_key, "coalesce_key", 500)
+        if coalesce_within_seconds is not None:
+            _fold_into_waiting_delivery(
+                self,
+                database,
+                tenant_mode,
+                tenant_id,
+                coalesce_key,
+                available_at.add(seconds=max(int(coalesce_within_seconds), 0)),
+            )
     insert_sql = (
         f"INSERT INTO {self.table} ("
         "job_id, db_job_id, replay_of, replay_requested_by, replay_reason, "
         "payload_sha256, signed_envelope, "
-        "tenant_mode, tenant_id, unique_key, "
+        "tenant_mode, tenant_id, unique_key, coalesce_key, "
         "queue, priority, status, attempts, lease_token, lease_expires_at, "
         "completed_at, terminal_reason, post_hooks_completed_at, "
         "expires_at, available_at, publish_status, "
@@ -80,7 +102,7 @@ def _delivery_register(
         "created_at, updated_at"
         ") VALUES ("
         "%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, "
-        "%s, %s, %s, %s, 0, NULL, NULL, "
+        "%s, %s, %s, %s, %s, 0, NULL, NULL, "
         "NULL, NULL, NULL, "
         "%s, %s, %s, 0, %s, NULL, NULL, NULL, NULL, %s, %s"
         ") ON CONFLICT DO NOTHING RETURNING job_id"
@@ -96,6 +118,7 @@ def _delivery_register(
         tenant_mode,
         tenant_id,
         unique_key,
+        coalesce_key,
         payload["queue"],
         payload["priority"],
         self.STATUS_PENDING,
@@ -153,6 +176,37 @@ def _delivery_register(
                 continue
         break
     raise QueueException("Queue delivery ledger insert was not persisted.")
+
+
+def _fold_into_waiting_delivery(
+    self,
+    database: Any,
+    tenant_mode: str,
+    tenant_id: int | None,
+    coalesce_key: str,
+    due_by: Any,
+) -> None:
+    """Raise ``UniqueDeliveryConflict`` naming a waiting delivery of
+    ``coalesce_key`` due by ``due_by``; return when there is none.
+
+    The advisory lock (released at the dispatch transaction's end) keeps two
+    concurrent dispatches of one key from both missing the other's row. A
+    row that becomes ``processing`` after this read still starts after it,
+    so it reads every change announced before this dispatch.
+    """
+    database.select_one(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0)) AS locked",
+        [f"{self.table}:coalesce:{tenant_mode}:{tenant_id or 0}:{coalesce_key}"],
+    )
+    owner = database.select_one(
+        f"SELECT job_id FROM {self.table} WHERE tenant_mode = %s "
+        "AND COALESCE(tenant_id, 0) = %s AND coalesce_key = %s "
+        "AND status = %s AND available_at <= %s "
+        "ORDER BY available_at ASC LIMIT 1",
+        [tenant_mode, int(tenant_id or 0), coalesce_key, self.STATUS_PENDING, due_by],
+    )
+    if owner is not None:
+        raise UniqueDeliveryConflict(str(self._row_value(owner, "job_id")))
 
 
 def _delivery_publish_after_commit(self, job_id: str) -> None:

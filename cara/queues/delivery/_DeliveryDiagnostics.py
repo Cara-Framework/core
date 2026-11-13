@@ -403,9 +403,13 @@ def _delivery_require_ledger_schema(self, database: Any) -> None:
         "EXISTS (SELECT 1 FROM information_schema.columns "
         "WHERE table_schema = 'public' AND table_name = %s "
         "AND column_name = 'unique_key') AS has_unique_key, "
+        "EXISTS (SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = %s "
+        "AND column_name = 'coalesce_key') AS has_coalesce_key, "
         "EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' "
         "AND tablename = %s AND indexname = %s) AS has_unique_index",
         [
+            self.table,
             self.table,
             self.table,
             "queue_job_delivery_open_unique_key_idx",
@@ -418,6 +422,12 @@ def _delivery_require_ledger_schema(self, database: Any) -> None:
             "Queue delivery ledger is missing its unique_key column or "
             "open-delivery unique index. Run `craft migrate` to apply the "
             "forward-only delivery-ledger uniqueness migration before "
+            "dispatching jobs."
+        )
+    if not bool(self._row_value(unique_schema, "has_coalesce_key")):
+        raise QueueException(
+            "Queue delivery ledger is missing its coalesce_key column "
+            "(CoalescingJob). Apply the ledger model's schema before "
             "dispatching jobs."
         )
     self._ledger_schema_verified = True

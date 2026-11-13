@@ -104,6 +104,11 @@ class QueueJobDelivery(Model):
                 # index below, not by a plain UNIQUE, because terminal
                 # rows must not block a re-dispatch.
                 field.string("unique_key", 512).nullable(),
+                # ``CoalescingJob`` key: a dispatch folds into a PENDING row
+                # of the same (tenant scope, key) — never a running one — so
+                # no uniqueness here; the fold is refereed under an advisory
+                # lock (``_delivery_register``).
+                field.string("coalesce_key", 512).nullable(),
                 field.datetime("created_at"),
                 field.datetime("updated_at"),
             )
@@ -616,5 +621,19 @@ class QueueJobDelivery(Model):
                 "AND status IN ('pending','processing')"
             ),
             "down": "DROP INDEX IF EXISTS queue_job_delivery_open_unique_key_idx",
+        },
+        {
+            # The fold's probe: the waiting deliveries of one coalesce key,
+            # earliest due first. Only pending rows: a running one never
+            # absorbs a dispatch (``CoalescingJob``).
+            "name": "queue_job_delivery_pending_coalesce_key_idx",
+            "up": (
+                "CREATE INDEX IF NOT EXISTS "
+                "queue_job_delivery_pending_coalesce_key_idx "
+                "ON queue_job_delivery "
+                "(tenant_mode, COALESCE(tenant_id, 0), coalesce_key, available_at) "
+                "WHERE coalesce_key IS NOT NULL AND status = 'pending'"
+            ),
+            "down": "DROP INDEX IF EXISTS queue_job_delivery_pending_coalesce_key_idx",
         },
     ]

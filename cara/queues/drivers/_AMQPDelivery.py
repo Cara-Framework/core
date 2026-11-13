@@ -14,7 +14,7 @@ import pendulum as pendulum_module
 from cara.context import Tenancy
 from cara.observability import MetricsBase
 from cara.queues.Bus import Bus
-from cara.queues.contracts import UniqueJob
+from cara.queues.contracts import CoalescingJob, UniqueJob
 
 try:
     import pika
@@ -133,11 +133,17 @@ def _amqp_delivery_register_immediate_delivery(
                 ),
                 allow_not_before=True,
             )
+            # A ``CoalescingJob`` folds into its key's waiting delivery.
+            coalescing = isinstance(job, CoalescingJob)
             self._delivery_store.register(
                 body=body,
                 payload=envelope["payload"],
                 envelope=envelope,
                 db=database,
+                coalesce_key=job.coalesce_id() if coalescing else None,
+                coalesce_within_seconds=(
+                    int(job.coalesce_within_seconds) if coalescing else None
+                ),
             )
             self._delivery_store.publish_after_commit(job_id)
     except UniqueDeliveryConflict as conflict:

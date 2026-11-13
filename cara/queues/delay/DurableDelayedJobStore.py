@@ -11,7 +11,7 @@ import pendulum
 
 from cara.exceptions import QueueException
 from cara.observability import MetricsBase, Trace
-from cara.queues.contracts import UniqueJob
+from cara.queues.contracts import CoalescingJob, UniqueJob
 from cara.queues.delivery import QueueJobDeliveryStore
 from cara.queues.serializers import SignedJsonJobSerializer
 
@@ -164,11 +164,17 @@ class DurableDelayedJobStore:
                     source_token,
                     db=database,
                 )
+            # A delayed ``CoalescingJob`` records its key so a later dispatch
+            # can fold into it; it never folds itself (its due time and its
+            # retry settlement are its own).
             self.delivery_store.register(
                 body=body,
                 payload=envelope["payload"],
                 envelope=envelope,
                 db=database,
+                coalesce_key=(
+                    job.coalesce_id() if isinstance(job, CoalescingJob) else None
+                ),
             )
             database.statement(
                 "UPDATE job SET status = %s, available_at = %s, attempts = %s, "

@@ -113,7 +113,9 @@ def test_no_read_model_site_restates_the_due_predicate() -> None:
 
     The claim gate (``_claim_publish`` / ``_claim_next_publish``) is
     deliberately NARROWER — it answers "which row may I lease right now",
-    not "how much work is waiting" — so it keeps its own spelling. Every
+    not "how much work is waiting" — so it keeps its own spelling. So does
+    a ``CoalescingJob``'s fold (``_fold_into_waiting_delivery``): "is a
+    waiting row due by this dispatch's window", not a backlog count. Every
     other occurrence is a copy waiting to drift.
     """
     import inspect
@@ -131,8 +133,9 @@ def test_no_read_model_site_restates_the_due_predicate() -> None:
         )
     )
     occurrences = source.count("available_at <=")
-    # 1 × template declaration, 1 × _claim_publish, 1 × _claim_next_publish.
-    assert occurrences == 3, (
+    # 1 × template declaration, 1 × _claim_publish, 1 × _claim_next_publish,
+    # 1 × _fold_into_waiting_delivery.
+    assert occurrences == 4, (
         "a new hand-written 'available_at <=' appeared; format "
         "_PUBLISH_BACKLOG_FILTER_TEMPLATE instead"
     )
