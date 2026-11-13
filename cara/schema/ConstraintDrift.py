@@ -27,17 +27,71 @@ from cara.schema.Objects import (
 )
 from cara.schema.Operation import DESTRUCTIVE, LOCKING, Operation
 
+#: ``ADD CONSTRAINT <name> CHECK (`` in a model's named DDL; the body is read
+#: from the opening paren by :func:`_balanced_body`.
+_NAMED_CHECK_RE = re.compile(
+    r"ADD\s+CONSTRAINT\s+\"?(?P<name>\w+)\"?\s+CHECK\s*\(", re.IGNORECASE
+)
+
+
+def _balanced_body(sql: str, start: int) -> str | None:
+    """The text inside the paren that opens at ``start - 1``, quote-aware."""
+    depth, position, quote = 1, start, None
+    while position < len(sql):
+        char = sql[position]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return sql[start:position].strip()
+        position += 1
+    return None
+
+
+def raw_checks(model: dict) -> list[tuple[str, str]]:
+    """``(name, expression)`` for every CHECK a model declares in ``__indexes__``
+    named DDL (``ALTER TABLE ... ADD CONSTRAINT x CHECK (...)``).
+
+    These were diffed by NAME only, so ``listing_end_lifecycle_check`` could
+    change in the model while the old body kept enforcing and both gates read
+    clean (logic audit, 2026-11-12). Read here in the field-check shape, they
+    go through the same server spelling and the same replace recipe.
+    """
+    found: list[tuple[str, str]] = []
+    for entry in model.get("indexes") or []:
+        sql = entry.get("up") or ""
+        for match in _NAMED_CHECK_RE.finditer(sql):
+            body = _balanced_body(sql, match.end())
+            if body:
+                found.append((match.group("name"), body))
+    return found
+
+
+def _all_declared_checks(model: dict, table: str) -> list[tuple[str, str]]:
+    """Field-level CHECKs, then named-DDL ones; the first declaration of a
+    name wins."""
+    declared: dict[str, str] = {}
+    for name, expression in [*_declared_checks(model, table), *raw_checks(model)]:
+        declared.setdefault(name, expression)
+    return list(declared.items())
+
 
 def declared_checks(model: dict, table: str) -> list[tuple[str, str]]:
     """``(name, expression)`` for every CHECK the model declares — the input
     :func:`cara.schema.LiveSchema.normalize_declared_checks` spells."""
-    return _declared_checks(model, table)
+    return _all_declared_checks(model, table)
 
 
 def declared_checks_by_table(models: list[dict]) -> dict[str, list[tuple[str, str]]]:
     """Every model-owned table's declared CHECKs, keyed by table."""
     return {
-        model["table"]: _declared_checks(model, model["table"])
+        model["table"]: _all_declared_checks(model, model["table"])
         for model in models
         if model.get("table")
     }
@@ -64,7 +118,7 @@ def changed_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]
     declared_bodies = (live.declared_check_definitions or {}).get(table, {})
     respelled_bodies = (live.respelled_check_definitions or {}).get(table, {})
     operations: list[Operation] = []
-    for name, expression in _declared_checks(model, table):
+    for name, expression in _all_declared_checks(model, table):
         current, wanted = live_bodies.get(name), declared_bodies.get(name)
         if not current or not wanted:
             continue
@@ -303,5 +357,6 @@ __all__ = [
     "declared_checks",
     "declared_checks_by_table",
     "orphaned_unique_constraints",
+    "raw_checks",
     "raw_foreign_keys",
 ]

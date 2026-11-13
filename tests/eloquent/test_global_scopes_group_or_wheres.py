@@ -92,7 +92,7 @@ def test_a_soft_delete_never_reaches_another_tenants_rows():
     assert sql.startswith('UPDATE "listing" SET "deleted_at" = ')
     assert sql.endswith(
         'WHERE ("listing"."channel_id" = \'1\' OR "listing"."external_sku" IS NULL) '
-        "AND \"tenant_id\" = '5'"
+        'AND "tenant_id" = \'5\' AND "deleted_at" IS NULL'
     )
 
 

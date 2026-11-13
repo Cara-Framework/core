@@ -426,17 +426,21 @@ def _qb_register_relationships_to_model(
         # to-many, None for to-one). Short-circuiting to None here gave
         # parents of a zero-row eager load ``None`` where the lazy path
         # (and any non-empty eager load) yields an empty Collection.
-        map_related = (
-            self._map_related(related_result, related)
-            if related_result
-            else related_result
-        )
+        # The empty result is mapped too: an unmapped empty Collection is
+        # list-backed, and a string key (uuid, public id) looked up in a
+        # list raises TypeError instead of finding nothing.
+        map_related = self._map_related(related_result, related)
         for model in hydrated_model:
             related.register_related(relation_key, model, map_related)
     elif related_result and isinstance(hydrated_model, Collection):
         map_related = self._map_related(related_result, related)
         for model in hydrated_model:
             model.add_relation({relation_key: map_related or None})
+    elif isinstance(related_result, Collection):
+        # A single parent's to-many eager load keeps its (possibly empty)
+        # Collection, exactly what the lazy path returns; ``or None`` turned
+        # "no children" into None for ``first()`` + ``with_`` only.
+        hydrated_model.add_relation({relation_key: related_result})
     else:
         hydrated_model.add_relation({relation_key: related_result or None})
     return self

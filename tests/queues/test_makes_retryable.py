@@ -24,6 +24,10 @@ import pytest
 
 from cara.queues.retry.MakesRetryable import MakesRetryable
 
+# ``_isolated_configuration`` (tests/queues/conftest.py) installs each test's
+# own empty configuration authority; the config-tier test requests it to seed
+# ``jobs.retry_*``.
+
 
 class _Job(MakesRetryable):
     pass
@@ -102,6 +106,27 @@ async def test_a_narrowing_subclass_override_is_honoured(monkeypatch) -> None:
         await _NarrowJob().wrap_with_retry(body)
 
     assert calls["n"] == 1, "a narrowed attempt budget must narrow"
+
+
+@pytest.mark.asyncio
+async def test_the_config_tier_sets_the_budget_when_nothing_overrides(
+    monkeypatch, _isolated_configuration
+) -> None:
+    """No keyword, no class attribute: ``jobs.retry_*`` decides."""
+    store = _isolated_configuration._config
+    monkeypatch.setitem(store, "jobs.retry_max_attempts", 2)
+    monkeypatch.setitem(store, "jobs.retry_base_delay", 0.0)
+
+    async def _no_sleep(_secs: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    body, calls = _failing_then_ok(ConnectionError("upstream refused"), failures=5)
+
+    with pytest.raises(ConnectionError):
+        await _Job().wrap_with_retry(body)
+
+    assert calls["n"] == 2, "the configured attempt budget must be honoured"
 
 
 class _FlatBackoffJob(MakesRetryable):

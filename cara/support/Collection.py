@@ -7,8 +7,6 @@ collection methods with support for mapping, filtering, sorting, and aggregation
 
 from __future__ import annotations
 
-from itertools import groupby
-
 from . import (
     _CollectionFiltering,
     _CollectionInspection,
@@ -196,10 +194,13 @@ class Collection:
                 """Resolve the group key from ``x`` via dotted-path lookup."""
                 return self._data_get(x, key)
 
+        # One pass, groups in first-seen order (Laravel ``groupBy`` parity).
+        # Eager loading maps every related result through here, so it must
+        # be O(n): the old ``groupby(sorted(...))`` was O(n log n), resolved
+        # each key twice, and raised TypeError on mixed keys (``None`` vs int).
         results = {}
-
-        for k, group in groupby(sorted(self._items, key=grouper), key=grouper):
-            results[k] = list(group)
+        for item in self._items:
+            results.setdefault(grouper(item), []).append(item)
 
         return Collection(results)
 

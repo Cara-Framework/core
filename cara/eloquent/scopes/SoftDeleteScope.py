@@ -130,12 +130,29 @@ class SoftDeleteScope(BaseScope):
         correct primitive: it bypasses mass-assignment (this is a framework
         write, not user input) and leaves the builder in a compile-ready
         UPDATE state for the outer ``to_qmark()`` to render and execute.
-        Pinned by ``tests/integration/test_soft_delete_contract.py``.
+        Pinned by ``tests/eloquent/test_soft_delete_scope_macros.py`` (the
+        update payload and action) and
+        ``tests/eloquent/test_soft_delete_query_live_rows_only.py`` (a delete
+        compiles to an UPDATE, a force delete stays a real DELETE).
+
+        A QUERY delete (``Model.where(...).delete()``) soft-deletes live rows
+        only, as Laravel's scoped builder does: without it the UPDATE also
+        re-stamped every row already in the trash, erasing when it was really
+        deleted and counting it again. ``with_trashed()`` opts back into
+        every row, and a loaded instance's own ``delete()`` stays keyed to
+        its primary key alone (Laravel's ``runSoftDelete``).
         """
-        if hasattr(builder, "_model") and builder._model:
-            timestamp = builder._model.get_new_datetime_string()
+        model = getattr(builder, "_model", None)
+        if model:
+            timestamp = model.get_new_datetime_string()
         else:
             timestamp = DateTimeCast.sql_instant(pendulum.now("UTC"))
+
+        instance_delete = bool(model) and model.is_loaded()
+        if not instance_delete and "_soft_delete" in builder._global_scopes.get(
+            "select", {}
+        ):
+            self._where_not_deleted(builder)
 
         builder._updates = ()
         builder.set_updates({self.deleted_at_column: timestamp})

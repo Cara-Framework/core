@@ -349,10 +349,9 @@ def _audit_model_projection(
 ) -> list[Violation]:
     """Require each generated table projection to equal its model schema.
 
-    Directory-shape checks alone cannot see a changed column modifier. A
-    removed model default, for example, previously stayed in the generated
-    migration while ``migrations:check`` reported clean. The same structured
-    comparator used by ``make:migration`` is the single source of truth here.
+    Directory-shape checks cannot see a changed column modifier (a removed
+    default stayed in the file while this read clean) or named DDL text; the
+    comparator and the render ``make:migration`` uses are the sources here.
     """
     from cara.eloquent.migrations.ModelMigrationComparator import (
         ModelMigrationComparator,  # local: heavy optional dep
@@ -369,6 +368,7 @@ def _audit_model_projection(
         # Missing/duplicate creators already have precise convention findings.
         if len(generated) != 1:
             continue
+        violations.extend(_audit_named_ddl(generated[0], model_info))
         diffs = comparator.compare_model_with_migrations(model_info)
         if not diffs:
             continue
@@ -384,6 +384,48 @@ def _audit_model_projection(
             )
         )
     return violations
+
+
+def _audit_named_ddl(path: Path, model_info: dict) -> list[Violation]:
+    """Named DDL whose TEXT differs from the model's render, by entry name.
+
+    The column comparator cannot see ``__indexes__``, so a changed CHECK read
+    as in sync (``listing_end_lifecycle_check``, 2026-11-12). The file IS the
+    render: its ``DB.statement`` SQL must equal the render's, spacing aside.
+    """
+    from cara.eloquent.migrations.MigrationGenerator import (
+        MigrationGenerator,  # local: heavy optional dep
+    )
+
+    def statements(source: str) -> set[str]:
+        return {
+            " ".join(node.args[0].value.split())
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", None) == "statement"
+            and node.args
+            and isinstance(getattr(node.args[0], "value", None), str)
+        }
+
+    rendered = MigrationGenerator().generate_create_migration(model_info)
+    differing = statements(rendered or "") ^ statements(path.read_text("utf-8"))
+    if not rendered or not differing:
+        return []
+    names = {
+        str(entry["name"])
+        for entry in model_info.get("indexes") or []
+        for sql in differing
+        if entry.get("name") and re.search(rf"\b{re.escape(entry['name'])}\b", sql)
+    }
+    listed = ", ".join(repr(name) for name in sorted(names)) or "(unnamed)"
+    return [
+        Violation(
+            rule="named-ddl-drift",
+            path=path.name,
+            message=f"named DDL {listed} differs from what the model renders",
+            remedy="regenerate (craft make:migration --overwrite --force)",
+        )
+    ]
 
 
 def _audit_indexes(

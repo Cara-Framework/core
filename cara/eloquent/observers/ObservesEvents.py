@@ -13,10 +13,15 @@ class ObservesEvents:
             return
         if model.__has_events__:
             for observer in model.__observers__.get(model.__class__, []):
+                # An observer that does not handle this event is skipped
+                # BEFORE the call: catching AttributeError around the call
+                # also swallowed, silently and unlogged, every AttributeError
+                # raised inside a real handler.
+                handler = getattr(observer, event, None)
+                if handler is None:
+                    continue
                 try:
-                    getattr(observer, event)(model)
-                except AttributeError:
-                    pass
+                    handler(model)
                 except Exception as exc:
                     try:
                         Log.error(

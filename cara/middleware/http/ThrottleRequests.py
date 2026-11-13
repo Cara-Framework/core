@@ -61,6 +61,7 @@ class ThrottleRequests(Middleware):
         self._count(decision)
         headers = self._headers(decision)
         if not decision.allowed:
+            self.refused(limit, decision)
             raise TooManyRequestsException(
                 retry_after=decision.retry_after,
                 response_headers=headers,
@@ -71,6 +72,16 @@ class ThrottleRequests(Middleware):
             for name, value in headers.items():
                 response.header(name, value)
         return response
+
+    def refused(self, limit: Limit, decision: RateLimitDecision) -> None:
+        """Hook: this bucket just refused, right before the 429 is raised.
+
+        A no-op here. An application that wants to act on a refusal — remember
+        the closed bucket to turn the caller away earlier next time, say —
+        overrides this one method instead of copying ``handle`` to wedge a
+        line in, which is how a subclass silently stops following the
+        decision logic above when it changes.
+        """
 
     @staticmethod
     def _is_the_tightest_so_far(request: Request, decision: RateLimitDecision) -> bool:

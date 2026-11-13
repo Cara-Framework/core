@@ -69,14 +69,16 @@ class HasOne(BaseRelationship):
             ).first()
 
     def register_related(self, key, model, collection):
-        related = collection.where(
-            self.foreign_key, getattr(model, self.local_key)
-        ).first()
+        # ``collection`` is ``map_related``'s keyed map, so each parent is one
+        # dict lookup. Scanning the flat result per parent (the old
+        # ``collection.where(...)``) made eager loading N parents O(N x M).
+        local_value = getattr(model, self.local_key, None)
+        related = collection.all().get(local_value) if local_value is not None else None
 
-        model.add_relation({key: related or None})
+        model.add_relation({key: related[0] if related else None})
 
     def map_related(self, related_result):
-        return related_result
+        return related_result.group_by(self.foreign_key)
 
     def detach(self, current_model, related_record):
         return related_record.update({self.foreign_key: None})

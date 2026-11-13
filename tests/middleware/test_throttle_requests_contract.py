@@ -300,3 +300,28 @@ def test_a_stacked_group_bucket_that_is_tighter_takes_the_headline(monkeypatch) 
 
     assert response.headers["RateLimit"] == '"api";r=1;t=59'
     assert response.headers["RateLimit-Policy"] == '"api";q=600;w=60'
+
+
+def test_a_refusal_reaches_the_refused_hook_before_the_429(monkeypatch) -> None:
+    """Subclasses act on a refusal through ``refused`` — never a copied ``handle``."""
+    limit = Limit.per_minute(120).by("user:7")
+    _install(monkeypatch, _Limiter(limit, _REFUSED))
+    middleware = throttle_middleware(limiter="api")
+    seen: list = []
+    middleware.refused = lambda lim, decision: seen.append((lim, decision))
+
+    with pytest.raises(TooManyRequestsException):
+        _handle(middleware)
+
+    assert seen == [(limit, _REFUSED)]
+
+
+def test_an_allowed_request_never_reaches_the_refused_hook(monkeypatch) -> None:
+    _install(monkeypatch, _Limiter(Limit.per_minute(120).by("user:7"), _ALLOWED))
+    middleware = throttle_middleware(limiter="api")
+    seen: list = []
+    middleware.refused = lambda lim, decision: seen.append(lim)
+
+    _handle(middleware)
+
+    assert seen == []

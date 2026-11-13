@@ -291,6 +291,40 @@ class DatabaseManager:
                 session.open = 0
                 session.close_connection()
 
+    def advisory_xact_lock(self, *keys: str, connection=None) -> None:
+        """Take transaction-scoped advisory locks on named keys.
+
+        Each key is hashed with ``hashtextextended(key, 0)`` (64-bit), so two
+        writers that name the same key serialize until the surrounding
+        transaction ends. Several keys are taken in ONE round trip, de-duplicated
+        and in the database's own text order: every multi-key locker that goes
+        through here — and SQL that orders its keys the same way, such as a
+        trigger's ``ORDER BY stream_key`` — acquires a shared key set in one
+        order, so two of them cannot deadlock on it.
+
+        The lock lives exactly as long as the caller's transaction; outside
+        one, Postgres releases it when the statement ends.
+        """
+        names = [str(key) for key in keys]
+        if not names:
+            return
+        if len(names) == 1:
+            self.select_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0)) AS acquired",
+                (names[0],),
+                connection,
+            )
+            return
+        # The lock call is volatile, so Postgres evaluates it after the sort:
+        # the locks are taken in ``ORDER BY`` order, not in scan order.
+        self.select(
+            "SELECT pg_advisory_xact_lock(hashtextextended(requested.key, 0)) "
+            "AS acquired FROM (SELECT DISTINCT key FROM unnest(%s::text[]) AS key) "
+            "AS requested ORDER BY requested.key",
+            (names,),
+            connection,
+        )
+
     def select(self, query, bindings=(), connection=None):
         """Execute a raw SELECT query and return results as list of dicts.
 

@@ -35,19 +35,11 @@ class BaseConnection:
         self.schema = schema
         return self
 
-    def log(
-        self,
-        query,
-        bindings,
-        query_time=0,
-    ):
-
-        Log.database(
-            "Running query %s, %s. Executed in %sms",
-            query,
-            bindings,
-            query_time,
-        )
+    def log(self, query, query_time_ms: str = "0.00") -> None:
+        # ``Logger.database`` takes ONE message (no printf arguments), and
+        # bindings stay out of it: they may carry PII, as the slow-query
+        # warning below already refuses to log them.
+        Log.database(f"Running query {query}. Executed in {query_time_ms}ms")
 
     @staticmethod
     def _normalize_query_for_log(query: str, max_len: int = 1000) -> str:
@@ -87,7 +79,6 @@ class BaseConnection:
         # ``_empty_bindings`` to ``()`` (see SQLiteConnection).
         self._cursor.execute(query, bindings if bindings else self._empty_bindings)
         elapsed_ms = (timer() - start) * 1000  # Convert to ms
-        elapsed_formatted = f"{elapsed_ms / 1000:.2f}"
 
         # Slow query detection
         threshold = (self.full_details or {}).get(
@@ -117,7 +108,7 @@ class BaseConnection:
         # Log query if either connection-specific log_queries is True
         # or if LOG_DB_QUERIES is enabled via logging config
         if self.full_details and self.full_details.get("log_queries", False):
-            self.log(query, bindings, query_time=elapsed_formatted)
+            self.log(query, query_time_ms=f"{elapsed_ms:.2f}")
 
     def has_global_connection(self):
         """Check if there's a global connection - removed circular dependency"""
