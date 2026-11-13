@@ -29,6 +29,31 @@ except ImportError, RuntimeError:  # pragma: no cover
 JobProcessor: type[Any] | None = None
 
 
+def _report_job_failure(job_error: BaseException, routed: str | None) -> None:
+    """Log and capture a failed attempt by what the router decided for it.
+
+    A retry the queue scheduled is not an incident yet: one WARNING line, no
+    traceback, no Sentry event. Logged as an ERROR with a traceback and
+    captured on every attempt, a 25 % retryable-failure storm (2026-11-13,
+    50,000 jobs) wrote ~200 MB of worker log in four minutes and one Sentry
+    event per attempt, for jobs that then succeeded. The terminal outcome — a
+    dead letter, or a router that could not decide (``routed`` None) — is
+    the ERROR with the traceback and the one capture. Call it inside the
+    ``except`` block so ``exc_info`` still names the exception.
+    """
+    if routed == "retry_scheduled":
+        Log.warning(
+            "Job failed, retry scheduled: %s: %s",
+            type(job_error).__name__,
+            job_error,
+        )
+        return
+    Log.error("Job failed: %s", job_error, exc_info=True)
+    # Terminal catch: the worker consumes the failure ("failed gracefully"),
+    # so the explicit capture is Sentry's only path.
+    observability.capture_exception(job_error)
+
+
 def _queue_label(
     msg: dict | None, instance: Any = None, queue_name: str | None = None
 ) -> str:
@@ -590,23 +615,25 @@ def _process_message(
         raise
 
     except TimeoutError as timeout_error:
-        Log.error("Job timeout: %s", timeout_error, exc_info=True)
-        # Terminal catch: the outcome is returned, never re-raised, so the
-        # explicit capture is Sentry's only path to a job timeout.
-        observability.capture_exception(timeout_error)
-
-        JobProcessor._route_failed_message(
-            channel=channel,
-            method_frame=method_frame,
-            msg=msg,
-            instance=instance,
-            exc=timeout_error,
-            queue_name=queue_name,
-            delivery_store=delivery_store,
-            delivery_lease_token=delivery_lease_token,
-            tracker=tracker,
-            db_job_id=db_job_id or (msg or {}).get("db_job_id"),
-        )
+        try:
+            routed = JobProcessor._route_failed_message(
+                channel=channel,
+                method_frame=method_frame,
+                msg=msg,
+                instance=instance,
+                exc=timeout_error,
+                queue_name=queue_name,
+                delivery_store=delivery_store,
+                delivery_lease_token=delivery_lease_token,
+                tracker=tracker,
+                db_job_id=db_job_id or (msg or {}).get("db_job_id"),
+            )
+        except Exception:
+            # The router could not settle it: the timeout is the incident
+            # (the routing error's traceback chains it).
+            _report_job_failure(timeout_error, None)
+            raise
+        _report_job_failure(timeout_error, routed)
 
         _mx_record("timeout")
         return "failure"
@@ -617,35 +644,36 @@ def _process_message(
             # routing below requeues it without spending an attempt and logs
             # the durable retry itself — no ERROR, traceback or Sentry event.
             Log.info("Job throttled: %s", job_error)
-        else:
-            Log.error("Job failed: %s", job_error, exc_info=True)
-            if MetricsBase is not None:
-                # A metrics backend that is missing or broken must not turn a
-                # job failure into a second one; the failure is logged above.
-                with contextlib.suppress(
-                    ImportError, RuntimeError, AttributeError, OSError
-                ):
-                    MetricsBase.exceptions_total.labels(
-                        source="job",
-                        route=_mx_job,
-                        exception=type(job_error).__name__,
-                    ).inc()
-            # Terminal catch: the worker consumes the failure ("failed
-            # gracefully"), so the explicit capture is Sentry's only path.
-            observability.capture_exception(job_error)
+        elif MetricsBase is not None:
+            # A metrics backend that is missing or broken must not turn a
+            # job failure into a second one; the failure is logged below.
+            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
+                MetricsBase.exceptions_total.labels(
+                    source="job",
+                    route=_mx_job,
+                    exception=type(job_error).__name__,
+                ).inc()
 
-        routed = JobProcessor._route_failed_message(
-            channel=channel,
-            method_frame=method_frame,
-            msg=msg,
-            instance=instance,
-            exc=job_error,
-            queue_name=queue_name,
-            delivery_store=delivery_store,
-            delivery_lease_token=delivery_lease_token,
-            tracker=tracker,
-            db_job_id=db_job_id or (msg or {}).get("db_job_id"),
-        )
+        is_throttle = bool(getattr(job_error, "is_throttle", False))
+        try:
+            routed = JobProcessor._route_failed_message(
+                channel=channel,
+                method_frame=method_frame,
+                msg=msg,
+                instance=instance,
+                exc=job_error,
+                queue_name=queue_name,
+                delivery_store=delivery_store,
+                delivery_lease_token=delivery_lease_token,
+                tracker=tracker,
+                db_job_id=db_job_id or (msg or {}).get("db_job_id"),
+            )
+        except Exception:
+            if not is_throttle:
+                _report_job_failure(job_error, None)
+            raise
+        if not is_throttle:
+            _report_job_failure(job_error, routed)
 
         # A throttle redelivered without spending an attempt is contention,
         # not a failed job. Recorded ``failed``, every fair-share refusal of a
