@@ -103,10 +103,8 @@ def _body_recorder() -> tuple[list[int], object]:
     ("operation", "fault"),
     [
         ("has", _OUTAGE),
-        ("increment", _OUTAGE),
         ("add", _OUTAGE),
         # noeviction at maxmemory: reads still work, every write refuses.
-        ("increment", _OOM),
         ("add", _OOM),
     ],
 )
@@ -148,14 +146,17 @@ def test_a_fault_at_the_cooldown_claim_throttles(monkeypatch):
 
 
 def test_a_fault_at_the_lease_check_throttles_and_hands_the_cooldown_back(monkeypatch):
-    """A poll has no result cache: the lease check is its first read."""
+    """A poll has no result cache: the lease acquire is its first ask after
+    the cooldown claim (the claim's own ``add`` wins, the lease's fails)."""
     cache = _install(monkeypatch, _BrokenCache({}))
     job = _Poll()
     original_add = cache.add
 
     def _add_then_lose_the_cache(*args, **kwargs):
+        if cache.broken:
+            raise cache.broken["add"]
         won = original_add(*args, **kwargs)
-        cache.broken["has"] = _OUTAGE
+        cache.broken["add"] = _OUTAGE
         return won
 
     cache.add = _add_then_lose_the_cache

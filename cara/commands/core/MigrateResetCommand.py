@@ -86,17 +86,11 @@ class MigrateResetCommand(CommandBase):
         :attr:`MakesIdempotentBase.RESET_FLUSHABLE_KEY_PREFIXES` — the
         class that MINTS them — rather than a literal tuple here. This
         command used to restate the vocabulary and had fallen one
-        namespace behind it: ``job_fence:`` was added to
-        ``acquire_job_lock`` and the copy never learned, so the operator
-        read "🧹 Flushed N job idempotency cache entries" while a whole
-        namespace survived the reset untouched. A copy has no way to know
-        the original changed; importing it means the next namespace added
-        to the mixin is classified there, once, by the code that owns it.
-
-        (``job_fence:`` is still deliberately NOT flushed — see that
-        attribute's docstring for why zeroing a monotonic counter is
-        worse than leaving it high. What changed is that the decision
-        now lives with the fence, not in a reset command's blind spot.)
+        namespace behind it, so the operator read "🧹 Flushed N job
+        idempotency cache entries" while a whole namespace survived the
+        reset untouched. A copy has no way to know the original changed;
+        importing it means the next namespace added to the mixin is
+        classified there, once, by the code that owns it.
 
         Why flush at all: these keys are hashed from the job class plus
         its entity-id arguments. A fresh schema restarts every sequence

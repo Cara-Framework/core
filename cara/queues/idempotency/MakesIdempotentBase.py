@@ -131,10 +131,6 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
     #: Cache-key namespace for the exclusive job lease (:meth:`_lock_key`).
     LOCK_KEY_PREFIX = "job_lock:"
 
-    #: Cache-key namespace for the monotonic owner fence
-    #: (:meth:`_fence_key`).
-    FENCE_KEY_PREFIX = "job_fence:"
-
     #: Namespaces a schema reset MUST clear, as the single source that
     #: ``migrate:reset`` reads instead of restating the vocabulary.
     #:
@@ -144,23 +140,12 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
     #: entry belonging to a DIFFERENT entity that held id 5 before it —
     #: the job is served from cache and its downstream dispatch never
     #: fires, silently stalling the pipeline.
-    #:
-    #: :attr:`FENCE_KEY_PREFIX` is deliberately ABSENT. The fence is a
-    #: monotonic counter, never a gate: it stamps each lease with a
-    #: strictly increasing owner token so a resurrected zombie holder can
-    #: be recognised as stale. Flushing it would really delete the
-    #: counters (``RedisCacheDriver.forget_pattern`` scans the counter
-    #: namespace too) and restart them at 1, minting fence numbers that
-    #: have already been issued — reuse is precisely the failure the
-    #: fence exists to prevent. A too-high fence after a reset is
-    #: harmless; a reused one is not.
     RESET_FLUSHABLE_KEY_PREFIXES = (RESULT_KEY_PREFIX, LOCK_KEY_PREFIX)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._idempotency_key: str | None = None
         self._idempotency_lock_value: dict[str, Any] | None = None
-        self._idempotency_fence: int | None = None
         self._idempotency_cooldown_claim: tuple[str, str] | None = None
 
     # ── Public orchestrator ─────────────────────────────────────────
@@ -249,23 +234,9 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
             # Recovery/manual re-runs may bypass stale completed-result
             # evidence, but never an active owner. Lock stealing allows two
             # external-side-effect jobs to run concurrently and lets the older
-            # worker delete the newer worker's lock on exit.
-            with self._gate_cannot_ask_cache():
-                locked = self.is_job_locked()
-            if locked:
-                Log.debug(
-                    "Job already running; waiting: %s",
-                    self.get_job_identifier(),
-                    category="idempotency",
-                )
-                self._emit_idempotency_metric("locked")
-                if getattr(self, "retry_on_idempotency_overlap", False):
-                    raise IdempotencyOverlapException(
-                        f"Idempotency lease is active for {self.get_job_identifier()}"
-                    )
-                return await self._wait_without_spending_cooldown()
-
-            self._emit_idempotency_metric("fresh")
+            # worker delete the newer worker's lock on exit. The acquire
+            # (SET NX) is the only lock question asked: an EXISTS before it
+            # answered the same thing one round trip earlier, on every job.
             return await self._execute_with_lock(callback)
         except BaseException:
             self._release_source_cooldown()
@@ -370,10 +341,6 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         """Cache key for this job's exclusive lease."""
         return f"{self.LOCK_KEY_PREFIX}{self._idempotency_key}"
 
-    def _fence_key(self) -> str:
-        """Cache key for this job's monotonic owner-fence counter."""
-        return f"{self.FENCE_KEY_PREFIX}{self._idempotency_key}"
-
     def get_cached_result(self) -> Any | None:
         """Read the cached result, decoding the None-sentinel.
 
@@ -423,30 +390,28 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         return Cache.has(lock_key)
 
     def acquire_job_lock(self) -> bool:
-        """Acquire an owner-fenced exclusive lease atomically."""
+        """Acquire an owner-fenced exclusive lease atomically, in one round trip.
+
+        The random ``owner`` makes every lease value unique, and the release
+        and renewal compare that whole value (``forget_if``/``touch_if``), so
+        a lapsed owner can never delete or extend the next owner's lease. No
+        counter is needed for that: the ``job_fence:`` INCR this used to pay
+        first was written into the value and never read, at one extra round
+        trip per job and one seven-day key per job identity.
+        """
         lock_key = self._lock_key()
-        fence_key = self._fence_key()
-        fence = Cache.increment(
-            fence_key,
-            1,
-            max(self.IDEMPOTENCY_CACHE_TTL, self.JOB_LOCK_LEASE_SECONDS) * 7,
-        )
         lock_data = {
             "owner": uuid.uuid4().hex,
-            "fence": int(fence),
             "started_at": pendulum.now("UTC").isoformat(),
             "job_class": self.__class__.__name__,
             "parameters": self.get_job_parameters(),
         }
         # A SHORT lease the run keeps alive (``_execute_with_lock`` starts its
         # heartbeat), never one sized to outlive the job: a live run of any
-        # length holds it, a dead worker's lapses within one lease. The
-        # release stays owner-fenced (``forget_if``), so an owner whose lease
-        # lapsed can never delete the next owner's.
+        # length holds it, a dead worker's lapses within one lease.
         acquired = Cache.add(lock_key, lock_data, self.JOB_LOCK_LEASE_SECONDS)
         if acquired:
             self._idempotency_lock_value = lock_data
-            self._idempotency_fence = int(fence)
         return acquired
 
     def release_job_lock(self) -> None:
@@ -535,29 +500,27 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         Lock-acquisition failure waits for the owner by default. Durable
         intent jobs instead raise a throttle so their own callback is
         redelivered after the owner releases the lease.
-        Previously: caller A raced caller B between
-        ``is_job_locked()`` (returned False) and ``acquire_job_lock``
-        (returned False because B already won). A then returned None
-        silently — the caller (a controller, a listener) thought the
-        idempotent work ran when it didn't, so no result was ever
-        produced for this dispatch. Now A waits on B's completion
-        and returns B's cached result.
+        A lost acquire never returns None as if the work ran: the caller (a
+        controller, a listener) would believe the idempotent work happened
+        when no result was produced for this dispatch. It waits on the
+        owner's completion and returns the owner's cached result.
         """
         with self._gate_cannot_ask_cache():
             acquired = self.acquire_job_lock()
         if not acquired:
             Log.debug(
-                "Lock acquire lost race for %s; waiting on the in-flight run",
+                "Job already running; waiting: %s",
                 self.get_job_identifier(),
                 category="idempotency",
             )
             self._emit_idempotency_metric("locked")
             if getattr(self, "retry_on_idempotency_overlap", False):
                 raise IdempotencyOverlapException(
-                    f"Idempotency lease race for {self.get_job_identifier()}"
+                    f"Idempotency lease is active for {self.get_job_identifier()}"
                 )
             return await self._wait_without_spending_cooldown()
 
+        self._emit_idempotency_metric("fresh")
         heartbeat = self._hold_job_lock()
         try:
             Log.debug(
