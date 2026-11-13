@@ -274,7 +274,9 @@ def test_shutdown_cancellation_releases_the_row_and_the_tracker(monkeypatch):
         _run_worker(monkeypatch, _CancelledPull(), store, tracker)
 
     assert store.events == ["claim", "abandon"]
-    assert tracker.statuses == ["processing", "pending"]
+    # The claim stamped ``processing`` inside its own transaction; the worker
+    # writes the tracker only to hand it back.
+    assert tracker.statuses == ["pending"]
     assert LeaseHeartbeat.live() == []
 
 
@@ -298,5 +300,5 @@ def test_a_forced_exit_releases_the_row_a_stuck_job_still_holds(monkeypatch):
     assert released == {
         "count": 1,
         "events": ["claim", "abandon"],
-        "tracker": ["processing", "pending"],
+        "tracker": ["pending"],
     }

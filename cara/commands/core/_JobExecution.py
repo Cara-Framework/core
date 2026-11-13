@@ -459,14 +459,9 @@ def _process_message(
                 _mx_record("tracker_completed")
                 return True
 
-        # Update job table status to processing
-        JobProcessor._retry_settlement_step(
-            f"Tracked queue job {db_job_id} processing",
-            lambda: tracker.update_job_status_strict(
-                db_job_id,
-                "processing",
-            ),
-        )
+        # The tracker is already ``processing``: the claim stamped it inside
+        # its own transaction (``claim_execution``), one WAL flush per job
+        # fewer than a separate tracker write.
 
         # Stamp container on job so BaseJob and method-level DI can use it.
         # Only set on the INSTANCE — never on type(instance) — to avoid

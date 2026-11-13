@@ -22,6 +22,39 @@ def _bind_store(store_type: type) -> None:
     QueueJobDeliveryStore = store_type
 
 
+#: Tracker statuses that mean the body already finished its work.
+_TRACKER_FINISHED = ("completed", "success")
+
+
+def _stamp_tracker_processing(
+    database: Any,
+    db_job_id: Any,
+    now: pendulum.DateTime,
+    *,
+    reclaimed: bool,
+) -> None:
+    """Mark the tracked job ``processing`` inside the claim's transaction.
+
+    It used to be a separate write after the claim (``JobTracker`` read,
+    save, read back): three more round trips and a third WAL flush per job,
+    the largest fixed cost of a short job (capacity.md, 2026-11-13). A
+    reclaimed row may belong to a body that already finished before its
+    process died; that tracker stays finished, and the worker's completion
+    lookup settles the row without running the body again. A missing tracker
+    on a fresh claim rolls the claim back: durable execution needs the fence.
+    """
+    if db_job_id is None:
+        return
+    sql = "UPDATE job SET status = %s, started_at = %s, updated_at = %s WHERE id = %s"
+    bindings: list[Any] = ["processing", now, now, int(db_job_id)]
+    if reclaimed:
+        sql += " AND status <> ALL(%s)"
+        bindings.append(list(_TRACKER_FINISHED))
+    affected = database.statement(sql, bindings)
+    if not reclaimed and not QueueJobDeliveryStore._affected(affected):
+        raise QueueException(f"Tracked queue job {db_job_id} does not exist.")
+
+
 def _delivery_claim_execution(
     self,
     *,
@@ -179,6 +212,12 @@ def _delivery_claim_execution(
         )
         if not self._affected(affected):
             raise QueueException("Queue delivery execution lease was lost.")
+        _stamp_tracker_processing(
+            database,
+            payload.get("db_job_id"),
+            now,
+            reclaimed=reclaimed,
+        )
     return DeliveryClaim(
         "claimed",
         token,
