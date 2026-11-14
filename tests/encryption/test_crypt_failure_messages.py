@@ -31,4 +31,4 @@ def test_unbound_value_read_with_a_binding_is_explained():
     with pytest.raises(EncryptionException) as raised:
         crypt.decrypt(token, context="channel:1:a")
     assert str(raised.value).strip().endswith(")")
-    assert "Decryption failed: " != str(raised.value)
+    assert str(raised.value) != "Decryption failed: "
