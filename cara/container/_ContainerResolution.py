@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 import types as _types
 from typing import Any, Union
 
@@ -57,6 +58,20 @@ def _extract_optional_class(ann: Any, module: Any) -> type | None:
             if inspect.isclass(cand):
                 return cand
     return None
+
+
+def _annotation_module(obj: Any) -> Any:
+    """The module whose names a postponed annotation of ``obj``'s signature
+    reads: the module that DEFINES the signature's function. A class that
+    inherits its constructor has it from the base's module — its own module
+    may never import the base constructor's parameter types, so reading the
+    strings there left them unresolved and the subclass could not be built.
+    """
+    target = obj.__init__ if inspect.isclass(obj) else obj
+    target = getattr(target, "__func__", target)
+    defining = getattr(target, "__module__", None)
+    module = sys.modules.get(defining) if isinstance(defining, str) else None
+    return module if module is not None else inspect.getmodule(obj)
 
 
 def _container_make(self, name: Any, *arguments: Any) -> Any:
@@ -248,7 +263,7 @@ def _container_do_resolve(self, obj: Any, *resolving_arguments: Any) -> Any:
         # Resolve postponed annotations (`from __future__ import annotations`)
         # so contract strings become real classes for DI.
         if isinstance(ann, str):
-            module = inspect.getmodule(obj)
+            module = _annotation_module(obj)
             if module is not None:
                 ann = module.__dict__.get(ann, ann)
 
@@ -256,7 +271,7 @@ def _container_do_resolve(self, obj: Any, *resolving_arguments: Any) -> Any:
         # plain class, but fail soft — if it isn't bindable, fall back to the
         # signature default (usually None) instead of raising, preserving the
         # "inject in prod, default in tests" contract these params encode.
-        optional_cls = _extract_optional_class(ann, inspect.getmodule(obj))
+        optional_cls = _extract_optional_class(ann, _annotation_module(obj))
         if optional_cls is not None:
             try:
                 dep = self.make(optional_cls)
