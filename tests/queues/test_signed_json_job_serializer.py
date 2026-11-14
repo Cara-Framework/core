@@ -266,6 +266,8 @@ def test_signed_json_rejects_non_primitive_constructor_state():
         "client_secret",
         "authorization",
         "session_cookie",
+        "token_secret_id",
+        "access_token_value",
     ],
 )
 def test_signed_json_rejects_secret_bearing_constructor_keys(
@@ -283,6 +285,23 @@ def test_signed_json_rejects_secret_bearing_constructor_keys(
             signing_keys=_KEYS,
             allowed_prefixes=_PREFIXES,
         )
+
+
+@pytest.mark.parametrize("reference_key", ["api_token_id", "token_id", "refresh_token_ids"])
+def test_signed_json_accepts_a_durable_reference_named_after_a_secret(reference_key):
+    """Live 2026-11-14: the audit actor's ``api_token_id`` (an ApiToken row id)
+    crossed the hop in ``_ambient`` and every API-token request that queued a
+    job raised. A ``*_id`` key is the durable reference the rule asks for."""
+    job = ExampleJob(42, payload={"nested": {reference_key: 7}})
+
+    body = SignedJsonJobSerializer.serialize(
+        _payload(job),
+        signing_key_id=_KID,
+        signing_keys=_KEYS,
+        allowed_prefixes=_PREFIXES,
+    )
+
+    assert body
 
 
 def test_signing_key_must_have_cryptographic_length():

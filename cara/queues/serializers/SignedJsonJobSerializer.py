@@ -31,9 +31,14 @@ class SignedJsonJobSerializer:
     MAX_JSON_DEPTH = 32
     _DOMAIN = b"cara.queue.job.v3\x00"
     _KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    # A key NAMING a secret is refused; a key ending in ``_id``/``_ids`` is a
+    # durable row reference (``api_token_id`` is the ApiToken row, not its
+    # plaintext) and passes — the rule's own sentence asks for durable IDs.
+    # Live 2026-11-14: the audit actor's ambient ``api_token_id`` made every
+    # API-token request that queued a job a 500.
     _FORBIDDEN_PAYLOAD_KEY_PATTERN = re.compile(
         r"(?:^|_)(?:password|passwd|secret|token|access_token|refresh_token|"
-        r"api_key|private_key|authorization|cookie|credentials?)(?:$|_)",
+        r"api_key|private_key|authorization|cookie|credentials?)(?:$|_(?!ids?$))",
         re.IGNORECASE,
     )
     _PRIORITIES = frozenset({"critical", "high", "default", "low"})
