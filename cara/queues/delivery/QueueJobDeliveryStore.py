@@ -9,6 +9,7 @@ from cara.exceptions import QueueException
 from cara.queues.serializers import SignedJsonJobSerializer
 
 from . import (
+    _DeliveryClaim,
     _DeliveryConfiguration,
     _DeliveryDiagnostics,
     _DeliveryExecution,
@@ -155,7 +156,6 @@ class QueueJobDeliveryStore:
         "default": 2,
         "low": 3,
     }
-    _PUBLISH_CLAIM_ADVISORY_LOCK = 7_190_342_541
     DEFAULT_JOB_TIMEOUT_SECONDS = 300
     POST_HOOK_LEASE_SECONDS = 300
 
@@ -502,13 +502,15 @@ class QueueJobDeliveryStore:
     publish_one = _DeliveryConfiguration._delivery_publish_one
     _claim_publish = _DeliveryConfiguration._delivery_claim_publish
 
-    _claim_next_publish = _DeliveryPublishing._delivery_claim_next_publish
-    _claim_publish_batch = _DeliveryPublishing._delivery_claim_publish_batch
+    _claim_next_publish = _DeliveryClaim._delivery_claim_next_publish
+    _claim_publish_batch = _DeliveryClaim._delivery_claim_publish_batch
+    _plan_publish = _DeliveryClaim._delivery_plan_publish
+    _reserve_publish = _DeliveryClaim._delivery_reserve_publish
     publish_due = _DeliveryPublishing._delivery_publish_due
     _publish_batch = _DeliveryPublishing._delivery_publish_batch
     _publish_rows = _DeliveryPublishing._delivery_publish_rows
     _publish_claimed = _DeliveryPublishing._delivery_publish_claimed
-    _publish_to_broker = _DeliveryPublishing._delivery_publish_to_broker
+    _verified_envelope = _DeliveryPublishing._delivery_verified_envelope
     _mark_published = _DeliveryPublishing._delivery_mark_published
     _unclaim_publish = _DeliveryPublishing._delivery_unclaim_publish
     _json_ids = staticmethod(_DeliveryPublishing._delivery_json_ids)

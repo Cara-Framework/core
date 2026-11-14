@@ -111,6 +111,17 @@ def test_failed_schema_check_propagates_drift_exit():
     assert command.admin_batches[-1][0].startswith("DROP DATABASE IF EXISTS")
 
 
+def test_a_schema_check_that_crashed_is_not_reported_as_drift():
+    """Exit 2 is "could not check". Read as drift, a crash in the child sent
+    people regenerating a migration directory that was fine."""
+    command = _Verify(craft_codes=[0, 2])
+
+    assert command.handle() == 2
+    assert "NOT drift" in _text(command)
+    assert "regenerate" not in _text(command)
+    assert command.admin_batches[-1][0].startswith("DROP DATABASE IF EXISTS")
+
+
 def test_keep_leaves_the_scratch_for_autopsy():
     command = _Verify(options={"keep": True})
     assert command.handle() == 0

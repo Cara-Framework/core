@@ -341,6 +341,7 @@ def _qb_increment(self, column, value=1, dry=False):
     if dry or self.dry:
         return self.get_grammar().compile("update").to_sql()
 
+    _refuse_unbounded_counter(self, "increment")
     self.set_action("update")
     results = self.new_connection().query(self.to_qmark(), self._bindings)
     processed_results = self.get_processor().get_column_value(
@@ -386,12 +387,30 @@ def _qb_decrement(self, column, value=1, dry=False):
     if dry or self.dry:
         return self.get_grammar().compile("update").to_sql()
 
+    _refuse_unbounded_counter(self, "decrement")
     self.set_action("update")
     result = self.new_connection().query(self.to_qmark(), self._bindings)
     processed_results = self.get_processor().get_column_value(
         self, column, result, id_key, id_value
     )
     return processed_results
+
+
+def _refuse_unbounded_counter(self, verb: str) -> None:
+    """Refuse a counter write that would touch every row, like ``update()``.
+
+    ``increment("qty")`` on a bare builder compiled to an UPDATE with no
+    WHERE and rewrote every stock counter in the table. The pending
+    ``_updates`` are dropped so a reused builder does not carry them on.
+    """
+    if self._wheres:
+        return
+    self._updates = ()
+    raise QueryException(
+        f"{verb}() without a WHERE clause would modify all rows. "
+        "Use ``where_raw('1 = 1')`` to opt in explicitly, "
+        "or call it on a loaded model instance."
+    )
 
 
 def _qb_sum(self, column, dry=False):

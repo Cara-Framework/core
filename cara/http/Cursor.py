@@ -1,9 +1,19 @@
-"""Signed, context-bound keyset pagination cursors.
+"""Sealed, signed, context-bound keyset pagination cursors.
 
 Clients must treat cursors as opaque.  A cursor carries the last visible
 row's sort value plus canonical id, the sort direction, and a fingerprint of
-the filtered result set.  The whole payload is authenticated with HMAC-SHA256
-using ``APP_KEY``.
+the filtered result set.  The payload is SEALED (AES-256-GCM under a key
+derived from ``APP_KEY``) and the sealed body is then authenticated with
+HMAC-SHA256.
+
+Sealing is not decoration.  A signature alone hides nothing: the canonical id
+is usually the internal row id, drawn from one sequence across every
+workspace, so a readable cursor told an integrator paging its own orders how
+many orders the whole platform took in between (journey 10, 2026-11-13).
+Internal row ids never leave the app, and a cursor is no exception.  The
+nonce is synthetic (an HMAC of the plaintext), so the same position always
+mints the same token and nonce reuse can only ever repeat an identical
+plaintext.
 
 Unsigned base64 JSON is not an opaque cursor: callers can edit it, reuse it
 against another endpoint/tenant/filter set, or feed an invalid comparand into
@@ -37,16 +47,22 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from cara.configuration import config
 from cara.exceptions import InvalidCursor
 
 SortDirection = Literal["asc", "desc"]
 CursorPayload = dict[str, Any]
 
-_VERSION = 1
+_VERSION = 2
 _MAX_TOKEN_LENGTH = 4096
 _PAYLOAD_KEYS = frozenset({"ver", "v", "id", "dir", "fp", "scope"})
 _KEY_DERIVATION_LABEL = b"cara.cursor.v1"
+_SEAL_DERIVATION_LABEL = b"cara.cursor.v2.seal"
+_NONCE_DERIVATION_LABEL = b"cara.cursor.v2.nonce"
+_NONCE_BYTES = 12
 _BASE64URL_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
@@ -90,12 +106,15 @@ def encode_cursor(
         "scope": _scope(scope),
     }
     body = _b64encode(
-        json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
+        _seal(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            secret,
+        )
     )
     signature = _b64encode(
         hmac.new(_key(secret), body.encode("ascii"), hashlib.sha256).digest()
@@ -135,8 +154,8 @@ def decode_cursor(
         raise InvalidCursor("Invalid cursor.")
 
     try:
-        payload = json.loads(_b64decode(body).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        payload = json.loads(_unseal(_b64decode(body), secret).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError, InvalidTag) as exc:
         raise InvalidCursor("Invalid cursor.") from exc
     if not isinstance(payload, dict) or set(payload) != _PAYLOAD_KEYS:
         raise InvalidCursor("Invalid cursor.")
@@ -253,6 +272,29 @@ def _key(secret: str | bytes | None) -> bytes:
     if len(raw) < 32:
         raise RuntimeError("APP_KEY must contain at least 32 bytes for cursor signing.")
     return hmac.new(raw, _KEY_DERIVATION_LABEL, hashlib.sha256).digest()
+
+
+def _derived(secret: str | bytes | None, label: bytes) -> bytes:
+    return hmac.new(_key(secret), label, hashlib.sha256).digest()
+
+
+def _seal(plaintext: bytes, secret: str | bytes | None) -> bytes:
+    """AES-256-GCM with a synthetic nonce: same position, same token."""
+    nonce = hmac.new(
+        _derived(secret, _NONCE_DERIVATION_LABEL), plaintext, hashlib.sha256
+    ).digest()[:_NONCE_BYTES]
+    sealed = AESGCM(_derived(secret, _SEAL_DERIVATION_LABEL)).encrypt(
+        nonce, plaintext, None
+    )
+    return nonce + sealed
+
+
+def _unseal(blob: bytes, secret: str | bytes | None) -> bytes:
+    if len(blob) <= _NONCE_BYTES:
+        raise ValueError("sealed cursor is too short")
+    return AESGCM(_derived(secret, _SEAL_DERIVATION_LABEL)).decrypt(
+        blob[:_NONCE_BYTES], blob[_NONCE_BYTES:], None
+    )
 
 
 def _b64encode(value: bytes) -> str:

@@ -70,6 +70,17 @@ class Queueable(SerializesModels):
     def __repr__(self):
         return f"<{self.__class__.__name__}>"
 
+    def relay_lane(self) -> str | None:
+        """This job's fairness lane inside its tenant, or None (the tenant's own).
+
+        The relay's claim takes turns across one tenant's lanes in a queue,
+        so a product that keys a lane by, say, a seller's channel keeps one
+        channel's backlog from holding another channel's work. Recorded on
+        the delivery row at dispatch (``queue_job_delivery.lane_key``), never
+        in the signed envelope; keep it cheap — it runs once per dispatch.
+        """
+        return None
+
     @classmethod
     def dispatch(cls, *args, **kwargs) -> PendingDispatch:
         """

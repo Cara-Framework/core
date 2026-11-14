@@ -119,6 +119,20 @@ def test_select_lock_clause_is_not_mistaken_for_an_update_statement(tmp_path):
     assert WriteOwnership.scan(_manifest(tmp_path, deployable="services")) == []
 
 
+def test_no_key_update_lock_clause_is_not_an_update_of_a_table_named_of(tmp_path):
+    # ``FOR NO KEY UPDATE`` is the lock a key parent must take (the row-lock
+    # order guard demands it); read as an UPDATE, ``OF`` became a table name
+    # and the scan failed every tree that followed the guard (2026-11-14).
+    write(
+        tmp_path / "app/repositories/ProductRepository.py",
+        "from cara.facades import DB\n"
+        "DB.select('SELECT id FROM product FOR NO KEY UPDATE OF product')\n"
+        "DB.select('SELECT id FROM product FOR NO KEY UPDATE SKIP LOCKED')\n",
+    )
+
+    assert WriteOwnership.scan(_manifest(tmp_path, deployable="services")) == []
+
+
 def test_shared_gate_owner_writes_only_through_gate_persistence(tmp_path):
     ownership = {"product": "shared-gate-owned"}
     write(

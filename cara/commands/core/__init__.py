@@ -13,6 +13,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "CacheClearCommand": (".CacheClearCommand", "CacheClearCommand"),
     "CheckResult": (".CheckResult", "CheckResult"),
     "DEFAULT_LOCK_TIMEOUT_MS": (".SchemaApplyCommand", "DEFAULT_LOCK_TIMEOUT_MS"),
+    "DEFAULT_STATEMENT_TIMEOUT_MS": (
+        ".SchemaApplyCommand",
+        "DEFAULT_STATEMENT_TIMEOUT_MS",
+    ),
     "DeliverySettlementError": (".DeliverySettlementError", "DeliverySettlementError"),
     "DevResetCommand": (".DevResetCommand", "DevResetCommand"),
     "DocsCommand": (".DocsCommand", "DocsCommand"),
@@ -92,6 +96,7 @@ __all__ = [
     "CacheClearCommand",
     "CheckResult",
     "DEFAULT_LOCK_TIMEOUT_MS",
+    "DEFAULT_STATEMENT_TIMEOUT_MS",
     "DeliverySettlementError",
     "DevResetCommand",
     "DocsCommand",

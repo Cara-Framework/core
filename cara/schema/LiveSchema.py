@@ -107,6 +107,18 @@ class LiveSchema:
     #: no sample of the column remains: ANALYZE at target 0 skips the column
     #: but keeps the sample it took before, which still steers the planner.
     column_statistics: dict[str, dict[str, int]] | None = None
+    #: Trigger and function BODIES (``cara.schema.NamedDdlBodies``): a name
+    #: says the object exists, only its definition says what it still does.
+    trigger_definitions: dict[str, dict[str, str]] | None = None
+    declared_trigger_definitions: dict[str, dict[str, str]] | None = None
+    function_definitions: dict[str, list[dict]] | None = None
+    #: Triggers that exist but do not fire (``pg_trigger.tgenabled`` 'D' or
+    #: 'R'), per table: name -> (state, FOREIGN KEY it enforces, the table
+    #: that key constrains, ``pg_get_constraintdef``), the last three None
+    #: for a model trigger.
+    disabled_triggers: (
+        dict[str, dict[str, tuple[str, str | None, str | None, str | None]]] | None
+    ) = None
 
     def __post_init__(self):
         for name, empty in (
@@ -124,6 +136,10 @@ class LiveSchema:
             ("declared_index_definitions", {}),
             ("respelled_index_definitions", {}),
             ("column_statistics", {}),
+            ("trigger_definitions", {}),
+            ("declared_trigger_definitions", {}),
+            ("function_definitions", {}),
+            ("disabled_triggers", {}),
         ):
             if getattr(self, name) is None:
                 object.__setattr__(self, name, empty)
@@ -181,7 +197,7 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         run(
             "SELECT table_name, column_name, data_type, is_nullable, "
             "character_maximum_length, numeric_precision, numeric_scale, "
-            "column_default "
+            "column_default, udt_name "
             "FROM information_schema.columns "
             f"WHERE table_schema = '{sql_literal(target)}' "
             "ORDER BY table_name, ordinal_position"
@@ -202,6 +218,9 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
             # it through ``cara.schema.Defaults``. Not reading it at all let
             # a column lose its DEFAULT with every gate calling it clean.
             "default": row.get("column_default"),
+            # An array's element (``_int8``) or an enum's name: what a dropped
+            # column's reverse needs to come back as the same type.
+            "udt_name": row.get("udt_name"),
         }
 
     checks: dict[str, set[str]] = {}
@@ -385,8 +404,13 @@ def normalize_declared_checks(
     live: LiveSchema,
     declared: dict[str, list[tuple[str, str]]],
     schema_name: str | None = None,
+    reshapes: dict[str, list[str]] | None = None,
 ) -> LiveSchema:
     """Have the server spell the model's CHECKs, so they compare to the live ones.
+
+    ``reshapes`` (``cara.schema.ConstraintDrift.probe_reshapes``) gives the
+    probe the POST-plan columns first, so a CHECK naming a column the same
+    plan renames or adds is spelled rather than skipped.
 
     ``declared`` is ``{table: [(name, expression), ...]}``. For each table the
     database has, a session TEMP table copies its columns (``LIKE``) and takes
@@ -427,6 +451,9 @@ def normalize_declared_checks(
             except Exception:
                 continue
             try:
+                for clause in (reshapes or {}).get(table, []):
+                    with suppress(Exception):
+                        connection.query(f'ALTER TABLE "{probe}" {clause}', ())
                 for position, (name, expression) in enumerate(wanted):
                     spelled = _spell_check(
                         connection, probe, f"{probe}_d{position}", f"CHECK ({expression})"

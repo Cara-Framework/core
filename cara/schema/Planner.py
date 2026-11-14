@@ -20,26 +20,32 @@ Three rules keep the derivation honest:
   reason, not a best-effort statement. A plan that quietly guesses is the
   thing this replaces.
 
-* **Adding a NOT NULL column is not additive.** On an empty table it is
-  harmless; on a populated one Postgres must rewrite every row, and without a
-  default it cannot even do that. The planner emits the safe three-step
-  recipe (add nullable → backfill → set not null) and classes it ``locking``,
-  because that is what it is.
+* **A NOT NULL column costs what its fill costs.** With a constant default it
+  is one metadata-only ``ADD COLUMN ... NOT NULL DEFAULT`` (PostgreSQL 11+),
+  additive on any table size. ``backfill_from`` gives each row its own value:
+  add nullable → backfill → set not null, classed ``locking``. Neither: refused.
 """
 
 from __future__ import annotations
 
 from cara.exceptions import SchemaPlanRefused
-from cara.schema.ConstraintDrift import changed_checks, orphaned_unique_constraints
+from cara.schema.ConstraintDrift import (
+    changed_checks,
+    orphaned_unique_constraints,
+    raw_foreign_keys,
+)
 from cara.schema.Defaults import declared_default_sql, defaults_match, live_default_sql
 from cara.schema.IndexDrift import changed_indexes
+from cara.schema.LiveColumnType import live_type_sql, readd_column_sql
 from cara.schema.LiveSchema import LiveSchema, declared_columns
+from cara.schema.NamedDdlBodies import changed_routines
 from cara.schema.NullableBackfill import (
     batched_backfill,
     fills_nullable,
     refuse_partial_fill,
 )
 from cara.schema.Objects import (
+    declared_foreign_keys,
     missing_checks,
     missing_foreign_keys,
     missing_indexes,
@@ -166,6 +172,22 @@ def plan(
                         ),
                     )
                 )
+                # The renamed column is then compared to its DECLARED shape. A
+                # rename that stopped at the name left ``zip3`` varchar(3)
+                # under ``postal_prefix`` string(10): a 4-character prefix
+                # failed to write until somebody ran a second plan.
+                if new_name in declared:
+                    try:
+                        operations.extend(
+                            _alter_column(
+                                table,
+                                new_name,
+                                declared[new_name],
+                                live_columns[old_name],
+                            )
+                        )
+                    except SchemaPlanRefused as refusal:
+                        refusals.append(f"{table}.{new_name}: {refusal}")
 
         renamed_away = {old for new, old in renames.items() if old in live_columns}
 
@@ -184,10 +206,7 @@ def plan(
                     forward_sql=f'ALTER TABLE "{table}" DROP COLUMN "{name}"',
                     # Structurally reversible, semantically not: re-adding the
                     # column brings back an empty column, never its values.
-                    reverse_sql=(
-                        f'ALTER TABLE "{table}" ADD COLUMN "{name}" '
-                        f"{_live_type_sql(live_columns[name])}"
-                    ),
+                    reverse_sql=readd_column_sql(table, name, live_columns[name]),
                     safety=DESTRUCTIVE,
                     reason="column present in the database, absent from the model",
                     restores_data=False,
@@ -221,8 +240,18 @@ def plan(
             refusals.append(str(refusal))
         operations.extend(orphaned_unique_constraints(model, table, live))
         operations.extend(missing_checks(model, table, live))
-        operations.extend(changed_checks(model, table, live))
+        # Columns this plan adds or renames: a declared CHECK naming one is
+        # never called unchanged just because the probe could not spell it.
+        renamed_now = {
+            new: old
+            for new, old in renames.items()
+            if old in live_columns and new not in live_columns
+        }
+        added_now = set(declared) - set(live_columns) - set(renames)
+        operations.extend(changed_checks(model, table, live, renamed_now, added_now))
         operations.extend(orphaned_checks(model, table, live))
+        # A trigger or function whose BODY changed under its name.
+        operations.extend(changed_routines(model, table, live))
         # Foreign keys, missing direction only: an EXTRA live key is not the
         # model's business, and dropping one on a guess is how referential
         # integrity disappears quietly.
@@ -230,7 +259,21 @@ def plan(
 
     notices.extend(orphaned_tables({m["table"] for m in planned}, live))
 
-    return sort_operations(operations), refusals, notices
+    return sort_operations(operations, _references(planned)), refusals, notices
+
+
+def _references(models: list[dict]) -> dict[str, set[str]]:
+    """Each table's FOREIGN KEY targets — the order new tables are created in."""
+    return {
+        model["table"]: {
+            key["on"]
+            for key in [
+                *declared_foreign_keys(model, model["table"]),
+                *raw_foreign_keys(model),
+            ]
+        }
+        for model in models
+    }
 
 
 # ── column operations ───────────────────────────────────────────────────────
@@ -286,23 +329,32 @@ def _add_column(table: str, name: str, columns: dict[str, dict]) -> list[Operati
             "deploy (expand/contract)"
         )
 
-    # Add nullable → backfill → tighten. Postgres can fill a constant default
-    # in place, but the three-step form is what stays safe on a large table and
-    # is the same shape a reviewer already knows from expand/contract.
+    if backfill is None:
+        # A declared default is never volatile (``declared_default_sql``), so
+        # since PostgreSQL 11 this ADD rewrites nothing: 179 ms on 843,530
+        # queue_job_delivery rows, where add-nullable → one UPDATE → SET NOT
+        # NULL wrote 2.2 GB of WAL and outran the statement budget.
+        not_null = f'ALTER TABLE "{table}" ADD COLUMN "{name}" {type_sql} NOT NULL'
+        return [
+            Operation(
+                kind="add_column",
+                table=table,
+                key=f"{table}.{name}",
+                forward_sql=f"{not_null} DEFAULT {default}",
+                reverse_sql=reverse,
+                safety=ADDITIVE,
+                reason="NOT NULL with a constant default: metadata-only add",
+                restores_data=False,
+            )
+        ]
+
+    # ``backfill_from``: add nullable → fill → tighten, because the existing
+    # rows need a value computed from themselves, which no DEFAULT can give.
     #
-    # The DEFAULT lands in step 1, as a SET DEFAULT subcommand of the same
-    # statement as the ADD. Every writer — old code mid-deploy, a worker —
-    # gets it the moment the column exists; set in step 3 instead, rows
-    # inserted in between stored NULL, step 3's preflight stopped the apply,
-    # and the re-derived plan was a bare SET NOT NULL with the default gone.
-    # It must NOT be the ADD's own DEFAULT: that fills every existing row and
-    # leaves the backfill nothing to do, which is wrong exactly when
-    # ``backfill_from`` says the existing rows need something else.
-    #
-    # ``backfill_from`` wins over ``default`` because it is the more specific
-    # statement: a default says what a NEW row gets, a backfill says what the
-    # EXISTING ones get, and when a model bothers to declare both it is
-    # because those two answers differ.
+    # A declared default lands in step 1 as a SET DEFAULT subcommand, so every
+    # writer gets it the moment the column exists — never as the ADD's own
+    # DEFAULT, which would fill the existing rows and leave the backfill (the
+    # more specific statement: what EXISTING rows get) nothing to do.
     return [
         Operation(
             kind="add_column",
@@ -321,12 +373,8 @@ def _add_column(table: str, name: str, columns: dict[str, dict]) -> list[Operati
         _backfill_column(
             table,
             name,
-            backfill if backfill is not None else default,
-            reason=(
-                "step 2/3: fill existing rows from the declared backfill"
-                if backfill is not None
-                else "step 2/3: fill existing rows with the declared default"
-            ),
+            backfill,
+            reason="step 2/3: fill existing rows from the declared backfill",
         ),
         _set_not_null(
             table,
@@ -433,6 +481,9 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
                 reverse_sql=f'ALTER TABLE "{table}" ALTER COLUMN "{name}" SET NOT NULL',
                 safety=ADDITIVE,
                 reason="model relaxed the column to nullable",
+                # The reverse fails once a NULL is written, so it is not a
+                # lossless undo; rollback also preflights it before starting.
+                restores_data=False,
             )
         )
     elif not declared["nullable"] and live["is_nullable"]:
@@ -532,11 +583,11 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
                     # old bound, so the reverse is offered but not promised.
                     reverse_sql=(
                         f'ALTER TABLE "{table}" ALTER COLUMN "{name}" TYPE '
-                        f"{_live_type_sql(live)}"
+                        f"{live_type_sql(live)}"
                     ),
                     safety=LOCKING,
                     reason=(
-                        f"model widened {_live_type_sql(live)} → "
+                        f"model widened {live_type_sql(live)} → "
                         f"{type_sql} — the live bound rejects writes the "
                         "model allows"
                     ),
@@ -644,14 +695,6 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
 def _declared_renames(model: dict) -> dict[str, str]:
     renames = model.get("renamed_from") or {}
     return {str(new): str(old) for new, old in renames.items()}
-
-
-def _live_type_sql(live: dict) -> str:
-    base = (live.get("data_type") or "text").upper()
-    max_length = live.get("max_length")
-    if max_length and base in {"CHARACTER VARYING", "VARCHAR", "CHARACTER", "CHAR"}:
-        return f"VARCHAR({max_length})"
-    return base
 
 
 __all__ = ["plan"]

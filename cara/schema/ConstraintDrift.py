@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-from cara.schema.LiveSchema import LiveSchema, constraint_body
+from cara.schema.LiveSchema import LiveSchema, constraint_body, declared_columns
 from cara.schema.Objects import (
     _declared_checks,
     _foreign_key_clause,
@@ -26,6 +26,7 @@ from cara.schema.Objects import (
     declared_index_names,
 )
 from cara.schema.Operation import DESTRUCTIVE, LOCKING, Operation
+from cara.schema.Vocabulary import postgres_type
 
 #: ``ADD CONSTRAINT <name> CHECK (`` in a model's named DDL; the body is read
 #: from the opening paren by :func:`_balanced_body`.
@@ -97,8 +98,67 @@ def declared_checks_by_table(models: list[dict]) -> dict[str, list[tuple[str, st
     }
 
 
-def changed_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]:
+def _names_any(expression: str, columns) -> bool:
+    return any(re.search(rf'\b"?{re.escape(c)}"?\b', expression) for c in columns)
+
+
+def _renamed_body(body: str, renames: dict[str, str]) -> str:
+    """``body`` with each old column name spelled as its new one.
+
+    A replace's reverse runs before the rename's own reverse (rollback is
+    newest first), while the column still carries its new name.
+    """
+    for new, old in renames.items():
+        spelled = new if re.fullmatch(r"[a-z_][a-z0-9_]*", new) else f'"{new}"'
+        body = re.sub(rf'(?<![\w"])"?{re.escape(old)}"?(?![\w"])', spelled, body)
+    return body
+
+
+def probe_reshapes(models: list[dict], live: LiveSchema) -> dict[str, list[str]]:
+    """Per table, the ``ALTER TABLE`` clauses that give the CHECK probe the
+    POST-plan column set: declared renames, then declared columns not there.
+
+    The probe copied the LIVE table, so a declared CHECK naming a column the
+    same plan adds or renames could not attach and was skipped as unchanged:
+    ``sales_summary_daily_values_check`` kept its US-only ``zip3`` body
+    through a plan, a rehearsal and an apply that all said clean.
+    """
+    clauses: dict[str, list[str]] = {}
+    for model in models:
+        table = model.get("table")
+        columns = (live.tables or {}).get(table)
+        if not table or columns is None or not model.get("fields"):
+            continue
+        renames = {
+            str(new): str(old)
+            for new, old in (model.get("renamed_from") or {}).items()
+            if str(old) in columns and str(new) not in columns
+        }
+        found = [f'RENAME COLUMN "{old}" TO "{new}"' for new, old in renames.items()]
+        for name, spec in declared_columns(model).items():
+            if name in columns or name in renames:
+                continue
+            type_sql = postgres_type(spec["type"], spec.get("params"))
+            if type_sql:
+                found.append(f'ADD COLUMN "{name}" {type_sql}')
+        if found:
+            clauses[table] = found
+    return clauses
+
+
+def changed_checks(
+    model: dict,
+    table: str,
+    live: LiveSchema,
+    renamed: dict[str, str] | None = None,
+    added: set[str] | frozenset[str] = frozenset(),
+) -> list[Operation]:
     """CHECKs the database has BY NAME but asserting something else.
+
+    ``renamed`` (new → old) and ``added`` are the columns this plan renames
+    and adds. A declared CHECK naming one that the probe still could not
+    spell is REPLACED, never skipped: the live body cannot be asserting it,
+    because it cannot name a column that does not exist yet.
 
     ``missing_checks`` asks only whether the name exists, so a model that
     narrowed a CHECK — ``catalog_proposal.kind`` losing ``'quantity_review'``
@@ -117,13 +177,18 @@ def changed_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]
     live_bodies = (live.constraint_definitions or {}).get(table, {})
     declared_bodies = (live.declared_check_definitions or {}).get(table, {})
     respelled_bodies = (live.respelled_check_definitions or {}).get(table, {})
+    renamed = renamed or {}
     operations: list[Operation] = []
     for name, expression in _all_declared_checks(model, table):
         current, wanted = live_bodies.get(name), declared_bodies.get(name)
-        if not current or not wanted:
+        if not current:
             continue
-        settled = respelled_bodies.get(name) or current
-        if constraint_body(settled) == constraint_body(wanted):
+        if not wanted and not _names_any(expression, [*renamed, *added]):
+            continue
+        # A pure rename is not a changed body: Postgres renames the column
+        # reference inside the constraint along with the column.
+        settled = _renamed_body(respelled_bodies.get(name) or current, renamed)
+        if wanted and constraint_body(settled) == constraint_body(wanted):
             if left_not_valid(live, table, name):
                 operations.append(
                     _validate_check(
@@ -148,10 +213,17 @@ def changed_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]
                 ),
                 reverse_sql=(
                     f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {name}, '
-                    f"ADD CONSTRAINT {name} {constraint_body(current)} NOT VALID"
+                    f"ADD CONSTRAINT {name} "
+                    f"{_renamed_body(constraint_body(current), renamed)} NOT VALID"
                 ),
                 safety=LOCKING,
-                reason="CHECK constraint in the database asserts something the model no longer declares",
+                reason=(
+                    "CHECK constraint in the database asserts something the model "
+                    "no longer declares"
+                    if wanted
+                    else "the declared CHECK names a column this plan adds or "
+                    "renames, so the live body cannot be asserting it"
+                ),
                 notes=(
                     f"database: {constraint_body(current)}",
                     "one statement drops the old body and attaches the declared "
@@ -357,6 +429,7 @@ __all__ = [
     "declared_checks",
     "declared_checks_by_table",
     "orphaned_unique_constraints",
+    "probe_reshapes",
     "raw_checks",
     "raw_foreign_keys",
 ]

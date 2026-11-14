@@ -92,6 +92,14 @@ class _PostgresDB:
             with self._cursor() as cursor:
                 cursor.execute("ROLLBACK")
 
+    def advisory_xact_lock(self, *keys):
+        self.select(
+            "SELECT pg_advisory_xact_lock(hashtextextended(requested.key, 0)) "
+            "FROM (SELECT DISTINCT key FROM unnest(%s::text[]) AS key) "
+            "AS requested ORDER BY requested.key",
+            [list(keys)],
+        )
+
     def select_one(self, sql, params=None):
         with self._cursor() as cursor:
             cursor.execute(sql, params)
@@ -219,7 +227,7 @@ def test_a_burst_after_a_quiet_analyze_is_claimed_through_the_ordered_probes(
     # The per-tenant probes run once per tenant: none of them may filter
     # the open set through an index that is merely small. ``LIKE ...
     # INCLUDING ALL`` renames the copies after their keys, so the
-    # tenant-keyed ones (``tenant_head_idx``, ``tenant_served_idx``) read
+    # tenant-keyed ones (``lane_head_idx``, ``tenant_served_idx``) read
     # ``..._coalesce_...`` here and ``open_expiry_idx`` ``..._expires_at_idx``.
     looped = {name for name, loops in scans if loops > 1}
     assert looped, scans
@@ -232,6 +240,54 @@ def test_a_burst_after_a_quiet_analyze_is_claimed_through_the_ordered_probes(
     assert claimed is not None
     # Stale plan: seconds per claim. Ordered probes: tens of milliseconds.
     assert elapsed < 1.0, elapsed
+
+
+def _node_types(node: dict) -> list[tuple[str, str]]:
+    found = [(node.get("Node Type", ""), node.get("Index Name") or "")]
+    for child in node.get("Plans", []) or []:
+        found.extend(_node_types(child))
+    return found
+
+
+@_integration
+def test_the_reserve_reads_its_candidates_by_key_never_the_open_set(stale_ledger):
+    """The reserve addresses rows it was handed; with the state columns
+    unsampled the planner priced ``publish_status = 'pending'`` at one row and
+    walked ``publish_due_idx`` over the WHOLE open set instead — 290-680 ms
+    per reserve at 1M open rows (scratch stack 2026-11-13). It must stay
+    primary-key probes plus a TID scan, whatever the statistics say."""
+    db = _PostgresDB(stale_ledger)
+    store = _store(db)
+    planned = store._plan_publish(store.claim_batch)
+    assert planned
+    captured = {}
+    original = db.select_one
+
+    def select_one(sql, params=None):
+        if sql.startswith("WITH settings AS"):
+            # EXPLAIN ANALYZE runs the UPDATE: measure it, then undo it.
+            with stale_ledger.cursor() as cursor:
+                cursor.execute("SAVEPOINT explained")
+            captured["plan"] = original("EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params)[
+                "QUERY PLAN"
+            ]
+            with stale_ledger.cursor() as cursor:
+                cursor.execute("ROLLBACK TO SAVEPOINT explained")
+        return original(sql, params)
+
+    db.select_one = select_one
+    claimed = store._reserve_publish(planned, store.claim_batch)
+    plan = captured["plan"]
+    if isinstance(plan, str):
+        plan = json.loads(plan)
+    nodes = _node_types(plan[0]["Plan"])
+
+    assert claimed is not None
+    # Key reads only: the candidates by primary key, the leases by row
+    # version or primary key (the planner may pick either).
+    assert any(kind == "Tid Scan" or index.endswith("_pkey") for kind, index in nodes)
+    assert not any("publish_due" in index for _kind, index in nodes), nodes
+    assert not any(kind == "Seq Scan" for kind, _index in nodes), nodes
 
 
 @_integration

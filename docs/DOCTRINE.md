@@ -366,9 +366,12 @@ Two data-loss traps are closed by construction. **A rename is DECLARED**
 (`__renamed_from__` on the model), never inferred — from a diff a rename and
 a drop-plus-add are the same two facts, and every tool that guesses emits
 DROP + ADD and throws the column away; undeclared, the planner reports both
-and lets a human judge. **Adding a NOT NULL column with a default** becomes
-the three-step expand recipe (add nullable → backfill → tighten), because the
-naive form rewrites every row of a populated table.
+and lets a human judge. **Adding a NOT NULL column with a constant default**
+is one `ADD COLUMN … NOT NULL DEFAULT` — metadata-only since PostgreSQL 11, no
+row rewritten, so it is additive on a table of any size (843k rows: 179 ms,
+where the old add-nullable → `UPDATE` → `SET NOT NULL` recipe rewrote the
+table and outran the statement budget). A column whose rows need a value of
+their own (`backfill_from`) keeps the three-step expand recipe.
 
 The backfill step is where the model gets its say. A default answers "what
 should a NEW row hold", and for most columns that is also the right answer for
@@ -425,8 +428,12 @@ TABLE re-rendered here — one renderer for a table's shape, so an evolved
 database and a fresh install receive byte-identical DDL.
 
 What the database has and the models do not is treated by kind. An index no
-model declares is planned as a destructive drop (excluding the indexes that
-BACK a constraint). A TABLE no model declares is only ever REPORTED: a diff
+model declares is planned as a *locking* drop whose reverse is the
+catalogue's own definition, so rollback rebuilds it exactly (under its own
+statement budget, and only marked once the rebuild is VALID); a UNIQUE one is
+an invariant whose rebuild fails once a duplicate lands, and one whose
+definition was not read cannot be rebuilt, so both are destructive (excluding
+the indexes that BACK a constraint). A TABLE no model declares is only ever REPORTED: a diff
 cannot tell an abandoned table from a partition child, an extension's table or
 the migration tracker, and a DROP TABLE derived from a guess is where this
 class of tool does its worst damage.

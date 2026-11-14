@@ -68,6 +68,8 @@ class _RelayLoop(CommandBase):
             signal.signal(signal.SIGTERM, _request_stop)
 
         driver = Queue.driver("amqp")
+        if not once:
+            self._start_sidecars(driver, stop)
         while not stop.is_set():
             try:
                 maintain_connection = getattr(
@@ -116,6 +118,10 @@ class _RelayLoop(CommandBase):
                     wakeup.clear()
         metric.set(0)
         return 0
+
+    def _start_sidecars(self, _driver, _stop: threading.Event) -> None:
+        """Start background work that must not share the loop's wall time."""
+        return None
 
     def _metrics_port(self) -> int:
         return int(config(f"metrics.{self.metrics_port_config}", 0))
@@ -179,6 +185,15 @@ class QueueRelayCommand(_RelayLoop):
             int(result.get(key, 0) or 0)
             for key in ("retried", "settle_lost", "quarantined")
         )
+
+    def _start_sidecars(self, driver, stop: threading.Event) -> None:
+        """Sample the ledger gauges on their own thread, off the publish loop."""
+        threading.Thread(
+            target=driver.run_delivery_metrics_sampler,
+            args=(stop,),
+            name="queue-relay-metrics",
+            daemon=True,
+        ).start()
 
     def handle(
         self,

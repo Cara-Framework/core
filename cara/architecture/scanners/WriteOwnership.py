@@ -177,10 +177,10 @@ def _raw_sql_tables(call: ast.Call) -> list[str]:
     tables: list[str] = []
     for match in _WRITE_SQL.finditer(sql):
         table = match.group(1)
-        # ``FOR UPDATE SKIP LOCKED`` is a SELECT lock clause, not an UPDATE
-        # statement. Without this guard the following token is misread as a
-        # table name.
-        if re.search(r"\bfor\s*$", sql[: match.start()], re.IGNORECASE):
+        # ``FOR [NO KEY] UPDATE SKIP LOCKED`` is a SELECT lock clause, not an
+        # UPDATE statement. Without this guard the following token is misread
+        # as a table name.
+        if re.search(r"\bfor\s+(?:no\s+key\s+)?$", sql[: match.start()], re.IGNORECASE):
             continue
         if table.casefold() not in _SQL_NON_TABLE_TOKENS:
             tables.append(table)

@@ -38,6 +38,16 @@ Three properties make it safe to run against production:
   cannot run in a transaction and keeps the connection's configured session
   ``lock_timeout``.
 
+* **Its own statement budget.** The connection is the APPLICATION's, and its
+  ``statement_timeout`` (30 s in ``config/database.py``) is a user-facing
+  request budget: under it a fill of a real table, a ``VALIDATE`` scan or a
+  ``CREATE INDEX CONCURRENTLY`` was cancelled on every re-run — a concurrent
+  build left INVALID — while deploy.sh kept traffic offline. Every step sets
+  ``--statement_timeout`` instead (``SET LOCAL`` in its transaction; around
+  a ``CONCURRENTLY`` statement a session ``SET`` that is ``RESET`` after it,
+  success or not). The default, 0, is no cap: the lock timeout is what keeps
+  a step from holding writers, and a step stopped by a budget only repeats.
+
 * **Preflight before each statement.** An operation that can fail on DATA
   carries a read-only query that must return no rows — a NULL in a column
   about to become NOT NULL, a duplicate under a unique index about to be
@@ -81,6 +91,9 @@ from cara.support import paths
 
 #: Short on purpose — see the module docstring.
 DEFAULT_LOCK_TIMEOUT_MS = 5000
+
+#: No cap per step — see the module docstring ("Its own statement budget").
+DEFAULT_STATEMENT_TIMEOUT_MS = 0
 
 #: Key range of one backfill transaction. About 0.2 s of a writer's wait at the
 #: measured 39 microseconds per row, on a table where every key needs a fill.
@@ -128,6 +141,16 @@ _FILL_KIND = "backfill_column"
             ),
             "type": int,
             "default": 5000,
+            "is_flag": False,
+        },
+        {
+            "name": "--statement_timeout",
+            "help": (
+                "statement_timeout in milliseconds for each step, replacing the "
+                "connection's application budget (0 = no cap)"
+            ),
+            "type": int,
+            "default": DEFAULT_STATEMENT_TIMEOUT_MS,
             "is_flag": False,
         },
         {
@@ -248,13 +271,27 @@ class SchemaApplyCommand(CommandBase):
                 self.info(f"   would run: {operation.forward_sql}")
             return 0
 
-        applied = self._already_applied(identifier)
+        # Only a run the ledger EXPLAINS is a resume. A plan id is a hash of
+        # its operations, so the same drift arising twice (a trigger disabled
+        # again, the same index dropped again) derives the id of a plan that
+        # already finished; reading that plan's rows as "done" skipped every
+        # operation the database still needs and printed "Applied 0". What
+        # derives now is work the schema still owes: run all of it.
+        applied = self._already_applied(identifier) if ledger_explained else set()
         if applied:
             self.warning(
                 f"Resuming: {len(applied)} operation(s) of this plan are already applied."
             )
+        elif self._already_applied(identifier):
+            self.warning(
+                f"Plan {identifier} is recorded as applied, yet the database "
+                f"derives it again — the same drift recurred. Applying it again."
+            )
 
         lock_timeout = int(self.option("lock_timeout") or DEFAULT_LOCK_TIMEOUT_MS)
+        self._statement_budget = int(
+            self.option("statement_timeout") or DEFAULT_STATEMENT_TIMEOUT_MS
+        )
         done = 0
         for operation in operations:
             # A fill that still derives runs again: its own IS NULL makes that
@@ -358,16 +395,22 @@ class SchemaApplyCommand(CommandBase):
         """The reason this operation would fail, or None if it is clear.
 
         Read-only by construction: the operation supplies a SELECT that must
-        return no rows. A query that cannot run (a table not yet created by an
-        earlier operation in this same plan) is not a blocker — it is a
-        question that does not apply yet.
+        return no rows. It is asked right before its step, after every
+        operation ordered ahead of it ran, so a query that still cannot run is
+        not "no rows": nothing proves the step is safe, and the plan stops
+        before it rather than learning the answer from the statement itself.
         """
         if not operation.preflight_sql:
             return None
+        # Under the step's own budget: a duplicate or NULL probe scans the
+        # whole table, and cut off by the API's 30 s budget it is unanswerable
+        # — which stops the plan on every re-run.
         try:
-            rows = DB.select(operation.preflight_sql)
-        except Exception:
-            return None
+            with DB.transaction():
+                DB.statement(f"SET LOCAL statement_timeout = {self._budget_ms()}")
+                rows = DB.select(operation.preflight_sql)
+        except Exception as exc:
+            return f"the preflight could not be answered: {exc}".strip()
         return operation.preflight_failure if rows else None
 
     def _execute(self, plan_id: str, operation, lock_timeout: int) -> None:
@@ -392,17 +435,31 @@ class SchemaApplyCommand(CommandBase):
 
         if operation.transactional:
             with DB.transaction():
-                DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
+                self._set_local_budget(lock_timeout)
                 DB.statement(operation.forward_sql)
                 self._record(plan_id, operation, status=STATUS_APPLIED)
             return
 
         # Non-transactional (CONCURRENTLY): Postgres refuses it inside a
-        # transaction, so it runs under the connection's configured session
-        # lock_timeout. A session-level SET here would outlive the statement
-        # and leak into the next borrower of the pooled connection.
-        DB.statement(operation.forward_sql)
+        # transaction, so it keeps the connection's configured session
+        # lock_timeout, and its statement budget is a session SET that is
+        # RESET before the connection can serve anything else. This command
+        # runs one statement at a time, so the pool hands the SET's
+        # connection straight back to the statement after it.
+        DB.statement(f"SET statement_timeout = {self._budget_ms()}")
+        try:
+            DB.statement(operation.forward_sql)
+        finally:
+            DB.statement("RESET statement_timeout")
         self._record(plan_id, operation, status=STATUS_APPLIED)
+
+    def _budget_ms(self) -> int:
+        return int(getattr(self, "_statement_budget", DEFAULT_STATEMENT_TIMEOUT_MS))
+
+    def _set_local_budget(self, lock_timeout: int) -> None:
+        """Both timeouts of one step, bound to its transaction."""
+        DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
+        DB.statement(f"SET LOCAL statement_timeout = {self._budget_ms()}")
 
     def _run_in_batches(self, operation, lock_timeout: int) -> None:
         """Run a backfill over its key in short transactions.
@@ -420,7 +477,7 @@ class SchemaApplyCommand(CommandBase):
             return
         for start in range(bounds[0]["low"] - 1, bounds[0]["high"], _BACKFILL_BATCH_KEYS):
             with DB.transaction():
-                DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
+                self._set_local_budget(lock_timeout)
                 DB.statement(
                     f'{operation.forward_sql} AND "{column}" > {start} '
                     f'AND "{column}" <= {start + _BACKFILL_BATCH_KEYS}'

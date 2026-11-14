@@ -59,12 +59,14 @@ from cara.decorators import command
 from cara.exceptions import SchemaPlanRefused
 from cara.schema import (
     changed_checks,
+    changed_routines,
     created_objects,
     declared_checks_by_table,
     declared_columns,
     declared_indexes_by_table,
     drifted_indexes,
     introspect,
+    is_validation,
     missing_checks,
     missing_foreign_keys,
     missing_indexes,
@@ -72,6 +74,7 @@ from cara.schema import (
     normalize_declared_indexes,
     orphaned_indexes,
     orphaned_unique_constraints,
+    read_named_ddl,
 )
 
 from ..CommandBase import CommandBase
@@ -147,8 +150,13 @@ class SchemaCheckCommand(CommandBase):
             return 2
 
         # Discover models (table + declared fields). Independent of the
-        # comparator/generator by design.
-        models = ModelDiscoverer().discover_models()
+        # comparator/generator by design. A discovery that crashes is exit 2,
+        # never 1: 1 means drift, and schema:verify reads it that way.
+        try:
+            models = ModelDiscoverer().discover_models()
+        except Exception as exc:
+            self.error(f"Model discovery failed: {exc!r}. Nothing was compared.")
+            return 2
         checkable = [
             m
             for m in models
@@ -171,6 +179,9 @@ class SchemaCheckCommand(CommandBase):
             live = normalize_declared_indexes(
                 live_schema, live, declared_indexes_by_table(checkable), schema_name
             )
+            # Trigger and function bodies: a guard whose body was replaced
+            # (``reject_audit_log_mutation`` returning NEW) keeps its name.
+            live = read_named_ddl(live_schema, live, checkable, schema_name)
         except Exception as exc:  # DB unreachable / introspection failed
             message = f"Could not introspect the live database: {exc}."
             if self.option("allow_unavailable"):
@@ -198,8 +209,12 @@ class SchemaCheckCommand(CommandBase):
                 tables_with_drift += 1
                 continue
 
-            drift = self._diff_table(table, declared, live_cols)
-            drift.extend(self._diff_objects(model, table, live))
+            try:
+                drift = self._diff_table(table, declared, live_cols)
+                drift.extend(self._diff_objects(model, table, live))
+            except Exception as exc:
+                self.error(f"Comparing {table} crashed: {exc!r}. This is not drift.")
+                return 2
             if drift:
                 tables_with_drift += 1
                 total_drift += len(drift)
@@ -260,6 +275,7 @@ class SchemaCheckCommand(CommandBase):
             wanted = []
         wanted += missing_checks(model, table, live)
         wanted += missing_foreign_keys(model, table, live)
+        rechecked = changed_checks(model, table, live)
 
         present = live.objects_on(table)
         reported: set[str] = set()
@@ -299,12 +315,35 @@ class SchemaCheckCommand(CommandBase):
                 f"unique constraint '{operation.key.split(':')[1]}' present in "
                 f"database but NOT declared in model — schema:plan drops it"
             )
-        for operation in changed_checks(model, table, live):
+        for operation in rechecked:
             if operation.kind == "replace_check":
                 issues.append(
                     f"CHECK '{operation.key.split(':')[1]}' in database differs "
                     f"from the model's declaration — schema:plan replaces it"
                 )
+        # A VALIDATE with no ADD or replace beside it is a constraint attached
+        # NOT VALID and never validated: the planner validates it, so it is
+        # drift here too, or the post-apply gate and the plan disagree.
+        attached = {
+            operation.key.split(":")[1]
+            for operation in wanted + rechecked
+            if not is_validation(operation.kind, operation.key)
+        }
+        for operation in wanted + rechecked:
+            name = operation.key.split(":")[1]
+            if is_validation(operation.kind, operation.key) and name not in attached:
+                noun = "CHECK" if operation.kind == "validate_check" else "FOREIGN KEY"
+                issues.append(
+                    f"{noun} '{name}' is NOT VALID in the database (attached, never "
+                    f"validated: existing rows are unproven) — schema:plan validates it"
+                )
+        for operation in changed_routines(model, table, live):
+            verb = (
+                "enables"
+                if operation.kind in ("enable_trigger", "enforce_foreign_key")
+                else "replaces"
+            )
+            issues.append(f"{operation.reason} — schema:plan {verb} it")
         # An index present by NAME is not necessarily the declared index: its
         # columns, their order, UNIQUE or predicate may have changed, or an
         # interrupted CONCURRENTLY build left it INVALID.

@@ -144,3 +144,19 @@ def test_cursor_must_be_a_non_empty_string_when_present(value) -> None:
 def test_cursor_rule_bounds_are_rejected(min_limit: int, max_limit: int) -> None:
     with pytest.raises(ValueError):
         cursor_rules(min_limit=min_limit, max_limit=max_limit)
+
+
+def test_cursor_body_is_sealed_so_the_row_id_never_leaves_the_app() -> None:
+    """Internal row ids share one sequence across workspaces: a readable id in
+    a cursor tells an integrator the platform's order volume between pages."""
+    import base64
+
+    token, _ = _token(primary_key=987654321)
+    body = token.split(".", 1)[0]
+    raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+    assert b"987654321" not in raw
+    assert b"listings.index" not in raw
+
+
+def test_same_position_mints_the_same_cursor() -> None:
+    assert _token()[0] == _token()[0]

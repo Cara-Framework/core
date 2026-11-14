@@ -25,8 +25,10 @@ from cara.exceptions import QueueException
 from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.delay import DurableDelayedJobStore
-from cara.queues.delivery import UniqueDeliveryConflict
+from cara.queues.delivery import UniqueDeliveryConflict, relay_lane_of
 from cara.queues.serializers.SignedJsonJobSerializer import SignedJsonJobSerializer
+
+from .AMQPConfirmBatch import AMQPConfirmBatch
 
 
 def _amqp_delivery_push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
@@ -147,6 +149,7 @@ def _amqp_delivery_register_immediate_delivery(
                 coalesce_delay_seconds=(
                     int(job.coalesce_delay_seconds) if coalescing else None
                 ),
+                lane_key=relay_lane_of(job),
             )
             self._delivery_store.publish_after_commit(job_id)
     except UniqueDeliveryConflict as conflict:
@@ -293,13 +296,41 @@ def _amqp_delivery_wake_outbox_relay(self) -> None:
 
 
 def _amqp_delivery_relay_publish_once(self) -> dict[str, int]:
-    """Run one bounded broker-publication relay iteration."""
+    """Run one bounded broker-publication relay iteration.
+
+    The ledger gauges are NOT refreshed here: their snapshot aggregates the
+    whole open set (1.1-2.1 s at 1M open rows, 8-11 % of the relay's wall
+    time when it ran inline every cadence). ``queue:relay`` samples them on
+    its own thread (:meth:`run_delivery_metrics_sampler`), so publication
+    never waits on the scan.
+    """
     self.verify_runtime_health()
     result = self._delivery_store.publish_due()
     if int(result.get("retried", 0) or 0) or int(result.get("settle_lost", 0) or 0):
         self.invalidate_runtime_health()
-    self.refresh_delivery_metrics()
     return result
+
+
+def _amqp_delivery_run_delivery_metrics_sampler(self, stop: Any) -> None:
+    """Refresh the relay-owned ledger gauges every cadence until ``stop`` is set.
+
+    Runs on its own thread of the relay process, with its own database
+    connection (connections are per execution context), so a slow ledger
+    scan delays only the next sample. A failed sample is logged and the next
+    cadence retries; the freshness timestamp written last by
+    :meth:`refresh_delivery_metrics` stays behind and the staleness alert
+    fires if sampling keeps failing.
+    """
+    while not stop.is_set():
+        try:
+            self.refresh_delivery_metrics(force=True)
+        except Exception as exc:
+            Log.warning(
+                "Queue delivery metrics sample failed: %s",
+                exc,
+                category="cara.queue.delivery",
+            )
+        stop.wait(self.DELIVERY_METRICS_REFRESH_SECONDS)
 
 
 def _amqp_delivery_invalidate_runtime_health(self) -> None:
@@ -446,46 +477,70 @@ def _amqp_delivery_refresh_delivery_metrics(
     return snapshot
 
 
-def _amqp_delivery_publish_registered_envelope(
+def _amqp_delivery_envelope_message(
     self,
     body: bytes,
     payload: dict[str, Any],
+) -> tuple[str, str, bytes, Any]:
+    """The ``(exchange, routing_key, body, properties)`` of one signed envelope."""
+    queue_name = str(payload["queue"])
+    self.require_canonical_queue(queue_name)
+    message_priority = self._message_priority(
+        None,
+        {**self.options, "priority": payload["priority"]},
+    )
+    return (
+        self.options.get("exchange", ""),
+        queue_name,
+        body,
+        pika.BasicProperties(
+            content_encoding="utf-8",
+            content_type="application/json",
+            delivery_mode=2,
+            message_id=str(payload.get("job_id") or ""),
+            priority=message_priority,
+            type=f"cara.job.v{SignedJsonJobSerializer.VERSION}",
+        ),
+    )
+
+
+def _amqp_delivery_publish_registered_envelopes(
+    self,
+    envelopes: list[tuple[bytes, dict[str, Any]]],
     *,
     capability: Any,
-) -> None:
+) -> list[Any]:
+    """Publish claimed envelopes in order and await their confirms ONCE.
+
+    Returns one outcome per envelope: ``None`` when the broker confirmed it,
+    else the per-message ``UnroutableError``/``NackError``. A transport
+    failure raises for the whole batch after discarding the connection, so
+    the caller hands every row back; none was reported confirmed.
+    """
     if capability is not self._delivery_store:
         raise QueueException(
             "AMQP broker publication requires a claimed delivery-ledger row."
         )
+    if not envelopes:
+        return []
+    messages = [self._envelope_message(body, payload) for body, payload in envelopes]
     opts = self.options
     url = self._build_url(opts)
     self._acquire_thread_connection(url, opts)
     try:
-        queue_name = str(payload["queue"])
-        self.require_canonical_queue(queue_name)
-        message_priority = self._message_priority(
-            None,
-            {**opts, "priority": payload["priority"]},
-        )
-        self.channel.basic_publish(
-            exchange=opts.get("exchange", ""),
-            routing_key=queue_name,
-            body=body,
-            properties=pika.BasicProperties(
-                content_encoding="utf-8",
-                content_type="application/json",
-                delivery_mode=2,
-                message_id=str(payload.get("job_id") or ""),
-                priority=message_priority,
-                type=f"cara.job.v{SignedJsonJobSerializer.VERSION}",
-            ),
-            mandatory=True,
-        )
+        confirms = getattr(self._tls, "confirm_batch", None)
+        if confirms is None or not confirms.is_open:
+            confirms = AMQPConfirmBatch(
+                self.connection,
+                confirm_timeout_seconds=opts.get("publish_confirm_timeout_seconds"),
+            )
+            self._tls.confirm_batch = confirms
+        outcomes = confirms.publish(messages)
     except Exception:
         self._discard_thread_connection()
         raise
-    else:
-        self._return_thread_connection(url)
+    self._return_thread_connection(url)
+    return outcomes
 
 
 def _amqp_delivery_apply_retry_jitter(self, base_delay: int, instance: Any) -> int:

@@ -47,6 +47,25 @@ class _Channel:
         return True
 
 
+class _ConfirmBatch:
+    """The relay's batch-confirm channel: records each batch, confirms all."""
+
+    is_open = True
+
+    def __init__(self, channel: _Channel):
+        self.channel = channel
+
+    def publish(self, messages):
+        for exchange, routing_key, body, properties in messages:
+            self.channel.basic_publish(
+                exchange=exchange,
+                routing_key=routing_key,
+                body=body,
+                properties=properties,
+            )
+        return [None] * len(messages)
+
+
 class _DB:
     @contextmanager
     def transaction(self):
@@ -106,6 +125,7 @@ def test_publish_uses_reconciled_quorum_queue_and_high_message_priority():
     driver = AMQPDriver(SimpleNamespace(), _options())
     channel = _Channel()
     driver.channel = channel
+    driver._tls.confirm_batch = _ConfirmBatch(channel)
     driver._acquire_thread_connection = lambda *_args: None
     driver._return_thread_connection = lambda *_args: None
     job = PriorityJob(1, priority="high")
@@ -116,12 +136,12 @@ def test_publish_uses_reconciled_quorum_queue_and_high_message_priority():
         signing_keys=options["signing_keys"],
     )
 
-    driver._publish_registered_envelope(
-        body,
-        payload,
+    outcomes = driver._publish_registered_envelopes(
+        [(body, payload)],
         capability=driver.delivery_store,
     )
 
+    assert outcomes == [None]
     assert channel.declarations == []
     assert driver.canonical_queue_arguments("sync") == {
         "x-delivery-limit": 20,

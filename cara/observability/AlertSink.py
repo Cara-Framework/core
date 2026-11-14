@@ -52,26 +52,32 @@ class AlertSink:
     ) -> bool:
         """Fan an alert out to every configured provider.
 
-        Returns True when at least one provider acknowledged.
+        Returns True when the PAGER acknowledged: PagerDuty when it is
+        configured (it owns the incident, and a resolve only closes it there),
+        else Slack. A Slack ack never stands in for a configured PagerDuty: a
+        caller that read "one provider acknowledged" as delivered closed its
+        own record of an incident PagerDuty never heard resolved, and throttled
+        a stall page PagerDuty never received.
         """
         if severity not in ("critical", "error", "warning", "info", "resolved"):
             severity = "warning"
 
-        delivered = False
+        paged = False
         try:
-            if cls._post_pagerduty(severity, title, body, dedup_key, context):
-                delivered = True
+            paged = bool(cls._post_pagerduty(severity, title, body, dedup_key, context))
         except Exception as exc:
             Log.warning(
                 "AlertSink: PagerDuty post failed: %s", exc, category="alert.sink"
             )
 
+        posted = False
         try:
-            if cls._post_slack(severity, title, body, context):
-                delivered = True
+            posted = bool(cls._post_slack(severity, title, body, context))
         except Exception as exc:
             Log.warning("AlertSink: Slack post failed: %s", exc, category="alert.sink")
 
+        pager_configured = bool(config("notifications.alerts_pagerduty_routing_key", ""))
+        delivered = paged if pager_configured else posted
         if not delivered:
             _sev = str(severity or "").lower()
             _level = (

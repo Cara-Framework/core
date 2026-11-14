@@ -3,6 +3,7 @@
 from cara._LazyExports import _install_lazy_exports
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AMQPConfirmBatch": (".drivers", "AMQPConfirmBatch"),
     "AMQPDriver": (".drivers", "AMQPDriver"),
     "AMQP_MAX_PRIORITY": (".BrokerConfig", "AMQP_MAX_PRIORITY"),
     "AMQP_PRIORITY_LEVELS": (".BrokerConfig", "AMQP_PRIORITY_LEVELS"),
@@ -77,6 +78,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "rabbit_broker_access": (".BrokerConfig", "rabbit_broker_access"),
     "rabbit_credentials": (".BrokerConfig", "rabbit_credentials"),
     "rabbit_scheme": (".BrokerConfig", "rabbit_scheme"),
+    "relay_lane_of": (".delivery", "relay_lane_of"),
     "require_isolated_vhost": (".BrokerConfig", "require_isolated_vhost"),
     "run_middleware_chain_async": (".middleware", "run_middleware_chain_async"),
     "run_through_middleware": (".middleware", "run_through_middleware"),
@@ -85,6 +87,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 __all__ = [
+    "AMQPConfirmBatch",
     "AMQPDriver",
     "AMQP_MAX_PRIORITY",
     "AMQP_PRIORITY_LEVELS",
@@ -159,6 +162,7 @@ __all__ = [
     "rabbit_broker_access",
     "rabbit_credentials",
     "rabbit_scheme",
+    "relay_lane_of",
     "require_isolated_vhost",
     "run_middleware_chain_async",
     "run_through_middleware",

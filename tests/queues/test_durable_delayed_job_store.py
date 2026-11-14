@@ -199,6 +199,33 @@ def test_schedule_registers_future_v2_delivery_and_settles_source_atomically():
     assert decoded["throttle_attempts"] == 7
 
 
+class ChannelDelayedJob(DelayedTestJob):
+    def relay_lane(self):
+        return f"channel:{self.item_id}"
+
+
+def test_a_retry_waits_in_its_channels_lane_not_the_sellers_shared_one():
+    """A retried push is a NEW ledger row; it keeps its channel lane, or a
+    channel's retries would queue in the seller's shared lane again."""
+    db = _DB()
+    store, ledger = _store(db)
+
+    store.schedule(
+        ChannelDelayedJob(1922),
+        pendulum.now("UTC").add(seconds=30),
+        {
+            "attempts": 1,
+            "db_job_id": 9,
+            "deduplication_key": "retry:source-2:1",
+            "source_delivery_job_id": "source-2",
+            "source_delivery_lease_token": "lease-2",
+            "tenant_id": 5,
+        },
+    )
+
+    assert ledger.registered[0]["lane_key"] == "channel:1922"
+
+
 def test_schedule_of_a_central_job_persists_the_central_tenant_stamp():
     """A central job carries ``central``/``None``, and only inside central scope.
 

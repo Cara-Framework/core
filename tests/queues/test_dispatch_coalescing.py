@@ -221,6 +221,36 @@ def test_a_plain_push_has_no_key():
     assert registered["coalesce_delay_seconds"] is None
 
 
+class QueueChannelPushJob(QueuePlainJob):
+    def __init__(self, channel_id: int = 0):
+        super().__init__()
+        self.channel_id = channel_id
+
+    def relay_lane(self):
+        return f"channel:{self.channel_id}"
+
+
+def test_a_push_records_its_channel_lane_and_a_plain_push_the_tenants_own():
+    """The relay takes turns across a seller's channels only if each push's
+    row names its channel (backlog P2, 2026-11-13); a job without a lane
+    stays in the tenant's own lane."""
+    from cara.queues.drivers import _AMQPDelivery
+
+    driver = _Driver()
+    for job in (QueueChannelPushJob(1922), QueuePlainJob()):
+        _AMQPDelivery._amqp_delivery_register_immediate_delivery(
+            driver,
+            job=job,
+            job_id=str(uuid.uuid4()),
+            merged_opts=dict(_Driver.options),
+            job_opts={**_Driver.options, "queue": "sync"},
+        )
+
+    laned, plain = driver._delivery_store.registered
+    assert laned["lane_key"] == "channel:1922"
+    assert plain["lane_key"] is None
+
+
 def test_a_folded_push_returns_the_waiting_deliverys_id():
     from cara.queues.drivers import _AMQPDelivery
 

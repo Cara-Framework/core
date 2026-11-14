@@ -88,8 +88,14 @@ class ModelDiscoverer:
         """Discover all model files by scanning for classes that inherit from Model"""
         models = []
 
-        # Get project root
-        project_root = Path(paths("")).parent if paths("") else Path.cwd()
+        # The PROJECT's own tree, never its parent. The parent was scanned so a
+        # deployable reached the sibling kernel, but every deployable already
+        # reaches it through its own ``commons`` / ``cara`` links (and the
+        # image carries both under its base). In the image the base is
+        # ``/app``, so the parent was ``/``: discovery walked /proc and /sys,
+        # schema:verify's child died in another process's /proc/<pid>/net,
+        # and any model-shaped file on the host could join the plan.
+        project_root = Path(paths("")) if paths("") else Path.cwd()
 
         # Scan project root with max 5 levels deep
         models.extend(self._scan_path_for_models(project_root, max_depth=5))

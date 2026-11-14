@@ -17,6 +17,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "ReplayDelivery": (".ReplayDelivery", "ReplayDelivery"),
     "TerminalHookClaim": (".TerminalHookClaim", "TerminalHookClaim"),
     "UniqueDeliveryConflict": (".UniqueDeliveryConflict", "UniqueDeliveryConflict"),
+    "relay_lane_of": ("._DeliveryConfiguration", "_delivery_relay_lane_of"),
 }
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "ReplayDelivery",
     "TerminalHookClaim",
     "UniqueDeliveryConflict",
+    "relay_lane_of",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

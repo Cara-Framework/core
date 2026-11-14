@@ -251,7 +251,12 @@ def _qb_or_where_not_exists(self, value: str | int | QueryBuilder) -> Self:
     return self
 
 
-def _qb_having(self, column, equality="", value="") -> Self:
+def _qb_having(
+    self,
+    column,
+    equality=HavingExpression.UNSET,
+    value=HavingExpression.UNSET,
+) -> Self:
     """
     Specifying a having expression.
 
@@ -259,8 +264,10 @@ def _qb_having(self, column, equality="", value="") -> Self:
         column {string} -- The name of the column.
 
     Keyword Arguments:
-        equality {string} -- An equality operator (default: {"="})
-        value {string} -- The value of the having expression (default: {""})
+        equality -- An operator, or the value of a ``=`` comparison when
+            ``value`` is left out (``having("n", 5)``).
+        value -- The compared value; ``0`` and ``None`` are values, only an
+            omitted argument means "none".
 
     Returns:
         self

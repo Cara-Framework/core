@@ -100,6 +100,16 @@ class QueueOutboxHealth:
     #: the page open until someone closed it by hand.
     _unresolved_incidents: ClassVar[set[str]] = set()
 
+    #: When this process first tried, and failed, to deliver each pending
+    #: resolve. Bounds the retry: with no pager configured at all (local
+    #: dev) ``AlertSink.fire`` can never acknowledge, and a resolve retried
+    #: forever would log every tick for the life of the scheduler.
+    _resolve_attempted_at: ClassVar[dict[str, float]] = {}
+
+    #: How many renotify windows an unacknowledged resolve keeps retrying
+    #: (4 x 900 s = 1 h, the same span as the incident's ``active_key``).
+    RESOLVE_RETRY_WINDOW_MULTIPLE = 4
+
     # ── configuration ────────────────────────────────────────────────
     @staticmethod
     def stall_age_seconds() -> int:
@@ -207,7 +217,16 @@ class QueueOutboxHealth:
     def announce(cls, snapshot: dict[str, float], stalled: bool) -> str:
         """Emit / suppress / resolve the publication-outbox operator alert.
 
-        Returns ``fired``, ``throttled``, ``resolved`` or ``quiet``.
+        Returns ``fired``, ``throttled``, ``unacknowledged``, ``resolved``,
+        ``resolve_pending`` or ``quiet``.
+
+        The throttle only counts pages the pager ACKNOWLEDGED. A stall and a
+        paging outage are correlated (one partition takes the relay's broker
+        and the PagerDuty/Slack egress together), so a page ``AlertSink.fire``
+        reports as undelivered releases its renotify claim and is resent next
+        tick, and an undelivered resolve keeps the incident open and is
+        resent next tick — for at most ``RESOLVE_RETRY_WINDOW_MULTIPLE``
+        renotify windows, after which it says so and stops.
 
         Spam policy: one announcement per ``stall_renotify_seconds``
         window for as long as the stall lasts. ``Cache.add`` is the
@@ -405,7 +424,7 @@ class QueueOutboxHealth:
             Cache.put(
                 active_key,
                 str(int(time.time())),
-                cls.stall_renotify_seconds() * 4,
+                cls.stall_renotify_seconds() * cls.RESOLVE_RETRY_WINDOW_MULTIPLE,
             )
         except Exception as exc:  # never mute an outage
             Log.warning(
@@ -414,17 +433,36 @@ class QueueOutboxHealth:
                 category=category,
             )
 
+        # A stall that returns before its resolve landed reopens the incident;
+        # its next recovery gets a fresh resolve-retry window.
+        cls._resolve_attempted_at.pop(dedup_key, None)
+
         if not first_or_due:
             return "throttled"
 
-        AlertSink.fire(
+        acknowledged = AlertSink.fire(
             severity="critical",
             title=title,
             body=body,
             dedup_key=dedup_key,
             context=context,
         )
-        return "fired"
+        if acknowledged:
+            return "fired"
+
+        # Nobody received the page: give the renotify claim back so the next
+        # tick pages again instead of staying silent for the whole window.
+        try:
+            Cache.forget(notify_key)
+        except Exception as exc:  # TTL still bounds the silence
+            Log.warning(
+                "Outbox stall page was not acknowledged and its throttle could "
+                "not be released; next page in at most %ss: %s",
+                cls.stall_renotify_seconds(),
+                exc,
+                category=category,
+            )
+        return "unacknowledged"
 
     @classmethod
     def _announce_recovery(
@@ -449,15 +487,35 @@ class QueueOutboxHealth:
             )
         if not was_active:
             return "quiet"
+
+        Log.info(
+            "%s recovered: %s due row(s), oldest %ss.",
+            title,
+            log_args[0],
+            log_args[1],
+            category=category,
+        )
+        acknowledged = AlertSink.fire(
+            severity="resolved",
+            title=title,
+            body=body,
+            dedup_key=dedup_key,
+        )
+        if not acknowledged and not cls._resolve_retry_exhausted(dedup_key, category):
+            # The incident stays open (memory + cache) so the next tick
+            # resends the resolve; forgetting it first left the pager's
+            # incident triggered after the outbox drained.
+            return "resolve_pending"
+        cls._resolve_attempted_at.pop(dedup_key, None)
         cls._unresolved_incidents.discard(dedup_key)
 
         try:
             Cache.forget(active_key)
             Cache.forget(notify_key)
         except Exception as exc:
-            # Fail-open by design: the recovery notice below is the point
+            # Fail-open by design: the recovery notice above is the point
             # of this branch, and losing a best-effort cache eviction must
-            # not suppress it. Both keys carry TTLs, so a failed forget
+            # not turn it into a failure. Both keys carry TTLs, so a failed forget
             # self-heals; the worst case is one redundant page later.
             # Logged rather than swallowed — a cache fault here is
             # invisible otherwise, and this probe is the relay's only
@@ -467,21 +525,29 @@ class QueueOutboxHealth:
                 exc,
                 category=category,
             )
+        return "resolved"
 
-        Log.info(
-            "%s recovered: %s due row(s), oldest %ss.",
-            title,
-            log_args[0],
-            log_args[1],
+    @classmethod
+    def _resolve_retry_exhausted(cls, dedup_key: str, category: str) -> bool:
+        """True once an unacknowledged resolve has retried for its whole window.
+
+        Past that point retrying only fills the log (a pager that has been
+        down an hour, or none configured), so the watchdog closes its own
+        record and names the incident that must be closed by hand.
+        """
+        now = time.time()
+        first = cls._resolve_attempted_at.setdefault(dedup_key, now)
+        budget = cls.stall_renotify_seconds() * cls.RESOLVE_RETRY_WINDOW_MULTIPLE
+        if now - first < budget:
+            return False
+        Log.warning(
+            "Outbox recovery notice for %s was never acknowledged in %ss; "
+            "close that pager incident by hand.",
+            dedup_key,
+            budget,
             category=category,
         )
-        AlertSink.fire(
-            severity="resolved",
-            title=title,
-            body=body,
-            dedup_key=dedup_key,
-        )
-        return "resolved"
+        return True
 
     # ── orchestration ────────────────────────────────────────────────
     @classmethod

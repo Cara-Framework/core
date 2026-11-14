@@ -50,6 +50,9 @@ from cara.support import base_path
 #: instead of quoting our way around exotic ones.
 _SAFE_DB_NAME = Scratch.SAFE_DB_NAME
 
+#: ``schema:check``'s exit code for drift; 2 is "could not check".
+_DRIFT = 1
+
 
 def _derive_scratch_name(configured: str) -> str:
     """A boring scratch identifier derived from any configured name."""
@@ -153,6 +156,17 @@ class SchemaVerifyCommand(CommandBase):
 
             self.info("Comparing the migrated scratch against the models...")
             code = self._run_craft(["schema:check"], scratch)
+            if code and code != _DRIFT:
+                # schema:check exits 1 for drift and only for drift. Any other
+                # code is a check that could not finish — reported as drift, a
+                # crash in /proc sent people regenerating a directory that was
+                # fine (schema-deploy c1, 2026-11-14).
+                self.error(
+                    f"schema:check did not finish (exit {code}) — this is a "
+                    "crash, NOT drift. Its own output above names the cause; "
+                    "the invariant was neither proved nor disproved."
+                )
+                return code
             if code:
                 self.error(
                     "The migrated-from-zero schema differs from the models. "

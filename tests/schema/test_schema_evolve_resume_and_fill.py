@@ -245,7 +245,7 @@ def test_reversing_a_column_also_reverses_the_fill_written_into_it(monkeypatch):
 
     assert code == 0
     marked = [b for q, b in ledger.statements if q.startswith("UPDATE schema_operation")]
-    assert marked == [("plan123", "t.c", "t.c:backfill")]
+    assert marked == [("plan123", "t.c", "t.c:backfill", "t.c:validate")]
 
 
 # ── a declared fill of a nullable column ────────────────────────────────────

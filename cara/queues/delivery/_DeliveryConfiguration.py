@@ -27,6 +27,18 @@ def _bind_store(store_type: type) -> None:
     QueueJobDeliveryStore = store_type
 
 
+def _delivery_relay_lane_of(job: Any) -> str | None:
+    """The fairness lane ``job`` declares (``Queueable.relay_lane``), if any.
+
+    Asked once per dispatch, inside the dispatch transaction, so a hook that
+    reads (a push resolving its task's channel) sees rows the same
+    transaction just wrote.
+    """
+    declare = getattr(job, "relay_lane", None)
+    lane = declare() if callable(declare) else None
+    return None if lane is None or str(lane) == "" else str(lane)
+
+
 def _delivery_register(
     self,
     *,
@@ -40,8 +52,13 @@ def _delivery_register(
     coalesce_key: str | None = None,
     coalesce_within_seconds: int | None = None,
     coalesce_delay_seconds: int | None = None,
+    lane_key: str | None = None,
 ) -> bool:
     """Insert an immutable delivery row before any broker publication.
+
+    ``lane_key`` is the row's fairness lane inside its tenant
+    (``relay_lane_of``: a seller's channel); the relay's claim takes turns
+    across a tenant's lanes. ``None`` is the tenant's own lane.
 
     ``coalesce_key`` (a ``CoalescingJob``) is recorded on the row. With
     ``coalesce_within_seconds`` the dispatch first folds into a PENDING row
@@ -103,11 +120,12 @@ def _delivery_register(
                 now,
                 int(coalesce_delay_seconds or 0),
             )
+    lane_key = "" if lane_key is None else self._bounded_text(lane_key, "lane_key", 128)
     insert_sql = (
         f"INSERT INTO {self.table} ("
         "job_id, db_job_id, replay_of, replay_requested_by, replay_reason, "
         "payload_sha256, signed_envelope, "
-        "tenant_mode, tenant_id, unique_key, coalesce_key, "
+        "tenant_mode, tenant_id, unique_key, coalesce_key, lane_key, "
         "queue, priority, status, attempts, lease_token, lease_expires_at, "
         "completed_at, terminal_reason, post_hooks_completed_at, "
         "expires_at, available_at, publish_status, "
@@ -116,7 +134,7 @@ def _delivery_register(
         "created_at, updated_at"
         ") VALUES ("
         "%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, "
-        "%s, %s, %s, %s, %s, 0, NULL, NULL, "
+        "%s, %s, %s, %s, %s, %s, 0, NULL, NULL, "
         "NULL, NULL, NULL, "
         "%s, %s, %s, 0, %s, NULL, NULL, NULL, NULL, %s, %s"
         ") ON CONFLICT DO NOTHING RETURNING job_id"
@@ -133,6 +151,7 @@ def _delivery_register(
         tenant_id,
         unique_key,
         coalesce_key,
+        lane_key,
         payload["queue"],
         payload["priority"],
         self.STATUS_PENDING,
@@ -341,7 +360,7 @@ def _open_replay(self, source_job_id: str, *, operator: str, reason: str) -> str
     with database.transaction():
         source = database.select_one(
             f"SELECT job_id, db_job_id, status, payload_sha256, "
-            f"signed_envelope FROM {self.table} WHERE job_id = %s "
+            f"signed_envelope, lane_key FROM {self.table} WHERE job_id = %s "
             "FOR UPDATE",
             [source_job_id],
         )
@@ -468,6 +487,8 @@ def _open_replay(self, source_job_id: str, *, operator: str, reason: str) -> str
             replay_requested_by=actor,
             replay_reason=audit_reason,
             db=database,
+            # The replay waits in its source's lane (a seller's channel).
+            lane_key=self._row_value(source, "lane_key") or None,
         )
         self.publish_after_commit(replay_job_id)
         return replay_job_id

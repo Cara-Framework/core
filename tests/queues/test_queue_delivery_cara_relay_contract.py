@@ -158,16 +158,23 @@ def test_a_publish_error_with_no_text_still_leaves_a_reason(monkeypatch):
         lambda _limit: {"requeued": 0, "reconciled": 0, "unclaimed": 0},
     )
     monkeypatch.setattr(store, "expire_due", lambda _limit: 0)
+    monkeypatch.setattr(store, "_plan_publish", lambda _limit: [("job-1", "sync")])
     monkeypatch.setattr(
         store,
-        "_claim_publish_batch",
-        lambda _limit: ([{"job_id": "job-1", "publish_attempts": 0}], "token"),
+        "_reserve_publish",
+        lambda _planned, _limit: (
+            [{"job_id": "job-1", "publish_attempts": 0}],
+            "token",
+        ),
     )
+    monkeypatch.setattr(store, "_verified_envelope", lambda _row: (b"{}", {}))
 
-    def _boom(_row):
+    def _boom(_envelopes, *, capability):
         raise _SilentError()
 
-    monkeypatch.setattr(store, "_publish_to_broker", _boom)
+    monkeypatch.setattr(
+        store.driver, "_publish_registered_envelopes", _boom, raising=False
+    )
     monkeypatch.setattr(
         store,
         "_release_publish",

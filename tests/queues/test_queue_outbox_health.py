@@ -121,6 +121,7 @@ def test_no_read_model_site_restates_the_due_predicate() -> None:
     import inspect
 
     from cara.queues.delivery import (
+        _DeliveryClaim,
         _DeliveryConfiguration,
         _DeliveryPublishing,
     )
@@ -130,11 +131,12 @@ def test_no_read_model_site_restates_the_due_predicate() -> None:
             inspect.getsource(QueueJobDeliveryStore),
             inspect.getsource(_DeliveryConfiguration),
             inspect.getsource(_DeliveryPublishing),
+            inspect.getsource(_DeliveryClaim),
         )
     )
     occurrences = source.count("available_at <=")
-    # 1 × template declaration, 1 × _claim_publish, 1 × _claim_next_publish,
-    # 1 × _fold_into_waiting_delivery.
+    # 1 × template declaration, 1 × _claim_publish, 1 × the relay claim's
+    # ``_DUE_ROW`` (plan and reserve share it), 1 × _fold_into_waiting_delivery.
     assert occurrences == 4, (
         "a new hand-written 'available_at <=' appeared; format "
         "_PUBLISH_BACKLOG_FILTER_TEMPLATE instead"

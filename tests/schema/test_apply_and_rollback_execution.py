@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib
 from contextlib import contextmanager
 
+import pytest
+
 from cara.schema import ADDITIVE, LEDGER_TABLE, LOCKING, Operation
 
 _APPLY_MODULE = importlib.import_module("cara.commands.core.SchemaApplyCommand")
@@ -91,15 +93,18 @@ def test_the_lock_timeout_binds_to_the_statement_it_guards(monkeypatch):
     statements = [(depth, sql.split(" (")[0]) for depth, sql in db.calls]
     assert statements[0] == (1, "BEGIN")
     assert statements[1] == (1, "SET LOCAL lock_timeout = '2500ms'")
-    assert statements[2] == (1, 'ALTER TABLE "sync_task" ALTER COLUMN "x" SET NOT NULL')
+    # The application's 30 s request budget never governs a schema step.
+    assert statements[2] == (1, "SET LOCAL statement_timeout = 0")
+    assert statements[3] == (1, 'ALTER TABLE "sync_task" ALTER COLUMN "x" SET NOT NULL')
     # The ledger row commits with the change it records, or not at all.
-    assert statements[3] == (1, "INSERT INTO schema_operation")
-    assert statements[4] == (1, "COMMIT")
+    assert statements[4] == (1, "INSERT INTO schema_operation")
+    assert statements[5] == (1, "COMMIT")
 
 
 def test_a_concurrently_build_runs_outside_any_transaction(monkeypatch):
-    """Postgres refuses CONCURRENTLY inside a transaction, and a session-level
-    SET would outlive the statement on the pooled connection."""
+    """Postgres refuses CONCURRENTLY inside a transaction. Its statement budget
+    is a session SET, so it is RESET before the pooled connection serves
+    anything else — the ledger write included."""
     db = _DB()
     _install(monkeypatch, _APPLY_MODULE, db)
     command = _APPLY_MODULE.SchemaApplyCommand.__new__(_APPLY_MODULE.SchemaApplyCommand)
@@ -108,8 +113,33 @@ def test_a_concurrently_build_runs_outside_any_transaction(monkeypatch):
 
     assert all(depth == 0 for depth, _ in db.calls)
     assert not any("lock_timeout" in sql for _, sql in db.calls)
-    assert db.calls[0][1].startswith("CREATE INDEX CONCURRENTLY")
-    assert db.calls[1][1].startswith("INSERT INTO schema_operation")
+    assert [sql.split(" ")[0:2] for _, sql in db.calls] == [
+        ["SET", "statement_timeout"],
+        ["CREATE", "INDEX"],
+        ["RESET", "statement_timeout"],
+        ["INSERT", "INTO"],
+    ]
+
+
+def test_a_failed_concurrently_build_still_resets_its_session_budget(monkeypatch):
+    """Cancelled or refused, the build must not leave its uncapped budget on
+    the pooled connection for the ledger's failure row and whatever follows."""
+
+    class _Failing(_DB):
+        def statement(self, query, bindings=(), connection=None):
+            super().statement(query, bindings, connection)
+            if query.startswith("CREATE INDEX CONCURRENTLY"):
+                raise RuntimeError("canceling statement due to lock timeout")
+            return 1
+
+    db = _Failing()
+    _install(monkeypatch, _APPLY_MODULE, db)
+    command = _APPLY_MODULE.SchemaApplyCommand.__new__(_APPLY_MODULE.SchemaApplyCommand)
+
+    with pytest.raises(RuntimeError):
+        command._execute("plan123", _operation(transactional=False), 2500)
+
+    assert db.calls[-1] == (0, "RESET statement_timeout")
 
 
 # ── rollback ────────────────────────────────────────────────────────────────
@@ -183,8 +213,9 @@ def test_a_reverse_runs_under_its_lock_timeout_with_its_ledger_update(monkeypatc
     command, db, _ = _rollback(monkeypatch, rows)
 
     assert command.handle() == 0
-    assert [depth for depth, _ in db.calls] == [1, 1, 1, 1, 1]
+    assert [depth for depth, _ in db.calls] == [1, 1, 1, 1, 1, 1]
     assert db.calls[1][1].startswith("SET LOCAL lock_timeout")
-    assert db.calls[2][1].endswith("DROP NOT NULL")
-    assert db.calls[3][1].startswith(f"UPDATE {LEDGER_TABLE} SET status")
-    assert db.calls[4][1] == "COMMIT"
+    assert db.calls[2][1] == "SET LOCAL statement_timeout = 0"
+    assert db.calls[3][1].endswith("DROP NOT NULL")
+    assert db.calls[4][1].startswith(f"UPDATE {LEDGER_TABLE} SET status")
+    assert db.calls[5][1] == "COMMIT"

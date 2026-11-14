@@ -1,10 +1,12 @@
 """Relay-owned ledger gauges refresh on a cadence, not once per relay cycle.
 
-``relay_publish_once`` and the hooks loop refresh the delivery gauges after
+``relay_publish_once`` and the hooks loop refreshed the delivery gauges after
 every iteration — four times a second idle, back to back under load — and
 the snapshot aggregates the whole retained ledger. Per iteration, that scan
 ran three times (its lane query was duplicated verbatim) and set the pace of
 publication itself, since a queue's broker window refills once per cycle.
+The relay now samples them on its own thread (``run_delivery_metrics_sampler``);
+the hooks loop still refreshes on the cadence below.
 """
 
 from __future__ import annotations
@@ -120,3 +122,61 @@ def test_lane_backlog_is_one_scan_over_open_and_recent_rows():
     ]
     assert snapshot["lane_backlog"]["sync"]["pending"] == 1
     assert snapshot["lane_backlog"]["sync"]["throughput_per_second"] == 0.01
+
+
+# ── The relay samples its gauges off the publish loop ─────────────────────────
+
+
+def test_a_relay_iteration_never_waits_on_the_ledger_scan():
+    """At 1M open rows the snapshot took 1.1-2.1 s, 8-11 % of the relay's wall
+    time inline (stress 2026-11-13); the iteration now only publishes."""
+    driver = AMQPDriver.__new__(AMQPDriver)
+    driver._runtime_health_cache = {}
+    driver.verify_runtime_health = lambda: None
+    driver._delivery_store = SimpleNamespace(publish_due=lambda: {"published": 3})
+    scans: list[int] = []
+    driver.refresh_delivery_metrics = lambda **_kw: scans.append(1)
+
+    assert driver.relay_publish_once() == {"published": 3}
+    assert scans == []
+
+
+def test_the_sampler_refreshes_every_cadence_and_outlives_a_failed_sample(monkeypatch):
+    driver = AMQPDriver.__new__(AMQPDriver)
+    stop = SimpleNamespace(waits=[], is_set=lambda: len(stop.waits) >= 3)
+    stop.wait = lambda seconds: stop.waits.append(seconds)
+    samples: list[bool] = []
+
+    def refresh(*, force):
+        samples.append(force)
+        if len(samples) == 1:
+            raise TimeoutError("canceling statement due to statement timeout")
+        return {}
+
+    driver.refresh_delivery_metrics = refresh
+
+    driver.run_delivery_metrics_sampler(stop)
+
+    assert samples == [True, True, True]
+    assert stop.waits == [AMQPDriver.DELIVERY_METRICS_REFRESH_SECONDS] * 3
+
+
+def test_queue_relay_runs_the_sampler_on_its_own_daemon_thread(monkeypatch):
+    import threading
+
+    from cara.commands.core.QueueRelayCommand import QueueRelayCommand
+
+    started: list[threading.Thread] = []
+    monkeypatch.setattr(threading.Thread, "start", lambda self: started.append(self))
+    driver = SimpleNamespace(run_delivery_metrics_sampler=lambda _stop: None)
+    stop = threading.Event()
+
+    QueueRelayCommand._start_sidecars(
+        QueueRelayCommand.__new__(QueueRelayCommand), driver, stop
+    )
+
+    (thread,) = started
+    assert thread.daemon
+    assert thread.name == "queue-relay-metrics"
+    assert thread._target is driver.run_delivery_metrics_sampler
+    assert thread._args == (stop,)

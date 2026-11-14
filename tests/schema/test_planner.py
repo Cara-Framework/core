@@ -117,8 +117,29 @@ def test_the_ledger_never_records_a_reverse_of_its_own_creation():
 # ── locking ─────────────────────────────────────────────────────────────────
 
 
-def test_not_null_with_default_becomes_the_three_step_recipe():
+def test_not_null_with_a_constant_default_is_one_metadata_only_add():
+    """PostgreSQL 11+ stores a non-volatile ADD COLUMN default in the catalogue:
+    no row is rewritten, so the add is additive on any table size. The old
+    add-nullable → UPDATE → SET NOT NULL recipe rewrote the whole table."""
     model = _model({"tier": _field("string", length=20, default="basic")})
+    operations, refusals, _ = plan([model], _live({}))
+
+    assert refusals == []
+    assert len(operations) == 1
+    add = operations[0]
+    assert add.kind == "add_column"
+    assert add.safety == ADDITIVE
+    assert add.forward_sql == (
+        'ALTER TABLE "product" ADD COLUMN "tier" VARCHAR(20) NOT NULL DEFAULT \'basic\''
+    )
+    assert add.reverse_sql == 'ALTER TABLE "product" DROP COLUMN "tier"'
+
+
+def test_not_null_with_backfill_from_keeps_the_three_step_recipe():
+    """Rows that need a value of their own cannot take it from a DEFAULT."""
+    model = _model(
+        {"tier": _field("string", length=20, default="basic", backfill_from="'legacy'")}
+    )
     operations, refusals, _ = plan([model], _live({}))
 
     assert refusals == []
@@ -129,16 +150,11 @@ def test_not_null_with_default_becomes_the_three_step_recipe():
     ]
     add, backfill, tighten = operations
     assert add.safety == ADDITIVE
-    # The default lands WITH the column, as its own subcommand: every writer
-    # gets it from the moment the column exists, while the existing rows stay
-    # NULL for the backfill (an ADD COLUMN ... DEFAULT would pre-fill them).
     assert add.forward_sql == (
         'ALTER TABLE "product" ADD COLUMN "tier" VARCHAR(20) NULL, '
         "ALTER COLUMN \"tier\" SET DEFAULT 'basic'"
     )
     assert backfill.safety == LOCKING
-    assert "'basic'" in backfill.forward_sql
-    # A backfill has no honest undo — the previous values are not recorded.
     assert backfill.reverse_sql is None
     assert tighten.safety == LOCKING
     assert tighten.forward_sql == 'ALTER TABLE "product" ALTER COLUMN "tier" SET NOT NULL'
@@ -626,7 +642,7 @@ def test_a_plain_index_needs_no_preflight():
 
 
 def test_the_not_null_recipes_third_step_checks_its_own_backfill():
-    model = _model({"tier": _field("string", length=20, default="basic")})
+    model = _model({"tier": _field("string", length=20, backfill_from="'basic'")})
     operations, _, _ = plan([model], _live({}))
     tighten = next(op for op in operations if op.kind == "set_not_null")
     assert tighten.preflight_sql is not None

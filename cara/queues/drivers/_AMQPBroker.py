@@ -363,9 +363,11 @@ def _amqp_broker_discard_thread_connection(self) -> None:
     """Drop the thread-local connection without returning it to
     the pool. Used after a publish error."""
     conn, chan = self.connection, self.channel
+    confirms = getattr(self._tls, "confirm_batch", None)
     self.connection = None
     self.channel = None
-    for handle in (chan, conn):
+    self._tls.confirm_batch = None
+    for handle in (confirms, chan, conn):
         try:
             if handle is not None:
                 handle.close()

@@ -90,8 +90,9 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
     DEFAULT_RETRY_BACKOFF_SECONDS = _RETRY_DEFAULT_BACKOFF_SECONDS
     DEFAULT_RETRY_JITTER_FRACTION = _RETRY_DEFAULT_JITTER_FRACTION
 
-    #: Cadence of the relay-owned ledger gauges (``refresh_delivery_metrics``):
-    #: a scrape-interval order of freshness, far inside the staleness alert.
+    #: Cadence of the relay-owned ledger gauges (``refresh_delivery_metrics``,
+    #: sampled off the publish loop by ``run_delivery_metrics_sampler``): a
+    #: scrape-interval order of freshness, far inside the staleness alert.
     DELIVERY_METRICS_REFRESH_SECONDS = 15.0
 
     def __init__(self, application, options: dict[str, Any]):
@@ -373,8 +374,9 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
 
     _apply_retry_jitter = _AMQPDelivery._amqp_delivery_apply_retry_jitter
     _create_job_record = _AMQPDelivery._amqp_delivery_create_job_record
-    _publish_registered_envelope = (
-        _AMQPDelivery._amqp_delivery_publish_registered_envelope
+    _envelope_message = _AMQPDelivery._amqp_delivery_envelope_message
+    _publish_registered_envelopes = (
+        _AMQPDelivery._amqp_delivery_publish_registered_envelopes
     )
     _register_immediate_delivery = (
         _AMQPDelivery._amqp_delivery_register_immediate_delivery
@@ -396,6 +398,9 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
     refresh_delayed_job_metrics = _AMQPDelivery._amqp_delivery_refresh_delayed_job_metrics
     refresh_delivery_metrics = _AMQPDelivery._amqp_delivery_refresh_delivery_metrics
     relay_publish_once = _AMQPDelivery._amqp_delivery_relay_publish_once
+    run_delivery_metrics_sampler = (
+        _AMQPDelivery._amqp_delivery_run_delivery_metrics_sampler
+    )
     retry_quarantined_terminal_hooks = (
         _AMQPDelivery._amqp_delivery_retry_quarantined_terminal_hooks
     )

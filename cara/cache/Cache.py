@@ -10,7 +10,9 @@ Supports Laravel-style cache tags and cache locks for distributed systems.
 from __future__ import annotations
 
 import logging
+import os
 import time as _time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -217,12 +219,28 @@ class Cache:
 
         if not callable(getattr(driver, "add", None)):
             raise RuntimeError("Cache driver does not support atomic add")
+        if not callable(getattr(driver, "forget_if", None)):
+            raise RuntimeError("Cache driver does not support atomic forget_if")
 
         # Try to claim the regen slot. ``add`` is atomic on every
         # driver in this codebase (Redis SET NX, file driver O_EXCL).
+        # The slot stores a per-call owner token and is released with the
+        # owner-fenced ``forget_if`` (same fence as CacheLock and
+        # WithoutOverlapping): a winner whose callback outlived
+        # ``stampede_lock_seconds`` must not delete the slot a peer has
+        # legitimately re-claimed, or a third caller would claim it too and
+        # the callback the slot serialises would run in parallel.
         lock_key = f"stampede:remember:{key}"
+        lock_owner = f"{os.getpid()}:{uuid.uuid4().hex}"
+
+        def release_slot() -> None:
+            try:
+                driver.forget_if(lock_key, lock_owner)
+            except Exception:
+                _logger.debug("stampede lock cleanup failed", exc_info=True)
+
         try:
-            won = driver.add(lock_key, "1", stampede_lock_seconds)
+            won = driver.add(lock_key, lock_owner, stampede_lock_seconds)
         except Exception:
             if strict:
                 raise
@@ -234,12 +252,9 @@ class Cache:
                 driver.put(key, value, ttl, strict=strict)
                 return value
             finally:
-                # Release the regen slot; another future expiry
+                # Release OUR regen slot only; another future expiry
                 # round will grab it again.
-                try:
-                    driver.forget(lock_key)
-                except Exception:
-                    _logger.debug("stampede lock cleanup failed", exc_info=True)
+                release_slot()
 
         # Lost the race — wait briefly for the winner to populate the
         # key, then re-read. The poll interval is short (50ms) but
@@ -273,7 +288,7 @@ class Cache:
             # if multiple losers race the secondary claim
             # simultaneously.
             try:
-                re_won = driver.add(lock_key, "1", stampede_lock_seconds)
+                re_won = driver.add(lock_key, lock_owner, stampede_lock_seconds)
             except Exception:
                 if strict:
                     raise
@@ -284,10 +299,7 @@ class Cache:
                     driver.put(key, value, ttl, strict=strict)
                     return value
                 finally:
-                    try:
-                        driver.forget(lock_key)
-                    except Exception:
-                        _logger.debug("stampede lock cleanup failed", exc_info=True)
+                    release_slot()
             _time.sleep(0.05)
 
         # Winner crashed AND no loser could claim the secondary slot

@@ -30,6 +30,8 @@ window this command is comfortable in.
 
 from __future__ import annotations
 
+import re
+
 from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.facades import DB
@@ -38,9 +40,21 @@ from cara.schema import (
     SCHEMA_CHANGE_LOCK,
     STATUS_APPLIED,
     STATUS_REVERSED,
+    is_validation,
+    reverse_preflight,
 )
 
 _APPLY_LOCK_TIMEOUT_MS = 5000
+
+#: Per-reverse statement budget, as ``schema:apply --statement_timeout``: the
+#: connection's own is the API's 30 s request budget, and an index rebuild or
+#: a type reverse on a real table outlives it on every re-run.
+_DEFAULT_STATEMENT_TIMEOUT_MS = 0
+
+#: The index a CONCURRENTLY reverse builds (``Objects._rebuild_index_sql``).
+_BUILT_INDEX = re.compile(
+    r"CREATE (?:UNIQUE )?INDEX CONCURRENTLY (?:IF NOT EXISTS )?(\S+) ON ", re.I
+)
 
 
 @command(
@@ -66,6 +80,13 @@ _APPLY_LOCK_TIMEOUT_MS = 5000
             "type": bool,
             "default": False,
             "is_flag": True,
+        },
+        {
+            "name": "--statement_timeout",
+            "help": "statement_timeout in milliseconds for each reverse (0 = no cap)",
+            "type": int,
+            "default": _DEFAULT_STATEMENT_TIMEOUT_MS,
+            "is_flag": False,
         },
         {
             "name": "--dry_run",
@@ -105,6 +126,15 @@ class SchemaRollbackCommand(CommandBase):
 
         self.info(f"Plan {plan_id}: {len(rows)} applied operation(s)")
 
+        # A VALIDATE has nothing to undo: the ADD it proves carries the
+        # reverse that removes the constraint. Read as "irreversible", it made
+        # every plan that adds a CHECK or a FOREIGN KEY un-rollbackable without
+        # --force, which also waves through the reverses that lose data.
+        rows = [
+            row
+            for row in rows
+            if not is_validation(row.get("kind"), row["operation_key"])
+        ]
         blocked = [
             row for row in rows if row["reverse_sql"] is None or not row["restores_data"]
         ]
@@ -120,6 +150,19 @@ class SchemaRollbackCommand(CommandBase):
                 f"{len(blocked)} operation(s) cannot be honestly reversed. Roll "
                 f"FORWARD with a new plan, or re-run with --force if you have "
                 f"confirmed nothing has written to the new shape."
+            )
+            return 1
+
+        # Every reverse that can fail on DATA is asked first. Each reverse is
+        # its own transaction, so one failing midway leaves the schema half
+        # reversed; asked up front, the rollback completes or never starts.
+        refusals = self._reverse_blockers(rows)
+        if refusals:
+            for refusal in refusals:
+                self.error(f"   {refusal}")
+            self.error(
+                f"{len(refusals)} reverse(s) would FAIL against the rows there now. "
+                "Nothing was reversed; roll FORWARD with a new plan."
             )
             return 1
 
@@ -151,6 +194,26 @@ class SchemaRollbackCommand(CommandBase):
         self.success(f"Reversed {reversed_count} operation(s) of plan {plan_id}.")
         return 0
 
+    def _reverse_blockers(self, rows: list[dict]) -> list[str]:
+        """Why each data-dependent reverse would fail now; empty when none."""
+        found: list[str] = []
+        for row in rows:
+            question = reverse_preflight(row["reverse_sql"])
+            if question is None:
+                continue
+            query, failure = question
+            try:
+                hit = DB.select(query)
+            except Exception as exc:
+                found.append(
+                    f"{row['operation_key']}: the reverse's preflight could not be "
+                    f"answered ({exc})"
+                )
+                continue
+            if hit:
+                found.append(f"{row['operation_key']}: {failure}")
+        return found
+
     # ── seams ───────────────────────────────────────────────────────────────
 
     def _latest_plan(self) -> str | None:
@@ -171,7 +234,7 @@ class SchemaRollbackCommand(CommandBase):
         """
         return (
             DB.select(
-                "SELECT operation_key, reverse_sql, restores_data "
+                "SELECT operation_key, kind, reverse_sql, restores_data "
                 f"FROM {LEDGER_TABLE} "
                 f"WHERE plan_id = %s AND status = '{STATUS_APPLIED}' "
                 "ORDER BY id DESC",
@@ -191,14 +254,55 @@ class SchemaRollbackCommand(CommandBase):
         session ``lock_timeout`` and is marked once it has succeeded.
         """
         statement = row["reverse_sql"]
+        budget = self._budget_ms()
         if "CONCURRENTLY" in statement.upper():
-            DB.statement(statement)
+            self._run_concurrently(statement, budget)
             self._mark_reversed(plan_id, row["operation_key"])
             return
         with DB.transaction():
             DB.statement(f"SET LOCAL lock_timeout = '{_APPLY_LOCK_TIMEOUT_MS}ms'")
+            DB.statement(f"SET LOCAL statement_timeout = {budget}")
             DB.statement(statement)
             self._mark_reversed(plan_id, row["operation_key"])
+
+    def _budget_ms(self) -> int:
+        option = getattr(self, "option", None)
+        value = option("statement_timeout") if callable(option) else None
+        return int(value or _DEFAULT_STATEMENT_TIMEOUT_MS)
+
+    def _run_concurrently(self, statement: str, budget: int) -> None:
+        """A CONCURRENTLY reverse, under its own budget, that must end VALID.
+
+        A rebuild cut off (by the API's 30 s budget, a lock timeout, a
+        cancel) leaves an INVALID index under the name, and the reverse's
+        ``IF NOT EXISTS`` then made the re-run a silent no-op: the ledger said
+        "reversed" over an index that serves no query. That leftover is
+        dropped first, and the build is checked VALID before it is marked.
+        The session SET is RESET whatever happens — this command runs one
+        statement at a time, so the pool hands the same connection back.
+        """
+        built = _BUILT_INDEX.match(statement.strip())
+        name = built[1] if built else None
+        if name and self._index_valid(name) is False:
+            DB.statement(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+        DB.statement(f"SET statement_timeout = {budget}")
+        try:
+            DB.statement(statement)
+        finally:
+            DB.statement("RESET statement_timeout")
+        if name and self._index_valid(name) is not True:
+            raise RuntimeError(
+                f"index {name} is not VALID after its rebuild; nothing was "
+                "marked reversed — re-run the rollback"
+            )
+
+    def _index_valid(self, name: str) -> bool | None:
+        """``pg_index.indisvalid`` of an index by name, None when it is absent."""
+        rows = DB.select(
+            "SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass(%s)",
+            [name],
+        )
+        return bool(rows[0]["valid"]) if rows else None
 
     def _mark_reversed(self, plan_id: str, operation_key: str) -> None:
         """Mark a row reversed, and with a column the fill written into it.
@@ -210,6 +314,14 @@ class SchemaRollbackCommand(CommandBase):
         DB.statement(
             f"UPDATE {LEDGER_TABLE} SET status = '{STATUS_REVERSED}', "
             "reversed_at = NOW(), updated_at = NOW() "
-            "WHERE plan_id = %s AND operation_key IN (%s, %s)",
-            [plan_id, operation_key, f"{operation_key}:backfill"],
+            "WHERE plan_id = %s AND operation_key IN (%s, %s, %s)",
+            [
+                plan_id,
+                operation_key,
+                f"{operation_key}:backfill",
+                # The VALIDATE of a constraint this reverse removed: left
+                # ``applied``, a re-apply re-attached the constraint NOT VALID
+                # and skipped proving the rows.
+                f"{operation_key}:validate",
+            ],
         )

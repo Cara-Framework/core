@@ -625,47 +625,47 @@ def orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operatio
     constraint — dropping those means dropping the constraint), anything a
     ``__indexes__`` entry creates, and the primary key itself.
 
-    Classed ``destructive`` even though no row is lost: an index is the
-    difference between a query and an outage, so removing one must be an
-    explicit decision. Its reverse fully restores it, which is why
-    ``restores_data`` stays True — the object comes back complete, unlike a
-    dropped column.
-
-    A reshape's temporary build (``cara.schema.IndexDrift``) is not an orphan
-    while its reshape is unfinished: an apply stopped between the build and
-    the swap left it, and the re-derived plan swaps it in.
-    """
+    With its live definition the drop is ``locking`` (deploy.sh gates it on a
+    hot table) and its reverse rebuilds it exactly. A UNIQUE one stays
+    ``destructive``: it is an invariant (a duplicate order import), and once a
+    duplicate lands its rebuild fails. Unread, nothing rebuilds it. A reshape's
+    unfinished temporary build (``IndexDrift``) is not an orphan."""
     declared = declared_index_names(model, table) | reshape_scaffolding(
         model, table, live
     )
     backed_by_constraint = live.constraint_indexes.get(table, set())
     present = live.indexes.get(table, set())
+    definitions = (live.index_definitions or {}).get(table, {})
 
     operations: list[Operation] = []
     for name in sorted(present - declared - backed_by_constraint):
         if name.endswith("_pkey"):
             continue
+        reverse = _rebuild_index_sql(table, name, definitions.get(name))
+        invariant = (reverse or "").startswith("CREATE UNIQUE")
         operations.append(
             Operation(
                 kind="drop_index",
                 table=table,
                 key=f"{table}:{name}",
                 forward_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
-                # Rebuilt from the catalogue's own definition, so the reverse
-                # is exact rather than a reconstruction from the model.
-                reverse_sql=None,
-                safety=DESTRUCTIVE,
+                reverse_sql=reverse,
+                safety=LOCKING if reverse and not invariant else DESTRUCTIVE,
+                restores_data=not invariant,
                 reason="index in the database that no model declares",
                 transactional=False,
-                notes=(
-                    "no reverse is recorded: an index the model does not declare "
-                    "has no declaration to rebuild it from. Capture its "
-                    "definition from pg_indexes before dropping if you may want "
-                    "it back",
-                ),
+                notes=(f"rollback rebuilds it: {reverse or 'definition unread'}",),
             )
         )
     return operations
+
+
+def _rebuild_index_sql(table: str, name: str, definition: str | None) -> str | None:
+    """``pg_indexes.indexdef`` as a CONCURRENTLY build, or None unread."""
+    head = re.match(r"CREATE (UNIQUE )?INDEX ", definition or "")
+    unique, body = (head[1] or "", definition[head.end() :]) if head else ("", "")
+    body = body or (definition and f'{name} ON "{table}" {definition}')
+    return f"CREATE {unique}INDEX CONCURRENTLY IF NOT EXISTS {body}" if body else None
 
 
 def orphaned_tables(model_tables: set[str], live: LiveSchema) -> list[str]:

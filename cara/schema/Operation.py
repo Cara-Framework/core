@@ -207,6 +207,85 @@ _CREATES_FUNCTION = re.compile(
 )
 _CREATES_EXTENSION = re.compile(r"\bCREATE\s+EXTENSION\b", re.IGNORECASE)
 
+#: Kinds that only PROVE existing rows satisfy a constraint already attached.
+#: They have no reverse because there is nothing to undo: the paired ADD (or
+#: replace) carries the reverse that removes the constraint.
+_VALIDATES = frozenset({"validate_check", "validate_foreign_key"})
+
+
+def is_validation(kind: str | None, key: str | None = None) -> bool:
+    """Whether a planned or recorded operation is a VALIDATE step."""
+    return kind in _VALIDATES or bool(key and key.endswith(":validate"))
+
+
+_SET_NOT_NULL_RE = re.compile(
+    r'^ALTER TABLE "(?P<table>\w+)" ALTER COLUMN "(?P<column>\w+)" SET NOT NULL$'
+)
+_NARROW_VARCHAR_RE = re.compile(
+    r'^ALTER TABLE "(?P<table>\w+)" ALTER COLUMN "(?P<column>\w+)" '
+    r"TYPE (?P<kind>VARCHAR|CHAR)\((?P<length>\d+)\)$"
+)
+_NARROW_TYPE_RE = re.compile(
+    r'^ALTER TABLE "(?P<table>\w+)" ALTER COLUMN "(?P<column>\w+)" '
+    r"TYPE (?P<type>INTEGER|SMALLINT|NUMERIC\((?P<precision>\d+),(?P<scale>\d+)\))$"
+)
+#: The range a narrowed integer column must still hold.
+_INTEGER_BOUNDS = {"INTEGER": 2**31, "SMALLINT": 2**15}
+
+
+def reverse_preflight(reverse_sql: str | None) -> tuple[str, str] | None:
+    """``(query, failure)`` that must return no rows for a reverse to succeed.
+
+    Rollback replays each reverse in its own transaction, so a reverse that
+    fails on data (a ``SET NOT NULL`` over a NULL written since, a varchar
+    narrowed under a longer value) stops it half done. Asked of every reverse
+    before the first one runs, the rollback either completes or never starts.
+
+    Every narrowing a widening's reverse can be is covered, not only varchar:
+    ``bigint → integer`` over an order id past 2^31, and ``numeric(14,2) →
+    numeric(12,2)`` over an amount past 10^10, fail the same way; with only
+    varchar asked, ``--force`` sent such a rollback in and it stopped halfway.
+    """
+    statement = (reverse_sql or "").strip()
+    match = _NARROW_TYPE_RE.match(statement)
+    if match:
+        table, column, kind = match["table"], match["column"], match["type"]
+        if kind in _INTEGER_BOUNDS:
+            bound = _INTEGER_BOUNDS[kind]
+            condition = f'"{column}" NOT BETWEEN {-bound} AND {bound - 1}'
+            limit = f"the {kind.lower()} range"
+        else:
+            digits = int(match["precision"]) - int(match["scale"])
+            condition = (
+                f'abs(round("{column}"::numeric, {int(match["scale"])})) '
+                f">= 10::numeric ^ {digits}"
+            )
+            limit = f"{kind.lower()} ({digits} integer digits)"
+        return (
+            f'SELECT 1 FROM "{table}" WHERE {condition} LIMIT 1',
+            f"{table}.{column} holds values outside {limit} — the reverse "
+            "narrowing would fail",
+        )
+    match = _SET_NOT_NULL_RE.match(statement)
+    if match:
+        table, column = match["table"], match["column"]
+        return (
+            f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1',
+            f"{table}.{column} has NULL rows written since the deploy — the "
+            "reverse SET NOT NULL would fail",
+        )
+    match = _NARROW_VARCHAR_RE.match(statement)
+    if match:
+        table, column, length = match["table"], match["column"], match["length"]
+        # Postgres drops only trailing SPACES past the bound, so they never fail.
+        return (
+            f'SELECT 1 FROM "{table}" WHERE length(rtrim("{column}"::text, \' \')) '
+            f"> {length} LIMIT 1",
+            f"{table}.{column} holds values longer than {length} — the reverse "
+            "narrowing would fail",
+        )
+    return None
+
 
 def _ddl_precedence(operation: Operation) -> int:
     """Dependency rank for named-DDL creates inside one safety class.
@@ -224,9 +303,16 @@ def _ddl_precedence(operation: Operation) -> int:
     a function now sorts: a ``LANGUAGE sql`` body is validated at creation and
     may read that column. A batched backfill comes after the triggers, so a
     trigger that guards the column sees every row the backfill writes.
+
+    A VALIDATE comes after the batched backfill. A model that adds a column
+    and a CHECK over it (``ai_credit_entry.period_start`` with
+    ``ai_credit_entry_spend_period_check``) fills the existing rows first;
+    validated before the fill, the CHECK refused every one of them.
     """
     if operation.kind == "add_column":
         return 0
+    if operation.kind in _VALIDATES:
+        return 5
     if operation.batch_column:
         return 4
     sql = operation.forward_sql
@@ -239,8 +325,20 @@ def _ddl_precedence(operation: Operation) -> int:
     return 2
 
 
-def sort_operations(operations: list[Operation]) -> list[Operation]:
+def sort_operations(
+    operations: list[Operation],
+    references: dict[str, set[str]] | None = None,
+) -> list[Operation]:
     """Ledger first, then safest first, then stable by table and key.
+
+    ``references`` maps a table to the tables its FOREIGN KEYs point at
+    (single-column and composite). A ``create_table`` runs the table's
+    generated migration, which declares those keys inline, so a new child
+    must be created after a new parent. Sorting creates by name alone put
+    ``auth_notice_delivery`` ahead of ``users`` and the apply died on
+    ``relation "users" does not exist`` — on every re-run, because the order
+    is derived. The creates keep their slots; only their order among
+    themselves follows the references.
 
     Ordering by safety is not cosmetic: a plan that a reviewer stops reading
     halfway through should have shown them the harmless work first and left
@@ -271,7 +369,7 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
     own class the index ran first and the apply died on ``operator class
     gin_trgm_ops does not exist``.
     """
-    return sorted(
+    ordered = sorted(
         operations,
         key=lambda op: (
             op.table != LEDGER_TABLE,
@@ -284,6 +382,42 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
             op.key,
         ),
     )
+    slots = [index for index, op in enumerate(ordered) if op.kind == "create_table"]
+    for slot, create in zip(
+        slots,
+        _referenced_first([ordered[i] for i in slots], references or {}),
+        strict=True,
+    ):
+        ordered[slot] = create
+    return ordered
+
+
+def _referenced_first(
+    creates: list[Operation], references: dict[str, set[str]]
+) -> list[Operation]:
+    """``creates`` with every referenced new table before its referrers.
+
+    Kahn's algorithm, always taking the earliest ready create so the result
+    stays the name order wherever the references allow it. A cycle among new
+    tables cannot be created by inline keys in ANY order; its members keep
+    their name order and the migration's own error names the cycle.
+    """
+    pending = list(creates)
+    created = {op.table for op in creates}
+    result: list[Operation] = []
+    while pending:
+        placed = {op.table for op in result}
+        ready = next(
+            (
+                op
+                for op in pending
+                if not ((references.get(op.table, set()) & created) - placed - {op.table})
+            ),
+            pending[0],
+        )
+        pending.remove(ready)
+        result.append(ready)
+    return result
 
 
 __all__ = [
@@ -301,6 +435,8 @@ __all__ = [
     "STATUS_APPLIED",
     "STATUS_FAILED",
     "STATUS_REVERSED",
+    "is_validation",
     "migration_to_run",
+    "reverse_preflight",
     "sort_operations",
 ]

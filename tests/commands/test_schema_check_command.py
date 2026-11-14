@@ -432,3 +432,36 @@ def test_index_diff_reports_missing_and_extra_together():
         "listing_marketplace_external_unique" in d and "MISSING" in d for d in drift
     )
     assert any("an_undeclared_index" in d and "NOT declared" in d for d in drift)
+
+
+# ── exit codes: 1 is drift and only drift ───────────────────────────────────
+
+
+def test_a_model_discovery_crash_exits_2_never_the_drift_code(monkeypatch):
+    """``schema:verify`` reads exit 1 as "the directory does not reproduce the
+    models"; a discovery that died in another process's /proc said exactly
+    that about a directory that was fine."""
+    import cara.eloquent.migrations as migrations
+    import cara.eloquent.schema as schema
+
+    class _Crashing:
+        def discover_models(self):
+            raise PermissionError("/proc/4242/net")
+
+    class _Schema:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def on(self, connection):
+            return self
+
+    monkeypatch.setattr(migrations, "ModelDiscoverer", _Crashing)
+    monkeypatch.setattr(schema, "Schema", _Schema)
+    command = _cmd()
+    command.option = lambda name: None
+    said: list[str] = []
+    for level in ("info", "warning", "error", "success"):
+        monkeypatch.setattr(command, level, lambda message, **_: said.append(message))
+
+    assert command.handle() == 2, said
+    assert any("Model discovery failed" in line for line in said), said

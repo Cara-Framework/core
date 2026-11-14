@@ -406,9 +406,13 @@ def _delivery_require_ledger_schema(self, database: Any) -> None:
         "EXISTS (SELECT 1 FROM information_schema.columns "
         "WHERE table_schema = 'public' AND table_name = %s "
         "AND column_name = 'coalesce_key') AS has_coalesce_key, "
+        "EXISTS (SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = %s "
+        "AND column_name = 'lane_key') AS has_lane_key, "
         "EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' "
         "AND tablename = %s AND indexname = %s) AS has_unique_index",
         [
+            self.table,
             self.table,
             self.table,
             self.table,
@@ -429,6 +433,12 @@ def _delivery_require_ledger_schema(self, database: Any) -> None:
             "Queue delivery ledger is missing its coalesce_key column "
             "(CoalescingJob). Apply the ledger model's schema before "
             "dispatching jobs."
+        )
+    if not bool(self._row_value(unique_schema, "has_lane_key")):
+        raise QueueException(
+            "Queue delivery ledger is missing its lane_key column (the "
+            "relay's per-tenant fairness lane). Apply the ledger model's "
+            "schema before dispatching jobs."
         )
     self._ledger_schema_verified = True
 

@@ -109,6 +109,11 @@ class QueueJobDelivery(Model):
                 # no uniqueness here; the fold is refereed under an advisory
                 # lock (``_delivery_register``).
                 field.string("coalesce_key", 512).nullable(),
+                # The relay's fairness lane INSIDE one tenant (a seller's
+                # channel, ``Queueable.relay_lane``): the claim round-robins
+                # a tenant's lanes, so one channel's backlog never holds
+                # another channel's work. ``''`` is the tenant's own lane.
+                field.string("lane_key", 128).default(""),
                 field.datetime("created_at"),
                 field.datetime("updated_at"),
             )
@@ -427,30 +432,46 @@ class QueueJobDelivery(Model):
             "down": "DROP INDEX IF EXISTS queue_job_delivery_publish_due_idx",
         },
         {
-            "name": "queue_job_delivery_priority_head_idx",
+            # The relay's fair claim: a recursive skip scan finds each tenant
+            # with open rows in one (queue, priority) lane, a second one each
+            # of that tenant's ``lane_key`` lanes, then each lane's oldest due
+            # rows — index probes, never a walk of one tenant's or one
+            # channel's backlog. Central rows share the tenant key 0.
+            # CONCURRENTLY, like every index on the outbox: a locking build
+            # would stop every dispatch for the length of the build.
+            "name": "queue_job_delivery_lane_head_idx",
             "up": (
-                "CREATE INDEX IF NOT EXISTS queue_job_delivery_priority_head_idx "
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+                "queue_job_delivery_lane_head_idx "
                 "ON queue_job_delivery "
-                "(queue, priority, available_at, created_at) "
+                "(queue, priority, (COALESCE(tenant_id, 0)), lane_key, "
+                "available_at, created_at) "
                 "WHERE status = 'pending' "
                 "AND publish_status IN ('pending','processing')"
             ),
-            "down": "DROP INDEX IF EXISTS queue_job_delivery_priority_head_idx",
+            "down": "DROP INDEX CONCURRENTLY IF EXISTS queue_job_delivery_lane_head_idx",
         },
         {
-            # The relay's tenant-fair claim: a recursive skip scan finds each
-            # tenant with open rows in one (queue, priority) lane, then that
-            # tenant's oldest due row — index probes, never a walk of one
-            # tenant's backlog. Central rows share the tenant key 0.
-            "name": "queue_job_delivery_tenant_head_idx",
+            # The fair claim's ENTRY points: the tenants, then each tenant's
+            # lanes, with a DUE head in one (queue, priority) lane. The due
+            # instant (past release and publish backoff,
+            # ``_DeliveryClaim._DUE_AT`` verbatim) is a key column, so a
+            # tenant or a lane holding only future rows — a retry storm's
+            # backoffs, a debounce wave — is skipped inside the index walk,
+            # never probed by the plan's recursion (471 ms at 50k such
+            # tenants, and again 474 ms at 50k such central webhook shop
+            # lanes, perf c2 2026-11-14). CONCURRENTLY: see above.
+            "name": "queue_job_delivery_due_lane_idx",
             "up": (
-                "CREATE INDEX IF NOT EXISTS queue_job_delivery_tenant_head_idx "
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+                "queue_job_delivery_due_lane_idx "
                 "ON queue_job_delivery "
-                "(queue, priority, (COALESCE(tenant_id, 0)), available_at, created_at) "
+                "(queue, priority, (COALESCE(tenant_id, 0)), lane_key, "
+                "(GREATEST(available_at, publish_retry_at))) "
                 "WHERE status = 'pending' "
                 "AND publish_status IN ('pending','processing')"
             ),
-            "down": "DROP INDEX IF EXISTS queue_job_delivery_tenant_head_idx",
+            "down": "DROP INDEX CONCURRENTLY IF EXISTS queue_job_delivery_due_lane_idx",
         },
         {
             # The fair claim's round robin: when one queue last published a

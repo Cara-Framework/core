@@ -102,17 +102,19 @@ class _CrashDB:
             return []
         raise AssertionError(f"Unexpected SELECT: {sql}")
 
+    def advisory_xact_lock(self, *keys):
+        self.events.append("lock")
+
     def select_one(self, sql, params=None):
-        if sql.startswith("SELECT pg_advisory_xact_lock"):
-            return {"locked": None}
+        due = self.row["status"] == "pending" and self.row["publish_status"] == "pending"
         if sql.startswith("WITH RECURSIVE settings AS"):
-            if (
-                self.row["status"] == "pending"
-                and self.row["publish_status"] == "pending"
-            ):
-                # [now, aging, broker window, tenant window, urgent slots,
-                #  batch limit, queues, queues, token, lease expiry, now] —
-                #  the tenant-fair batch claim's order.
+            # The plan: the fair ranking of the due heads.
+            return {"planned": [[self.row["job_id"], "sync"]] if due else []}
+        if sql.startswith("WITH settings AS"):
+            # The reserve: [now, broker window, tenant window, urgent slots,
+            #  batch limit, queues, queues, planned ids, token, lease expiry,
+            #  now].
+            if due and self.row["job_id"] in params[7]:
                 self.row["publish_status"] = "processing"
                 self.row["publish_lease_token"] = params[8]
                 self.row["publish_lease_expires_at"] = params[9]
@@ -216,9 +218,10 @@ class _PublishingDriver:
     def __init__(self):
         self.published: list[tuple[bytes, dict]] = []
 
-    def _publish_registered_envelope(self, body, payload, *, capability):
+    def _publish_registered_envelopes(self, envelopes, *, capability):
         assert capability is not None
-        self.published.append((body, payload))
+        self.published.extend(envelopes)
+        return [None] * len(envelopes)
 
 
 class _ConfirmDeliveryRaceDB(_CrashDB):
@@ -257,13 +260,14 @@ class _ReceiptBeforeConfirmDriver(_PublishingDriver):
         self.store = None
         self.claim = None
 
-    def _publish_registered_envelope(self, body, payload, *, capability):
-        super()._publish_registered_envelope(
-            body,
-            payload,
+    def _publish_registered_envelopes(self, envelopes, *, capability):
+        outcomes = super()._publish_registered_envelopes(
+            envelopes,
             capability=capability,
         )
-        self.claim = self.store.claim_execution(body=body, payload=payload)
+        for body, payload in envelopes:
+            self.claim = self.store.claim_execution(body=body, payload=payload)
+        return outcomes
 
 
 class _RetryTrackerModel:

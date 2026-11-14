@@ -151,7 +151,7 @@ def test_publish_due_runs_the_lost_copy_pass(ready):
     )
     store.requeue_lost_broker_copies = lambda _n: calls.append("lost") or 3
     store.expire_due = lambda _n: 0
-    store._claim_publish_batch = lambda _limit: None
+    store._plan_publish = lambda _limit: []
 
     result = store.publish_due()
 

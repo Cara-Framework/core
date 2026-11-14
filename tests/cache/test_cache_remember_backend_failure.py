@@ -35,6 +35,9 @@ class _Driver:
             raise result
         return result
 
+    def forget_if(self, _key: str, _expected: Any) -> bool:
+        return True
+
     def put(
         self,
         _key: str,

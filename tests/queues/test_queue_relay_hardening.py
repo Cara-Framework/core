@@ -406,21 +406,30 @@ def test_publish_retry_release_reports_cas_loss_and_redacts_persisted_error():
 
 
 class _PriorityClaimDB:
+    """Serves the claim's two statements: a plan of one row, an empty reserve."""
+
     def __init__(self):
         self.sql = None
         self.params = None
-        self.locked = False
+        self.reserve_sql = None
+        self.reserve_params = None
+        self.lock_keys = None
 
     @contextmanager
     def transaction(self):
         yield self
 
+    def advisory_xact_lock(self, *keys):
+        self.lock_keys = list(keys)
+
     def select_one(self, sql, params):
-        if sql.startswith("SELECT pg_advisory_xact_lock"):
-            self.locked = True
-            return {"locked": None}
-        self.sql = sql
-        self.params = params
+        if sql.startswith("WITH RECURSIVE settings AS"):
+            self.sql = sql
+            self.params = params
+            return {"planned": [["job-1", "sync"]]}
+        assert self.lock_keys is not None, "the reserve runs under its lock"
+        self.reserve_sql = sql
+        self.reserve_params = params
         return None
 
 
@@ -429,19 +438,21 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     store = _store(db, delivery_priority_aging_seconds=120)
 
     assert store._claim_next_publish() is None
-    # The tenant-fair claim: a recursive skip scan over the tenants with due
-    # work, serialized by the advisory lock (no row-lock SKIP LOCKED race).
+    # The PLAN: the tenant-fair ranking, a recursive skip scan over the
+    # tenants with due work. It takes no lock and leases nothing.
     assert db.sql.startswith("WITH RECURSIVE settings AS")
-    assert db.locked
     assert "SKIP LOCKED" not in db.sql
+    assert "UPDATE" not in db.sql
     assert "tenant_keys(queue, priority, base_rank, tenant_key) AS" in db.sql
     assert (
-        "tenant_best.is_oldest DESC, tenant_best.held, "
+        "tenant_best.is_oldest DESC, tenant_best.held + tenant_best.tenant_turn, "
         "tenant_best.last_served_at NULLS FIRST" in db.sql
     )
-    # One batch: each queue's FREE window slots, one head per tenant.
-    assert "SELECT DISTINCT ON (heads.queue, heads.tenant_key)" in db.sql
-    assert "WHERE placed.queue_rank <= placed.room" in db.sql
+    # Turn-based round robin: each tenant offers up to its share of the
+    # plan, never past what its tenant window leaves the lane.
+    assert "PARTITION BY heads.queue, heads.tenant_key" in db.sql
+    assert "WHERE tenant_best.tenant_turn <= tenant_best.share" in db.sql
+    assert "LIMIT GREATEST(1, CASE WHEN settings.tenant_window <= 0" in db.sql
     assert "priority_lanes(priority, base_rank) AS (VALUES" in db.sql
     assert "('critical', 0)" in db.sql
     assert "('high', 1)" in db.sql
@@ -450,14 +461,14 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     assert "CROSS JOIN LATERAL" in db.sql
     assert "delivery.queue = eligible_queues.queue" in db.sql
     assert "delivery.priority = priority_lanes.priority" in db.sql
-    assert "UPDATE queue_job_delivery AS delivery" in db.sql
     assert db.params[1] == 120
     assert db.params[2] == 2
     assert db.params[3] == 0
     # No urgent slots unless configured: the tenant window binds every row.
     assert db.params[4] == 0
-    # A single-row claim is a batch of one.
-    assert db.params[5] == 1
+    # A single-row claim plans two candidates per queue (slack for rows a
+    # concurrent relay reserves first).
+    assert db.params[5] == 2
     assert "eligible_queues AS" in db.sql
     assert "unnest(%s::varchar[])" in db.sql
     assert db.params[6] == ["connector", "sync"]
@@ -467,6 +478,15 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     assert "WHERE eligible_queues.room > 0 OR priority_lanes.base_rank = 0" in db.sql
     assert "WHERE EXISTS" not in db.sql
     assert "status IN ('pending', 'processing')" in db.sql
+    # The RESERVE: serialized per queue (the planned queues only, never one
+    # global lock), it re-reads the window and leases in plan order.
+    assert db.lock_keys == ["queue_job_delivery:publish-window:sync"]
+    assert "WHERE reserved.queue_rank <= reserved.room" in db.reserve_sql
+    assert "UPDATE queue_job_delivery AS delivery" in db.reserve_sql
+    assert "unnest(%s::varchar[]) WITH ORDINALITY" in db.reserve_sql
+    assert db.reserve_params[4] == 1  # a single-row claim leases one row
+    assert db.reserve_params[5] == ["sync"]
+    assert db.reserve_params[7] == ["job-1"]
 
 
 def test_tenant_urgent_slots_are_off_by_default_and_bounded():
@@ -485,7 +505,7 @@ def test_tenant_urgent_slots_are_off_by_default_and_bounded():
 def test_urgent_slots_open_past_the_tenant_window_for_declared_urgent_rows_only():
     """A tenant's ``high``/``critical`` head may go past its tenant window by
     the urgent slots; its default/low heads stop at the window. The DECLARED
-    lane decides (``tenant_keys.base_rank``), never the aged tier, so a
+    lane decides (``lane_keys.base_rank``), never the aged tier, so a
     backlog that aged up cannot take the urgent slots too."""
     db = _PriorityClaimDB()
     store = _store(
@@ -501,15 +521,25 @@ def test_urgent_slots_open_past_the_tenant_window_for_declared_urgent_rows_only(
     heads_filter = db.sql.split(") AS head ", 1)[1].split("oldest AS", 1)[0]
     assert "COALESCE(outstanding.held, 0) < settings.tenant_window " in heads_filter
     assert (
-        "+ CASE WHEN tenant_keys.base_rank = 0 "
+        "+ CASE WHEN lane_keys.base_rank = 0 "
         "THEN settings.urgent_slots + settings.critical_reserve "
-        "WHEN tenant_keys.base_rank = 1 "
+        "WHEN lane_keys.base_rank = 1 "
         "THEN settings.urgent_slots ELSE 0 END" in heads_filter
     )
     # The aged tier only ORDERS heads; it never widens the window.
     assert "aging_seconds" not in heads_filter
+    # The reserve re-checks the same window by the DECLARED priority.
+    # counting the same tenant's batch rows ahead of each row.
+    assert "(CASE delivery.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 " in (
+        db.reserve_sql
+    )
+    assert (
+        "ELSE counted.ahead_bulk END) < settings.tenant_window + CASE WHEN "
+        "counted.declared_rank = 0 " in db.reserve_sql
+    )
+    assert db.reserve_params[1:4] == [2, 1, 1]
     # The broker window still bounds the whole queue, urgent or not.
-    assert "WHERE placed.queue_rank <= placed.room" in db.sql
+    assert "WHERE reserved.queue_rank <= reserved.room" in db.reserve_sql
 
 
 class _DeliveryMetricsDB:
@@ -750,15 +780,22 @@ def test_publish_outage_stops_after_one_broker_attempt():
     store.expire_due = lambda _limit: 0
     untried_row = {"job_id": "never-tried", "publish_attempts": 0}
     unclaimed = []
-    store._claim_publish_batch = lambda _limit: (
+    store._plan_publish = lambda _limit: [
+        ("publish-job-id", "sync"),
+        ("never-tried", "sync"),
+    ]
+    store._reserve_publish = lambda _planned, _limit: (
         claim_calls.append(True)
         or (
             [row, untried_row],
             "publish-token",
         )
     )
-    store._publish_to_broker = lambda *_args: (_ for _ in ()).throw(
-        ConnectionError("broker unavailable")
+    store._verified_envelope = lambda _row: (b"{}", {})
+    published = []
+    store.driver._publish_registered_envelopes = lambda envelopes, *, capability: (
+        published.append(len(envelopes))
+        or (_ for _ in ()).throw(ConnectionError("broker unavailable"))
     )
     store._release_publish = lambda *args: release_calls.append(args) or True
     store._unclaim_publish = lambda ids, token: unclaimed.append((ids, token))
@@ -766,6 +803,8 @@ def test_publish_outage_stops_after_one_broker_attempt():
     result = store.publish_due()
 
     assert len(claim_calls) == 1
+    # One batch, one broker attempt: the outage is not retried per row.
+    assert published == [2]
     assert len(release_calls) == 1
     # The row after the outage was never tried: back to the outbox, no
     # publish attempt counted against it.

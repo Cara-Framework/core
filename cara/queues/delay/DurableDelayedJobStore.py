@@ -12,7 +12,7 @@ import pendulum
 from cara.exceptions import QueueException
 from cara.observability import MetricsBase, Trace
 from cara.queues.contracts import CoalescingJob, UniqueJob
-from cara.queues.delivery import QueueJobDeliveryStore
+from cara.queues.delivery import QueueJobDeliveryStore, relay_lane_of
 from cara.queues.serializers import SignedJsonJobSerializer
 
 _logger = logging.getLogger("cara.queues.delay")
@@ -175,6 +175,7 @@ class DurableDelayedJobStore:
                 coalesce_key=(
                     job.coalesce_id() if isinstance(job, CoalescingJob) else None
                 ),
+                lane_key=relay_lane_of(job),
             )
             database.statement(
                 "UPDATE job SET status = %s, available_at = %s, attempts = %s, "

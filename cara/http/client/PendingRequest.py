@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import random
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -70,30 +72,64 @@ class PendingRequest:
     async def delete(self, url: str, **kwargs: Any) -> httpx.Response:
         return await self._send("DELETE", url, **kwargs)
 
+    def _replay_safe(self, method: str, kwargs: dict[str, Any]) -> bool:
+        """True when sending this request twice cannot double its effect.
+
+        RFC 9110 §9.2.2 idempotent methods, or any request carrying an
+        idempotency key (the server dedupes the replay).
+        """
+        if method.upper() in _IDEMPOTENT_METHODS:
+            return True
+        # httpx.Headers accepts every shape httpx does (dict, list of pairs,
+        # Headers) and lower-cases names; iterating a list of pairs raw would
+        # miss the key and refuse a safe retry.
+        headers = httpx.Headers(self._headers)
+        headers.update(httpx.Headers(kwargs.get("headers") or {}))
+        return any(headers.get(name) for name in _IDEMPOTENCY_KEY_HEADERS)
+
+    def _should_retry_status(self, response: httpx.Response, replay_safe: bool) -> bool:
+        """Whether a status answer may be re-sent.
+
+        A 5xx after a POST/PATCH is ambiguous — the server may already have
+        created the listing or captured the refund — so only replay-safe
+        requests retry it (urllib3 ``Retry.allowed_methods`` norm). A 429
+        carrying ``Retry-After`` is an explicit "not processed" refusal and
+        retries for every method.
+        """
+        if response.status_code not in self._retry_on_status:
+            return False
+        if replay_safe:
+            return True
+        return response.status_code == 429 and _retry_after_seconds(response) is not None
+
+    def _backoff_delay(self, attempt: int) -> float:
+        delay = self._backoff_base**attempt
+        return delay * (1.0 + random.uniform(-self._backoff_jitter, self._backoff_jitter))
+
     async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         full_url = f"{self._base_url}/{url.lstrip('/')}" if self._base_url else url
-        last_exc: Exception | None = None
+        replay_safe = self._replay_safe(method, kwargs)
+        # Delay before the next attempt: the server's Retry-After when it named
+        # one (it replaces backoff, it is not added to it), else exponential
+        # backoff. Faked retries never sleep so retry-ladder tests stay instant.
+        retry_after: float | None = None
 
         for attempt in range(self._retries + 1):
             if attempt > 0 and HttpFake.current() is None:
-                # Real transport only — faked retries stay instant so a
-                # test exercising the retry ladder doesn't sleep.
-                delay = self._backoff_base**attempt
-                delay *= 1.0 + random.uniform(-self._backoff_jitter, self._backoff_jitter)
+                delay = (
+                    retry_after
+                    if retry_after is not None
+                    else self._backoff_delay(attempt)
+                )
                 await asyncio.sleep(delay)
+            retry_after = None
 
             fake = HttpFake.current()
             if fake is not None:
                 response = fake.resolve(method, full_url, kwargs)
-                if (
-                    response.status_code in self._retry_on_status
-                    and attempt < self._retries
+                if attempt < self._retries and self._should_retry_status(
+                    response, replay_safe
                 ):
-                    last_exc = httpx.HTTPStatusError(
-                        f"{response.status_code}",
-                        request=response.request,
-                        response=response,
-                    )
                     continue
                 return response
 
@@ -104,32 +140,58 @@ class PendingRequest:
                     http2=True,
                 ) as client:
                     response = await client.request(method, full_url, **kwargs)
-
-                if (
-                    response.status_code in self._retry_on_status
-                    and attempt < self._retries
-                ):
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        await asyncio.sleep(min(int(retry_after), 60))
-                    last_exc = httpx.HTTPStatusError(
-                        f"{response.status_code}",
-                        request=response.request,
-                        response=response,
-                    )
-                    continue
-
-                return response
-
-            except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
-                last_exc = exc
+            except _NEVER_SENT_ERRORS as exc:
+                # The request never reached the server: safe to resend any method.
                 if attempt >= self._retries:
                     raise
-                from cara.facades import Log  # local: cycle with cara.facades
+                _log_retry(full_url, attempt, exc)
+                continue
+            except _AMBIGUOUS_ERRORS as exc:
+                # Bytes may have reached the server: only replay-safe requests resend.
+                if attempt >= self._retries or not replay_safe:
+                    raise
+                _log_retry(full_url, attempt, exc)
+                continue
 
-                Log.debug(
-                    "http.retry",
-                    context={"url": full_url, "attempt": attempt + 1, "error": str(exc)},
-                )
+            if attempt < self._retries and self._should_retry_status(
+                response, replay_safe
+            ):
+                retry_after = _retry_after_seconds(response)
+                continue
+            return response
 
-        raise last_exc  # type: ignore[misc]
+        raise AssertionError("unreachable: the final attempt always returns or raises")
+
+
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE"})
+_IDEMPOTENCY_KEY_HEADERS = frozenset({"idempotency-key", "x-idempotency-key"})
+# ConnectTimeout/PoolTimeout subclass TimeoutException, so this tuple is
+# matched first: a connect or pool wait failure means nothing was sent.
+_NEVER_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+_AMBIGUOUS_ERRORS = (httpx.TimeoutException, httpx.ReadError)
+_RETRY_AFTER_CAP_SECONDS = 60.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Parse ``Retry-After`` (delta-seconds or HTTP-date), capped; None if absent/invalid."""
+    raw = (response.headers.get("Retry-After") or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return min(float(raw), _RETRY_AFTER_CAP_SECONDS)
+    try:
+        when = parsedate_to_datetime(raw)
+    except TypeError, ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    seconds = (when - datetime.now(UTC)).total_seconds()
+    return min(max(seconds, 0.0), _RETRY_AFTER_CAP_SECONDS)
+
+
+def _log_retry(url: str, attempt: int, exc: Exception) -> None:
+    from cara.facades import Log  # local: cycle with cara.facades
+
+    Log.debug(
+        "http.retry", context={"url": url, "attempt": attempt + 1, "error": str(exc)}
+    )

@@ -78,8 +78,13 @@ from cara.schema import (
     normalize_declared_indexes,
     plan,
     plan_id,
+    probe_reshapes,
+    read_named_ddl,
 )
 from cara.support import base_path
+
+#: Operations that create a relation or a column a later preflight may read.
+_RESHAPES = frozenset({"create_table", "add_column", "rename_column"})
 
 
 @command(
@@ -179,12 +184,25 @@ class SchemaPlanCommand(CommandBase):
                 ):
                     self.info("      … preflight runs at apply, after the backfill above")
                 elif operation.preflight_sql:
-                    blocker = self._preflight(operation)
+                    blocker, error = self._preflight(operation)
                     if blocker:
                         blocked.append(blocker)
                         self.error(f"      ✗ {blocker}")
-                    else:
+                    elif error is None:
                         self.info("      ✓ preflight clear")
+                    elif self._reshaped_earlier(operation, operations):
+                        self.warning(
+                            "      … preflight cannot be asked yet (an operation "
+                            "above reshapes what it reads); schema:apply asks it "
+                            "right before this step and stops there if it fails"
+                        )
+                    else:
+                        unanswered = (
+                            f"{operation.key}: the preflight could not be answered "
+                            f"({error}) — nothing proves the rows allow this step"
+                        )
+                        blocked.append(unanswered)
+                        self.error(f"      ✗ {unanswered}")
                 if self.option("sql"):
                     self.info(f"      → {operation.forward_sql}")
                     if operation.reverse_sql:
@@ -292,10 +310,13 @@ class SchemaPlanCommand(CommandBase):
 
         # A clone has the deployed shape and no ledger, so it cannot owe a
         # fill; left in, its own derivation would disagree with this artifact.
+        # Nor a switched-off FOREIGN KEY: pg_dump recreates the key with fresh,
+        # enabled triggers, so the clone derives no enforce_foreign_key.
         operations = [
             op
             for op in operations
-            if not (
+            if op.kind != "enforce_foreign_key"
+            and not (
                 op.batch_column
                 and op.key.removesuffix(":backfill") in self._owed_backfills
             )
@@ -357,14 +378,36 @@ class SchemaPlanCommand(CommandBase):
             and operation.key.removesuffix(":not_null") in backfilled
         )
 
-    def _preflight(self, operation) -> str | None:
-        """Answer the operation's data question against the live database."""
+    @staticmethod
+    def _reshaped_earlier(operation, operations) -> bool:
+        """Whether an operation ordered before this one changes a relation
+        its preflight reads — the one honest reason a preflight cannot be
+        answered before the plan runs."""
+        sql = operation.preflight_sql or ""
+        for earlier in operations[: operations.index(operation)]:
+            if earlier.kind not in _RESHAPES:
+                continue
+            if earlier.table == operation.table or f'"{earlier.table}"' in sql:
+                return True
+        return False
+
+    def _preflight(self, operation) -> tuple[str | None, str | None]:
+        """``(blocker, error)``: the data question asked of the live database.
+
+        An error is NOT a clear answer. It used to be read as one: a VALIDATE
+        whose query named a column step 1 of the same plan adds printed
+        "preflight clear", and the reviewed plan then stopped halfway on the
+        rows it was certain to refuse (perf-scale c1, 2026-11-14). The caller
+        decides whether the question is deferred to apply or blocks the plan.
+        """
 
         try:
             rows = DB.select(operation.preflight_sql)
-        except Exception:
-            return None
-        return operation.preflight_failure if rows else None
+        except Exception as exc:
+            return None, str(exc).strip().splitlines()[0] if str(exc).strip() else repr(
+                exc
+            )
+        return (operation.preflight_failure if rows else None), None
 
     def derive(self):
         """The (operations, refusals, notices) triple for this connection.
@@ -397,9 +440,17 @@ class SchemaPlanCommand(CommandBase):
             ) from exc
         # The model's CHECKs in the server's spelling, so a CHECK whose body
         # changed under an unchanged name is planned (``changed_checks``).
+        # Spelled on the POST-plan columns, so a CHECK over a column this plan
+        # renames or adds is compared rather than skipped.
         live = normalize_declared_checks(
-            live_schema, live, declared_checks_by_table(models), schema_name
+            live_schema,
+            live,
+            declared_checks_by_table(models),
+            schema_name,
+            probe_reshapes(models, live),
         )
+        # Trigger and function bodies, not only their names.
+        live = read_named_ddl(live_schema, live, models, schema_name)
         # Same for indexes: one whose definition changed under an unchanged
         # name is reshaped (``cara.schema.IndexDrift``).
         live = normalize_declared_indexes(

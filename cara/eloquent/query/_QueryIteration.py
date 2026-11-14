@@ -3,24 +3,100 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import Any, Self
 
+from cara.eloquent.expressions import QueryExpression, SubGroupExpression
 from cara.exceptions import (
     InvalidArgumentException,
     QueryException,
 )
 
 from ..casts.DateTimeCast import DateTimeCast
+from ._QueryAggregation import _joins_with_or
 from ._QuerySafety import ORDER_BY_COLUMN_RE as _ORDER_BY_COLUMN_RE
 
 _logger = logging.getLogger("cara.eloquent.query")
+_PLAIN_COLUMN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 QueryBuilder: type
 
 
 def _bind_query_builder(builder_type: type) -> None:
     global QueryBuilder
     QueryBuilder = builder_type
+
+
+def _group_wheres(builder) -> None:
+    """Wrap OR-joined wheres in one group before another predicate is ANDed on.
+
+    AND binds tighter than OR: ``a OR b AND id > ?`` reads as
+    ``a OR (b AND id > ?)``, so a keyset cursor never advanced past the rows
+    matching ``a`` and ``chunk_by_id`` looped over them forever.
+    """
+    if any(_joins_with_or(where) for where in builder._wheres[1:]):
+        group = builder.new()
+        group._wheres = builder._wheres
+        builder._wheres = (QueryExpression(None, "=", SubGroupExpression(group)),)
+
+
+def _ensure_stable_order(builder) -> None:
+    """Order an OFFSET-paged builder by its primary key when it has no order.
+
+    Without ORDER BY the database may return rows in a different order on
+    every page, so ``chunk``/``lazy``/``cursor`` skipped some rows and
+    yielded others twice. Laravel's ``chunk`` enforces the key order the
+    same way. DECISION: a table builder (no model) orders by ``id``, the
+    framework-wide key name; a table without one fails loudly instead of
+    paging in an undefined order. A keyless model must order explicitly.
+    """
+    if builder._order_by:
+        return
+    key = builder._model.get_primary_key() if builder._model else "id"
+    if not isinstance(key, str) or not key:
+        raise QueryException(
+            "chunk()/lazy()/cursor() page with LIMIT/OFFSET and need a stable "
+            "order: call order_by() on a model without a single-column key."
+        )
+    if builder._joins:
+        key = f"{builder.get_table_name()}.{key}"
+    builder.order_by(key, "asc")
+
+
+def _validate_key_column(method: str, column: Any) -> None:
+    if not isinstance(column, str) or not _ORDER_BY_COLUMN_RE.fullmatch(column):
+        raise InvalidArgumentException(
+            f"{method}: invalid column name {column!r}. Allowed: "
+            f"``[A-Za-z_][A-Za-z0-9_]*`` optionally with a single "
+            f"``.<col>`` qualifier (table.column).",
+        )
+
+
+def _keyset_page(self, column: str, last_id: Any, chunk_size: int):
+    """One keyset page: the caller's wheres grouped, then ``column > last_id``.
+
+    The caller's own orders are REPLACED by the key order: a ``name`` order
+    ahead of ``id`` made ``id > last_id`` page through a different sequence
+    than the cursor assumed, revisiting rows forever.
+    """
+    builder = self.clone()
+    if last_id is not None:
+        _group_wheres(builder)
+        builder.where(column, ">", last_id)
+    builder._order_by = ()
+    return builder.order_by(column, "asc").limit(chunk_size).get()
+
+
+def _record_key(record: Any, column: str) -> Any:
+    """The key value of a result row, read by the unqualified column name.
+
+    A row exposes ``id``, never ``item.id``: reading the qualified name
+    answered ``None`` and the walk stopped after its first chunk.
+    """
+    name = column.rsplit(".", 1)[-1]
+    if isinstance(record, dict):
+        return record.get(name)
+    return getattr(record, name, None)
 
 
 def _qb_chunk(self, chunk_size: int, callback: Callable):
@@ -42,11 +118,16 @@ def _qb_chunk(self, chunk_size: int, callback: Callable):
                 record.update({'processed': True})
 
         Model.active().chunk(200, process)
+
+    Pages are ordered by the primary key unless the builder has its own
+    order (see ``_ensure_stable_order``). Use ``chunk_by_id`` when the
+    callback changes the rows it filters on.
     """
     page = 1
     while True:
         offset = (page - 1) * chunk_size
         builder = self.clone()
+        _ensure_stable_order(builder)
         results = builder.limit(chunk_size).offset(offset).get()
 
         if not results or (hasattr(results, "is_empty") and results.is_empty()):
@@ -196,46 +277,122 @@ def _qb_bulk_update(
     Returns:
         Number of affected rows
 
+    A record that does not name a column leaves that column as stored; an
+    explicit ``None`` writes NULL. The builder's wheres and its ``update``
+    global scopes (tenant scope included) bound the write, model casts apply
+    and ``updated_at`` is stamped, like every other builder write.
+
     Example:
         Model.bulk_update([
             {"id": 1, "price": 9.99, "status": "active"},
             {"id": 2, "price": 19.99, "status": "inactive"},
         ], key="id", update_columns=["price", "status"])
     """
+    # ROOT CAUSE: this hand-built UPDATE bound a missing key as NULL (a
+    # partial record erased the stored value) and never compiled the
+    # builder's wheres or scopes, so ``where("tenant_id", 1)`` — and the
+    # tenant scope — were dropped and another tenant's row with the same
+    # id was rewritten.
     if not records:
         return 0
+    if not isinstance(key, str) or not _PLAIN_COLUMN_RE.fullmatch(key):
+        raise InvalidArgumentException(f"bulk_update: invalid key column {key!r}.")
 
-    # Determine columns to update
+    rows = [dict(record) for record in records]
+    seen: set[Any] = set()
+    for index, row in enumerate(rows):
+        if row.get(key) is None:
+            raise QueryException(f"bulk_update() record {index} has no {key!r}.")
+        if row[key] in seen:
+            # Two VALUES rows joining one target row: PostgreSQL applies an
+            # arbitrary one. Refuse instead of guessing which value wins.
+            raise QueryException(
+                f"bulk_update() records repeat {key}={row[key]!r}; "
+                "send one record per row."
+            )
+        seen.add(row[key])
+
     if update_columns is None:
-        update_columns = [k for k in records[0] if k != key]
-
-    if not update_columns:
+        columns = [c for c in dict.fromkeys(c for row in rows for c in row) if c != key]
+    else:
+        columns = [c for c in dict.fromkeys(update_columns) if c != key]
+    for column in columns:
+        if not isinstance(column, str) or not _PLAIN_COLUMN_RE.fullmatch(column):
+            raise InvalidArgumentException(f"bulk_update: invalid column {column!r}.")
+    if not columns:
         return 0
 
-    # Build VALUES clause
-    all_columns = [key] + update_columns
-    placeholders = []
-    bindings = []
-    for record in records:
-        row_placeholders = []
-        for col in all_columns:
-            bindings.append(record.get(col))
-            row_placeholders.append("%s")
-        placeholders.append(f"({', '.join(row_placeholders)})")
+    model = self._model
+    if model:
+        for row in rows:
+            row.update(
+                model.cast_values(
+                    {c: row[c] for c in columns if c in row and row[c] is not None}
+                )
+            )
 
-    values_clause = ", ".join(placeholders)
-    col_defs = ", ".join(f'"{c}"' for c in all_columns)
-    set_clause = ", ".join(f'"{c}" = _bulk."{c}"' for c in update_columns)
-    table = self._table.name if hasattr(self._table, "name") else str(self._table)
+    builder = self.clone()
+    builder._updates = ()
+    builder.set_action("update")
+    builder.run_scopes()
+    grammar = builder.get_grammar()
+    where_sql = grammar.process_wheres(qmark=True, strip_first_where=True).strip()
+    where_bindings = list(grammar._bindings)
+    target = grammar.process_table(grammar.table)
 
-    sql = f'''
-        UPDATE "{table}" SET {set_clause}
-        FROM (VALUES {values_clause}) AS _bulk({col_defs})
-        WHERE "{table}"."{key}" = _bulk."{key}"
-    '''
+    bindings: list[Any] = []
+    sets: list[str] = []
+    partial = [c for c in columns if any(c not in row for row in rows)]
+    flags = {c: f"__set_{i}" for i, c in enumerate(partial)}
+    for column in columns:
+        if column in flags:
+            sets.append(
+                f'"{column}" = CASE WHEN _bulk."{flags[column]}" '
+                f'THEN _bulk."{column}" ELSE {target}."{column}" END'
+            )
+        else:
+            sets.append(f'"{column}" = _bulk."{column}"')
+    if (
+        model
+        and getattr(model, "__timestamps__", False)
+        and model.date_updated_at not in columns
+    ):
+        sets.append(f"\"{model.date_updated_at}\" = '?'")
+        bindings.append(DateTimeCast.sql_instant(model.get_new_date()))
 
-    connection = self.new_connection()
-    return connection.query(sql, tuple(bindings))
+    # ROOT CAUSE: a VALUES list types each column from its own literals, and
+    # an untyped string or NULL resolves to ``text``. A cast datetime (the
+    # cast renders a string), or a ``None`` meant to clear a price, then
+    # failed with "column is of type numeric but expression is of type text"
+    # or "CASE types numeric and text cannot be matched". A first, never
+    # matching row of the target's own (empty) column subqueries gives every
+    # VALUES column the stored column's type; its NULL key joins no row.
+    tuples = [
+        "("
+        + ", ".join(
+            [
+                *(f'(SELECT "{c}" FROM {target} LIMIT 0)' for c in (key, *columns)),
+                *("NULL::boolean" for _ in partial),
+            ]
+        )
+        + ")"
+    ]
+    for row in rows:
+        values = [row[key], *(row.get(c) for c in columns), *(c in row for c in partial)]
+        bindings.extend(values)
+        tuples.append("(" + ", ".join(["'?'"] * len(values)) + ")")
+    value_columns = ", ".join(f'"{c}"' for c in (key, *columns, *flags.values()))
+
+    sql = (
+        f"UPDATE {target} SET {', '.join(sets)} "
+        f"FROM (VALUES {', '.join(tuples)}) AS _bulk({value_columns}) "
+        f'WHERE {target}."{key}" = _bulk."{key}"'
+    )
+    if where_sql:
+        sql += f" AND ({where_sql})"
+        bindings.extend(where_bindings)
+
+    return self.new_connection().query(sql, tuple(bindings))
 
 
 def _qb_cursor(self, chunk_size: int = 1000):
@@ -291,6 +448,7 @@ def _qb_cursor(self, chunk_size: int = 1000):
     while cap is None or offset < cap:
         size = chunk_size if cap is None else min(chunk_size, cap - offset)
         chunk_builder = self.clone()
+        _ensure_stable_order(chunk_builder)
         chunk_builder._limit = size
         chunk_builder._offset = base + offset
 
@@ -340,31 +498,12 @@ def _qb_chunk_by_id(self, chunk_size: int, callback: Callable, column: str = "id
     ``WHERE column > last_id`` cursor instead of ``OFFSET`` (which can skip
     rows when records are deleted mid-iteration).
     """
-    # Upfront column validation — same ``_ORDER_BY_COLUMN_RE``
-    # gate that ``order_by`` applies, but enforced HERE so a
-    # caller passing a bad column name fails fast at the entry
-    # point instead of after the WHERE clause has already been
-    # queued onto a clone. Pre-fix the validation lived only
-    # inside ``order_by`` (line ~3735), which meant ``where``
-    # (line ~3733) accepted the column without checking; an
-    # attacker-shaped ``"id; DROP TABLE x"`` never actually
-    # reached the DB (order_by raised first, killing the query)
-    # but the failure surfaced in the wrong place and the WHERE
-    # quirk was a foot-gun waiting for the next refactor to
-    # swap the order. ``re.fullmatch`` (not ``match``) so a
-    # trailing ``;`` doesn't slip past.
-    if not isinstance(column, str) or not _ORDER_BY_COLUMN_RE.fullmatch(column):
-        raise InvalidArgumentException(
-            f"chunk_by_id: invalid column name {column!r}. Allowed: "
-            f"``[A-Za-z_][A-Za-z0-9_]*`` optionally with a single "
-            f"``.<col>`` qualifier (table.column).",
-        )
+    # Validated at the entry point (``re.fullmatch``, so a trailing ``;``
+    # cannot slip past) before the column reaches ``where`` or ``order_by``.
+    _validate_key_column("chunk_by_id", column)
     last_id = None
     while True:
-        builder = self.clone()
-        if last_id is not None:
-            builder = builder.where(column, ">", last_id)
-        results = builder.order_by(column, "asc").limit(chunk_size).get()
+        results = _keyset_page(self, column, last_id, chunk_size)
 
         if not results or (hasattr(results, "is_empty") and results.is_empty()):
             break
@@ -376,11 +515,7 @@ def _qb_chunk_by_id(self, chunk_size: int, callback: Callable, column: str = "id
         last_record = results[-1] if hasattr(results, "__getitem__") else None
         if last_record is None:
             break
-        last_id = (
-            getattr(last_record, column, None)
-            if not isinstance(last_record, dict)
-            else last_record.get(column)
-        )
+        last_id = _record_key(last_record, column)
         if last_id is None:
             break
 
@@ -400,6 +535,7 @@ def _qb_lazy(self, chunk_size: int = 1000):
     while True:
         offset = (page - 1) * chunk_size
         builder = self.clone()
+        _ensure_stable_order(builder)
         results = builder.limit(chunk_size).offset(offset).get()
         if not results or (hasattr(results, "is_empty") and results.is_empty()):
             break
@@ -415,12 +551,10 @@ def _qb_lazy_by_id(self, chunk_size: int = 1000, column: str = "id"):
 
     Same safety properties as ``chunk_by_id`` but exposed as a generator.
     """
+    _validate_key_column("lazy_by_id", column)
     last_id = None
     while True:
-        builder = self.clone()
-        if last_id is not None:
-            builder = builder.where(column, ">", last_id)
-        results = builder.order_by(column, "asc").limit(chunk_size).get()
+        results = _keyset_page(self, column, last_id, chunk_size)
         if not results or (hasattr(results, "is_empty") and results.is_empty()):
             break
         count = 0
@@ -431,10 +565,6 @@ def _qb_lazy_by_id(self, chunk_size: int = 1000, column: str = "id"):
             count += 1
         if last_record is None:
             break
-        last_id = (
-            getattr(last_record, column, None)
-            if not isinstance(last_record, dict)
-            else last_record.get(column)
-        )
+        last_id = _record_key(last_record, column)
         if last_id is None or count < chunk_size:
             break
