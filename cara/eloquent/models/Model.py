@@ -100,6 +100,11 @@ class Model(
     # Attribute casting and dates
     __casts__: dict[str, str | type] = {}
     __dates__: list[str] = []
+    # Encrypted columns bound to their row: ``{"column": ("tenant_id", "public_id")}``.
+    # The named fields join the AEAD associated data, so the ciphertext only
+    # opens on the row (and tenant) it was sealed for. Use fields known before
+    # INSERT (a serial ``id`` is not); they must never change after sealing.
+    __seal_context__: dict[str, tuple[str, ...]] = {}
 
     # Timestamps
     __timestamps__: bool = True
@@ -412,6 +417,8 @@ class Model(
     all_attributes = _ModelData._model_all_attributes
     delete_attribute = _ModelData._model_delete_attribute
     get_cast_map = _ModelData._model_get_cast_map
+    seal_context = classmethod(_ModelData._model_seal_context)
+    _seal_row = _ModelData._model_seal_row
     _cast_attribute = _ModelData._model_cast_attribute
     __getitem__ = _ModelData._model_getitem
     get_dates = _ModelData._model_get_dates

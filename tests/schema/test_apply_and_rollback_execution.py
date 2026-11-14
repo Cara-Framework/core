@@ -103,8 +103,10 @@ def test_the_lock_timeout_binds_to_the_statement_it_guards(monkeypatch):
 
 def test_a_concurrently_build_runs_outside_any_transaction(monkeypatch):
     """Postgres refuses CONCURRENTLY inside a transaction. Its statement budget
-    is a session SET, so it is RESET before the pooled connection serves
-    anything else — the ledger write included."""
+    and its lifted lock timeout (it waits out older transactions, blocking no
+    writer: cycle 3, 2026-11-14) are session SETs, so both are RESET before
+    the pooled connection serves anything else — the ledger write included.
+    The plan's own (writer-guarding) lock timeout never applies to it."""
     db = _DB()
     _install(monkeypatch, _APPLY_MODULE, db)
     command = _APPLY_MODULE.SchemaApplyCommand.__new__(_APPLY_MODULE.SchemaApplyCommand)
@@ -112,10 +114,12 @@ def test_a_concurrently_build_runs_outside_any_transaction(monkeypatch):
     command._execute("plan123", _operation(transactional=False), 2500)
 
     assert all(depth == 0 for depth, _ in db.calls)
-    assert not any("lock_timeout" in sql for _, sql in db.calls)
+    assert not any("2500" in sql for _, sql in db.calls)
     assert [sql.split(" ")[0:2] for _, sql in db.calls] == [
         ["SET", "statement_timeout"],
+        ["SET", "lock_timeout"],
         ["CREATE", "INDEX"],
+        ["RESET", "lock_timeout"],
         ["RESET", "statement_timeout"],
         ["INSERT", "INTO"],
     ]

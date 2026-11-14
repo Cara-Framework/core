@@ -317,6 +317,7 @@ class JobProcessor:
                 "attempts": next_attempt,
                 "throttle_attempts": next_throttle,
                 "_otel": msg.get("_otel") or {},
+                "_ambient": msg.get("_ambient") or {},
                 "db_job_id": msg.get("db_job_id"),
                 "source_delivery_job_id": msg.get("job_id"),
                 "source_delivery_lease_token": delivery_lease_token,

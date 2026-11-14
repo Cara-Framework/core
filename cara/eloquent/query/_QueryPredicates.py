@@ -127,6 +127,9 @@ def _qb_create(
     self.set_action("insert")
     model = None
     self._creates = creates if creates else kwargs
+    # Sealed columns bind to identity a ``creating`` observer may still stamp
+    # (``public_id``): hold their plaintext out until the row is complete.
+    unsealed: dict[str, Any] = {}
 
     if self._model:
         model = self._model
@@ -137,9 +140,15 @@ def _qb_create(
             self._creates = model.filter_mass_assignment(self._creates)
         # Cast values if necessary
         if cast:
+            sealed = getattr(model, "__seal_context__", None) or {}
+            unsealed = {
+                k: self._creates.pop(k) for k in list(self._creates) if k in sealed
+            }
             self._creates = model.cast_values(self._creates)
 
     if query:
+        for key, value in unsealed.items():
+            self._creates[key] = model.cast_value(key, value, self._creates)
         return self
 
     if model:
@@ -148,6 +157,8 @@ def _qb_create(
 
         # if attributes were modified during model observer then we need to update the creates here
         self._creates.update(model.get_dirty_attributes())
+        for key, value in unsealed.items():
+            self._creates[key] = model.cast_value(key, value, self._creates)
 
     if not self.dry:
         connection = self.new_connection()

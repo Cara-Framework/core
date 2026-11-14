@@ -60,6 +60,10 @@ class ControllerActionMapper:
         ``response.paginated(...)`` forces list framing. A comprehension's rows
         that are only a PART of the data (``{"sent": [...], "refused": n}``)
         say nothing about the data's own shape, so they do not map the action.
+        Nor does a resource that is one KEY's value of a dict literal
+        (``{"operation": id, "approval": Resource(a).to_dict()}``): the data is
+        the dict, not that resource (a ``**Resource(x).to_dict()`` spread is
+        the data's own shape and still maps it).
         """
         declared = self._declared_resource(functions[0])
         if declared is not None:
@@ -73,6 +77,7 @@ class ControllerActionMapper:
 
         for fn in functions:
             rows = {id(call) for call in self._comprehension_rows(fn)}
+            parts = {id(call) for call in self._dict_value_parts(fn)}
             for sub in ast.walk(fn):
                 if not isinstance(sub, ast.Call):
                     continue
@@ -104,7 +109,7 @@ class ControllerActionMapper:
                 if isinstance(func, ast.Name) and func.id in self._known:
                     if id(sub) in rows:
                         row_resource = func.id
-                    else:
+                    elif id(sub) not in parts:
                         single_resource = func.id
 
         if list_resource is not None:
@@ -116,6 +121,20 @@ class ControllerActionMapper:
         if row_resource is not None and paginated:
             return (row_resource, True)
         return None
+
+    def _dict_value_parts(self, fn: ast.AST) -> list[ast.Call]:
+        """Every ``Resource(...)`` built as a keyed value of a dict literal."""
+        return [
+            call
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Dict)
+            for key, value in zip(node.keys, node.values, strict=True)
+            if key is not None
+            for call in ast.walk(value)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id in self._known
+        ]
 
     def _comprehension_rows(self, fn: ast.AST) -> list[ast.Call]:
         """Every ``Resource(...)`` a list comprehension builds once per row."""

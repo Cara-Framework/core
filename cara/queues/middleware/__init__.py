@@ -15,7 +15,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 from cara.broadcasting import drained
-from cara.context import Tenancy
+from cara.context import Ambient, Tenancy
 
 from cara._LazyExports import _install_lazy_exports
 
@@ -117,7 +117,9 @@ async def run_through_middleware_async(job, handler: Callable) -> Any:
     else:
         raise RuntimeError("Queue job has incomplete or invalid tenant metadata.")
 
-    with scope:
+    # App facts that crossed the hop beside the tenant (``Ambient``): set
+    # around the body exactly as the dispatcher held them.
+    with scope, Ambient.restored(getattr(job, "_ambient", None)):
         return await run_middleware_chain_async(job, handler)
 
 

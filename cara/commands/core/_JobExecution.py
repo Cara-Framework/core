@@ -104,6 +104,7 @@ def _stamp_dispatch_context(instance: Any, msg: dict) -> None:
     back to 1.
     """
     instance._otel_carrier = msg.get("_otel")
+    instance._ambient = msg.get("_ambient") or {}
     instance._tenant_id = msg.get("_tenant")
     instance._tenant_mode = msg.get("_tenant_mode")
     instance._dispatched_at = msg.get("dispatched_at")

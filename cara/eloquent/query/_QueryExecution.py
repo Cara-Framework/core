@@ -170,6 +170,9 @@ def _qb_update(
 
         # Cast date fields
         date_fields = model.get_dates()
+        # A sealed column binds to the row it lands on: the loaded row's
+        # identity under the new values; a model query has only the patch.
+        seal_row = {**(model._seal_row() if loaded else {}), **updates}
         for key, value in updates.items():
             if key in date_fields:
                 if value is not None:
@@ -188,7 +191,7 @@ def _qb_update(
             # would corrupt them. Leave them untouched.
             if cast and not _is_column_expression(value):
                 if value is not None:
-                    updates[key] = model.cast_value(key, value)
+                    updates[key] = model.cast_value(key, value, seal_row)
                 else:
                     updates[key] = value
     elif not updates:

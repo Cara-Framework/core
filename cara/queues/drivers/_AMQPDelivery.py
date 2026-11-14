@@ -11,7 +11,7 @@ from typing import Any
 import pendulum
 import pendulum as pendulum_module
 
-from cara.context import Tenancy
+from cara.context import Ambient, Tenancy
 from cara.observability import MetricsBase
 from cara.queues.Bus import Bus
 from cara.queues.contracts import CoalescingJob, UniqueJob
@@ -113,6 +113,11 @@ def _amqp_delivery_register_immediate_delivery(
                 raise QueueException("Non-unique jobs cannot carry uniqueness metadata.")
             payload["unique_key"] = unique_key
             payload["_otel"] = merged_opts.get("_otel") or _Trace.inject({})
+            payload["_ambient"] = (
+                merged_opts["_ambient"]
+                if "_ambient" in merged_opts
+                else Ambient.capture()
+            )
             payload.update(self._tenant_payload(job, merged_opts))
             dispatched_at = pendulum.now("UTC").to_iso8601_string()
             payload["dispatched_at"] = dispatched_at

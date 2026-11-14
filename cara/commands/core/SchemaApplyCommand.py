@@ -35,8 +35,9 @@ Three properties make it safe to run against production:
   queue behind a long transaction fails fast instead of blocking every writer
   behind it. The default is deliberately short: a deploy that cannot get the
   lock now should retry, not hold the table. A ``CONCURRENTLY`` statement
-  cannot run in a transaction and keeps the connection's configured session
-  ``lock_timeout``.
+  cannot run in a transaction; it runs with NO lock timeout (a session ``SET``
+  that is ``RESET`` after it): it waits out every older transaction in the
+  database while blocking no writer, so a timeout only left INVALID indexes.
 
 * **Its own statement budget.** The connection is the APPLICATION's, and its
   ``statement_timeout`` (30 s in ``config/database.py``) is a user-facing
@@ -64,13 +65,17 @@ Three properties make it safe to run against production:
 
 ``CREATE INDEX CONCURRENTLY`` cannot run inside a transaction; those
 operations are marked non-transactional by the planner and executed outside
-one. If interrupted, Postgres leaves an INVALID index behind — re-running the
-plan drops and rebuilds it, which is the trade for not locking the table.
+one. If interrupted (its statement budget, a cancel), Postgres leaves an
+INVALID index behind: the planner then derives ``REINDEX INDEX CONCURRENTLY``
+for it, and re-running the SAME artifact resumes — that rebuild stands for the
+reviewed build (``_resumed_builds``) — which is the trade for not locking the
+table.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
@@ -100,6 +105,9 @@ DEFAULT_STATEMENT_TIMEOUT_MS = 0
 _BACKFILL_BATCH_KEYS = 5000
 
 _FILL_KIND = "backfill_column"
+#: The planner's in-place rebuild of an INVALID index (``IndexDrift._rebuild``).
+_REBUILD_KIND = "rebuild_index"
+_REBUILD_SUFFIX = ":rebuild"
 
 
 @command(
@@ -222,6 +230,9 @@ class SchemaApplyCommand(CommandBase):
             )
             if ledger_explained:
                 identifier = approved
+                operations = self._resumed_builds(
+                    reviewed_operations, operations, self._already_applied(approved)
+                )
                 self.info(
                     f"Artifact {artifact}: what the ledger has not applied still "
                     f"matches the database."
@@ -354,6 +365,14 @@ class SchemaApplyCommand(CommandBase):
         applied = self._already_applied(approved)
         if not applied:
             return False
+        derived = self._resumed_builds(reviewed, derived, applied)
+        # A REINDEX standing in for a reviewed build is that build: its key
+        # matches, its SQL by construction does not.
+        rebuilt = {op.key for op in derived if op.kind == _REBUILD_KIND}
+
+        def same(pairs: set) -> set:
+            return {(key, None if key in rebuilt else sql) for key, sql in pairs}
+
         named = {(op.key, op.forward_sql) for op in reviewed}
         ran_fill = {
             (op.key, op.forward_sql)
@@ -363,7 +382,29 @@ class SchemaApplyCommand(CommandBase):
         if not ran_fill <= named:
             return False
         remaining = {pair for pair in named if pair[0] not in applied}
-        return remaining == {(op.key, op.forward_sql) for op in derived} - ran_fill
+        return same(remaining) == same(
+            {(op.key, op.forward_sql) for op in derived} - ran_fill
+        )
+
+    @staticmethod
+    def _resumed_builds(reviewed: list, derived: list, applied: set[str]) -> list:
+        """``derived`` with each ``REINDEX ... CONCURRENTLY`` that finishes a
+        reviewed CONCURRENTLY build this plan has not applied keyed as that
+        build. A failed build leaves its index INVALID, which derives a
+        rebuild instead of the reviewed create: the same work, so the same
+        artifact resumes (and records it under the reviewed key, so the next
+        resume still matches) instead of reading as a moved schema (cycle 3,
+        2026-11-14)."""
+        builds = {
+            op.key for op in reviewed if not op.transactional and op.key not in applied
+        }
+        out = []
+        for op in derived:
+            base = op.key.removesuffix(_REBUILD_SUFFIX)
+            if op.kind == _REBUILD_KIND and base != op.key and base in builds:
+                op = replace(op, key=base)
+            out.append(op)
+        return out
 
     def _already_applied(self, plan_id: str) -> set[str]:
         """Operation keys of this plan already recorded as applied.
@@ -446,10 +487,17 @@ class SchemaApplyCommand(CommandBase):
         # RESET before the connection can serve anything else. This command
         # runs one statement at a time, so the pool hands the SET's
         # connection straight back to the statement after it.
+        # No lock timeout: a concurrent build waits for EVERY transaction
+        # older than its snapshot, on any table, while it blocks no writer, so
+        # the app's 10 s lock_timeout made ordinary traffic cut it off and
+        # leave an INVALID index (cycle 3, 2026-11-14). Its statement budget
+        # is still what bounds it.
         DB.statement(f"SET statement_timeout = {self._budget_ms()}")
+        DB.statement("SET lock_timeout = 0")
         try:
             DB.statement(operation.forward_sql)
         finally:
+            DB.statement("RESET lock_timeout")
             DB.statement("RESET statement_timeout")
         self._record(plan_id, operation, status=STATUS_APPLIED)
 

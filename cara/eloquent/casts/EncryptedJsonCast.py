@@ -21,9 +21,9 @@ class EncryptedJsonCast(EncryptedCast):
 
     ENVELOPE_KEY = "$enc"
 
-    def get(self, value: Any) -> Any:
-        if value is None:
-            return None
+    @classmethod
+    def token_of(cls, value: Any) -> str:
+        """The ciphertext token inside a stored envelope (no decryption)."""
         if isinstance(value, str):
             try:
                 value = json.loads(value)
@@ -31,12 +31,18 @@ class EncryptedJsonCast(EncryptedCast):
                 raise EncryptionException(
                     "Encrypted JSON value is not a valid envelope"
                 ) from exc
-        if not isinstance(value, dict) or set(value) != {self.ENVELOPE_KEY}:
+        if not isinstance(value, dict) or set(value) != {cls.ENVELOPE_KEY}:
             raise EncryptionException("Encrypted JSON envelope is missing")
-        return json.loads(self._cipher().decrypt(value[self.ENVELOPE_KEY]))
+        return value[cls.ENVELOPE_KEY]
 
-    def set(self, value: Any) -> str | None:
+    def get(self, value: Any, context: str | None = None) -> Any:
         if value is None:
             return None
-        token = self._cipher().encrypt(json.dumps(value))
+        token = self.token_of(value)
+        return json.loads(self._cipher().decrypt(token, context=context))
+
+    def set(self, value: Any, context: str | None = None) -> str | None:
+        if value is None:
+            return None
+        token = self._cipher().encrypt(json.dumps(value), context=context)
         return json.dumps({self.ENVELOPE_KEY: token})

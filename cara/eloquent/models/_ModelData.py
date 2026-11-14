@@ -11,6 +11,7 @@ from typing import Any
 import pendulum
 
 from cara.eloquent.Integrity import is_unique_violation
+from cara.exceptions import EncryptionException
 from cara.facades import DB
 from cara.support import Collection
 
@@ -351,18 +352,57 @@ def _model_get_dirty_attributes(self):
     return self.__dirty_attributes__ or {}
 
 
+def _model_seal_context(cls, attribute: str, row: Any) -> str | None:
+    """The AEAD context binding ``attribute`` to its row, or ``None`` when
+    the column is not declared in ``__seal_context__``.
+
+    Fails closed: a sealed column whose row lacks one of its binding fields
+    raises instead of sealing (or opening) without the binding.
+    """
+    fields = (getattr(cls, "__seal_context__", None) or {}).get(attribute)
+    if not fields:
+        return None
+    cast_instance = enhanced_registry.get_cast_instance(cls.__casts__.get(attribute))
+    if not getattr(cast_instance, "binds_row", False):
+        raise EncryptionException(
+            f"{cls.__name__}.{attribute} is in __seal_context__ but its cast "
+            "does not bind a row (use encrypted / encrypted_json)"
+        )
+    table = getattr(cls, "__table__", None) or cls.__name__
+    parts = [f"{table}.{attribute}"]
+    for field in fields:
+        value = row.get(field) if row is not None else None
+        if value is None or value == "":
+            raise EncryptionException(
+                f"{table}.{attribute} is sealed to {field}; the row has none"
+            )
+        parts.append(f"{field}={value}")
+    return "|".join(parts)
+
+
+def _model_seal_row(self) -> dict:
+    """This instance's raw identity: persisted values under pending ones."""
+    return {
+        **self.__dict__.get("__attributes__", {}),
+        **self.__dict__.get("__dirty_attributes__", {}),
+    }
+
+
+def _cast_get(self, attribute, value):
+    cast_instance = enhanced_registry.get_cast_instance(self.__casts__[attribute])
+    if not cast_instance:
+        return value
+    context = _model_seal_context(type(self), attribute, _model_seal_row(self))
+    if context is not None:
+        return cast_instance.get(value, context)
+    return cast_instance.get(value)
+
+
 def _model_get_value(self, attribute):
     """Get attribute value with cast applied."""
     value = self.__attributes__[attribute]
     if attribute in self.__casts__:
-        # Import the enhanced registry that has registered casts
-
-        # Get cast instance and apply if found
-        cast_definition = self.__casts__[attribute]
-        cast_instance = enhanced_registry.get_cast_instance(cast_definition)
-
-        if cast_instance:
-            return cast_instance.get(value)
+        return _cast_get(self, attribute, value)
     return value
 
 
@@ -370,11 +410,7 @@ def _model_get_dirty_value(self, attribute):
     """Get dirty attribute value with cast applied."""
     value = self.__dirty_attributes__[attribute]
     if attribute in self.__casts__:
-        # Import the enhanced registry that has registered casts
-
-        cast_instance = enhanced_registry.get_cast_instance(self.__casts__[attribute])
-        if cast_instance:
-            return cast_instance.get(value)
+        return _cast_get(self, attribute, value)
     return value
 
 
@@ -413,6 +449,9 @@ def _model_cast_attribute(self, attribute, value):
 
     if value is None:
         return None
+
+    if attribute in (getattr(self, "__seal_context__", None) or {}):
+        return _cast_get(self, attribute, value)
 
     if isinstance(cast_method, str):
         # Handle parametrized casts

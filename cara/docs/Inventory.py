@@ -389,8 +389,8 @@ def gen_permissions(manifest: DocsManifest, now: str, say: Say) -> None:
     for key, (group, description) in permissions.items():
         body += f"| `{key}` | {group} | {md_escape(description)} |\n"
     body += (
-        f"\n_Total: {len(permissions)} permissions. Projected to the DB with "
-        "`craft permissions:sync`._\n"
+        f"\n_Total: {len(permissions)} permissions. Projected to the DB at "
+        "every API boot (`ApplicationProvider.sync_permission_catalog`)._\n"
     )
     write_if_changed(
         manifest.reference / "permissions.md", body, "reference/permissions.md", say

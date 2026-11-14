@@ -98,16 +98,27 @@ class ResourceSchemaExtractor:
     ):
         self._dir = resources_dir
         self._call_types = {**CALL_TYPE, **(extra_call_types or {})}
+        #: Every class under ``resources_dir`` by name, so a ``**self._helper()``
+        #: spread finds a helper a mixin base defines (``_helper_method``).
+        self._all_classes: dict[str, ast.ClassDef] = {}
 
     def extract(self) -> dict[str, dict[str, Any]]:
         schemas: dict[str, dict[str, Any]] = {}
         attribute_only: dict[str, list[str]] = {}
         continuing: dict[str, list[str]] = {}
         classes: dict[str, ast.ClassDef] = {}
-        for path in sorted(self._dir.rglob("*.py")):
-            if path.name in _SKIPPED_MODULES:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+        trees = [
+            ast.parse(path.read_text(encoding="utf-8"))
+            for path in sorted(self._dir.rglob("*.py"))
+            if path.name not in _SKIPPED_MODULES
+        ]
+        self._all_classes = {
+            node.name: node
+            for tree in trees
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+        }
+        for tree in trees:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
                     continue
@@ -548,15 +559,7 @@ class ResourceSchemaExtractor:
             and node.func.value.id == "self"
         ):
             return False
-        helper = next(
-            (
-                item
-                for item in cls.body
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and item.name == node.func.attr
-            ),
-            None,
-        )
+        helper = self._helper_method(cls, node.func.attr, set())
         if helper is None:
             return False
         returns = self._returns(helper)
@@ -566,6 +569,26 @@ class ResourceSchemaExtractor:
             and self._merge_spread(statement.value, cls, properties, helper_locals)
             for statement in returns
         )
+
+    def _helper_method(
+        self, cls: ast.ClassDef, name: str, seen: set[str]
+    ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+        """``name`` as ``self`` resolves it: on ``cls``, else on its bases in
+        order (a mixin such as ``ProductCatalogFields``), depth first like
+        the MRO for these single-path mixins. None when no scanned class
+        defines it."""
+        if cls.name in seen:
+            return None
+        seen.add(cls.name)
+        for item in cls.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name:
+                return item
+        for base in _base_names(cls):
+            if (base_cls := self._all_classes.get(base)) is not None and (
+                found := self._helper_method(base_cls, name, seen)
+            ) is not None:
+                return found
+        return None
 
     @staticmethod
     def _var_from_dynamic_base(fn: ast.AST, var: str) -> bool:

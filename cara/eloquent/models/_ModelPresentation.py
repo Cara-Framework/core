@@ -171,11 +171,13 @@ def _model_create(
     return cls().get_builder().create(dictionary, cast=cast, **kwargs)
 
 
-def _model_cast_value(cls, attribute: str, value: Any):
+def _model_cast_value(cls, attribute: str, value: Any, row: Any = None):
     """
     Given an attribute name and a value, casts the value using the model's registered caster.
 
-    If no registered caster exists, returns the unmodified value.
+    If no registered caster exists, returns the unmodified value. A column
+    in ``__seal_context__`` is sealed to ``row`` (the raw values of the row
+    it is written to) and refuses without one.
 
     Supports parametrized casts like:
     - "datetime:YYYY-MM-DD HH:mm:ss"
@@ -193,6 +195,9 @@ def _model_cast_value(cls, attribute: str, value: Any):
 
     cast_instance = enhanced_registry.get_cast_instance(cast_definition)
     if cast_instance:
+        context = cls.seal_context(attribute, row)
+        if context is not None:
+            return cast_instance.set(value, context)
         return cast_instance.set(value)
 
     return value
@@ -202,11 +207,12 @@ def _model_cast_values(cls, dictionary: dict[str, Any]) -> dict[str, Any]:
     """
     Runs provided dictionary through all model casters and returns the result.
 
-    Does not mutate the passed dictionary.
+    Does not mutate the passed dictionary. A sealed column binds to the
+    identity fields of the same dictionary (the row being written).
     """
     if not dictionary:
         return {}
-    return {x: cls.cast_value(x, dictionary[x]) for x in dictionary}
+    return {x: cls.cast_value(x, dictionary[x], dictionary) for x in dictionary}
 
 
 def _model_fresh(self) -> Any:

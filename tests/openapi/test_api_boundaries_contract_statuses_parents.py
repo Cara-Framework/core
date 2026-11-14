@@ -297,3 +297,26 @@ class ThingController:
         )
 """
     assert "ThingController@index" not in _mapping(tmp_path, source)
+
+
+def test_a_resource_under_one_key_does_not_describe_the_data(tmp_path):
+    """A hold answer (``{"operation": id, "approval": Resource(a).to_dict()}``)
+    typed the whole data as that resource, so the door's real 200 body failed
+    its own contract (bulk apply, gate 2026-11-14)."""
+    source = """
+class ThingController:
+    async def apply(self, request, response):
+        return response.envelope(
+            {"operation": "OP1", "approval": RowResource(a).to_dict()}, status=202
+        )
+"""
+    assert "ThingController@apply" not in _mapping(tmp_path, source)
+
+
+def test_a_spread_resource_is_still_the_data(tmp_path):
+    source = """
+class ThingController:
+    async def show(self, request, response):
+        return response.envelope({**RowResource(a).to_dict(), "extra": 1})
+"""
+    assert _mapping(tmp_path, source)["ThingController@show"] == ("RowResource", False)

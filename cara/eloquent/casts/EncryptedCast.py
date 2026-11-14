@@ -31,14 +31,18 @@ class EncryptedCast(BaseCast):
 
         return Crypt
 
-    def get(self, value: Any) -> Any:
-        """Decrypt the stored value."""
-        if value is None:
-            return None
-        return self._cipher().decrypt(value)
+    # The model passes a row context (``Model.__seal_context__``) to these
+    # casts only; every other cast keeps the one-argument protocol.
+    binds_row = True
 
-    def set(self, value: Any) -> str | None:
-        """Encrypt the value before persisting."""
+    def get(self, value: Any, context: str | None = None) -> Any:
+        """Decrypt the stored value (``context``: the row it is bound to)."""
         if value is None:
             return None
-        return self._cipher().encrypt(str(value))
+        return self._cipher().decrypt(value, context=context)
+
+    def set(self, value: Any, context: str | None = None) -> str | None:
+        """Encrypt the value before persisting (``context``: its row)."""
+        if value is None:
+            return None
+        return self._cipher().encrypt(str(value), context=context)

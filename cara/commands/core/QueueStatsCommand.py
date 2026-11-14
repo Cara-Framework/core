@@ -47,7 +47,12 @@ class QueueStatsCommand(CommandBase):
         """Show queue statistics with optional watch mode."""
         queue_name = self.option("queue")
         if not queue_name:
-            raise ValueError("--queue is required.")
+            # The same refusal as every other bad flag here: a usage error,
+            # never a bare ValueError traceback (cycle 3, 2026-11-14).
+            raise InvalidArgumentException(
+                "--queue is required: name one canonical queue "
+                "(docs/internal/reference/queues.md)."
+            )
         watch_mode = self.option("watch", False)
         try:
             recent_hours = int(self.option("recent", 24))

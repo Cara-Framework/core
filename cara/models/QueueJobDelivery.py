@@ -392,17 +392,21 @@ class QueueJobDelivery(Model):
             # the planner uses its fixed default selectivity, under which the
             # ordered tenant probes win at every moment (14-33 ms there).
             # Target 0 alone keeps the sample already taken through every
-            # later ANALYZE, so the entry also clears it: PostgreSQL 18 has
-            # ``pg_clear_attribute_stats``; older servers drop a column's
-            # sample when its type is re-asserted (no rewrite, same type).
+            # later ANALYZE, so the entry also clears it where the server can
+            # without a lock: PostgreSQL 18 has ``pg_clear_attribute_stats``.
+            # An older server only drops a sample by re-asserting the
+            # column's type, and on 17 that is NO metadata-only step: it
+            # rebuilt the ledger's indexes under ACCESS EXCLUSIVE (1.5 s on
+            # 100k rows; the outbox stops for that long). There the sample
+            # is left as it is and a NOTICE says so; it clears on the move to
+            # 18 (cycle 3, 2026-11-14).
             "name": "queue_job_delivery_queue_state_statistics",
             "up": (
                 "DO $$ DECLARE state_column record; BEGIN "
                 "ALTER TABLE queue_job_delivery "
                 "ALTER COLUMN status SET STATISTICS 0, "
                 "ALTER COLUMN publish_status SET STATISTICS 0; "
-                "FOR state_column IN SELECT n.nspname, c.relname, a.attname, "
-                "format_type(a.atttypid, a.atttypmod) AS column_type "
+                "FOR state_column IN SELECT n.nspname, c.relname, a.attname "
                 "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
                 "JOIN pg_namespace n ON n.oid = c.relnamespace "
                 "WHERE a.attrelid = 'queue_job_delivery'::regclass "
@@ -411,9 +415,8 @@ class QueueJobDelivery(Model):
                 "'pg_clear_attribute_stats(text,text,text,boolean)') IS NOT NULL "
                 "THEN PERFORM pg_clear_attribute_stats(state_column.nspname::text, "
                 "state_column.relname::text, state_column.attname::text, false); "
-                "ELSE EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I TYPE %s', "
-                "state_column.nspname, state_column.relname, state_column.attname, "
-                "state_column.column_type); "
+                "ELSE RAISE NOTICE 'queue_job_delivery.%: sample kept (no lock-free "
+                "clear before PostgreSQL 18)', state_column.attname; "
                 "END IF; END LOOP; END $$"
             ),
             "down": (

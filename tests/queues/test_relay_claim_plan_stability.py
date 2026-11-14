@@ -59,7 +59,9 @@ def test_the_statistics_entry_also_clears_samples_already_taken():
     (entry,) = _statistics_entries()
     up = entry["up"]
     assert "pg_clear_attribute_stats" in up  # PostgreSQL 18+
-    assert "format_type(" in up  # older servers: re-assert the column's own type
+    # Older servers: never the type re-assert, which rebuilt the ledger's
+    # indexes under ACCESS EXCLUSIVE on 17 (cycle 3, 2026-11-14).
+    assert "TYPE %s" not in up and "format_type(" not in up
     assert "SET STATISTICS -1" in entry["down"]
 
 

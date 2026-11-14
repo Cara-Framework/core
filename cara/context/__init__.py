@@ -3,6 +3,8 @@
 from cara._LazyExports import _install_lazy_exports
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AMBIENT_KEY": (".Ambient", "AMBIENT_KEY"),
+    "Ambient": (".Ambient", "Ambient"),
     "CENTRAL": (".Tenancy", "CENTRAL"),
     "ExecutionContext": (".ExecutionContext", "ExecutionContext"),
     "Tenancy": (".Tenancy", "Tenancy"),
@@ -12,6 +14,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 __all__ = [
+    "AMBIENT_KEY",
+    "Ambient",
     "CENTRAL",
     "ExecutionContext",
     "Tenancy",

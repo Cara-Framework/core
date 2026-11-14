@@ -9,6 +9,7 @@ from typing import Any
 
 import pendulum
 
+from cara.context import Ambient
 from cara.exceptions import QueueException
 from cara.observability import MetricsBase, Trace
 from cara.queues.contracts import CoalescingJob, UniqueJob
@@ -112,6 +113,9 @@ class DurableDelayedJobStore:
                 "attempts": attempts,
                 "throttle_attempts": throttle_attempts,
                 "_otel": options.get("_otel") or Trace.inject({}),
+                "_ambient": (
+                    options["_ambient"] if "_ambient" in options else Ambient.capture()
+                ),
                 **tenant_fields,
                 "queue": queue_name,
                 "priority": priority,

@@ -50,6 +50,7 @@ class SignedJsonJobSerializer:
     _SIGNED_ENVELOPE_KEYS = _ENVELOPE_KEYS - {"signature"}
     _PAYLOAD_KEYS = frozenset(
         {
+            "_ambient",
             "_otel",
             "_tenant",
             "_tenant_mode",
@@ -237,6 +238,7 @@ class SignedJsonJobSerializer:
             "attempts": primitive["attempts"],
             "throttle_attempts": primitive["throttle_attempts"],
             "_otel": primitive["_otel"],
+            "_ambient": primitive["_ambient"],
             "_tenant": primitive["_tenant"],
             "_tenant_mode": primitive["_tenant_mode"],
             "queue": primitive["queue"],
@@ -412,6 +414,9 @@ class SignedJsonJobSerializer:
             ),
             "_otel": _SIGNED_JSON_VALUES.json_value(
                 payload.get("_otel") or {}, path="_otel"
+            ),
+            "_ambient": _SIGNED_JSON_VALUES.json_value(
+                payload.get("_ambient") or {}, path="_ambient"
             ),
             "_tenant": _SIGNED_JSON_VALUES.optional_positive_int(
                 payload.get("_tenant"),

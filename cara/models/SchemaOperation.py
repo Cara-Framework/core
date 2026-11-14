@@ -79,6 +79,54 @@ class SchemaOperation(Model):
             ),
             "down": "DROP INDEX IF EXISTS schema_operation_plan_key_unique",
         },
+        # OWNER-ONLY (cycle 3, 2026-11-14). ``schema:rollback`` EXECUTES each
+        # row's ``reverse_sql`` as the migration owner and ``schema:apply``
+        # trusts its ``applied`` rows, so a role that may write here (the
+        # runtime role, through the owner's default privileges) could plant
+        # SQL the owner runs. Its write privileges are taken from every role
+        # but the table's owner when the guard is created, and the trigger
+        # refuses a write by anyone else even if a later GRANT gives one back.
+        {
+            "name": "schema_operation_owner_only",
+            # The function is a TOP-LEVEL statement, not an ``EXECUTE '...'``
+            # inside the DO block: ``cara.schema.NamedDdlBodies`` compares the
+            # declared dollar body with ``pg_proc.prosrc`` verbatim, and a body
+            # nested in a string literal carries doubled quotes (``''MEMBER''``)
+            # the server never stores — a from-zero scratch read as drift.
+            "up": (
+                "CREATE OR REPLACE FUNCTION schema_operation_owner_only() "
+                "RETURNS trigger AS $fn$ BEGIN "
+                "IF NOT pg_has_role(current_user, (SELECT relowner FROM pg_class "
+                "WHERE oid = TG_RELID), 'MEMBER') THEN "
+                "RAISE EXCEPTION 'schema_operation is written only by its owner "
+                "(schema:apply, schema:rollback)'; END IF; "
+                "RETURN COALESCE(NEW, OLD); END; $fn$ LANGUAGE plpgsql; "
+                "DO $do$ DECLARE grantee_name text; BEGIN "
+                "FOR grantee_name IN SELECT DISTINCT g.grantee "
+                "FROM information_schema.role_table_grants g "
+                "WHERE g.table_schema = current_schema() "
+                "AND g.table_name = 'schema_operation' "
+                "AND g.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE') "
+                "AND g.grantee <> (SELECT pg_get_userbyid(c.relowner) FROM pg_class c "
+                "WHERE c.oid = 'schema_operation'::regclass) LOOP "
+                "EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE "
+                "ON schema_operation FROM %I', grantee_name); "
+                "END LOOP; "
+                "END $do$"
+            ),
+            "down": "DROP FUNCTION IF EXISTS schema_operation_owner_only() CASCADE",
+        },
+        {
+            "name": "schema_operation_owner_writes",
+            "up": (
+                "CREATE OR REPLACE TRIGGER schema_operation_owner_writes "
+                "BEFORE INSERT OR UPDATE OR DELETE ON schema_operation "
+                "FOR EACH ROW EXECUTE FUNCTION schema_operation_owner_only()"
+            ),
+            "down": (
+                "DROP TRIGGER IF EXISTS schema_operation_owner_writes ON schema_operation"
+            ),
+        },
     ]
 
     @property

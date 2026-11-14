@@ -384,3 +384,48 @@ class HouseResource:
             "type": "object",
             "nullable": True,
         }
+
+
+class TestMixinHelperSpreads:
+    def test_a_spread_helper_a_mixin_base_defines_is_named(self, tmp_path: Path):
+        """``**self._row_catalog(row)`` defined on a mixin in another module
+        names its keys instead of opening the schema (2026-11-14: the product
+        row's catalog readings left ``x-fields-partial`` on every row)."""
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                CatalogFields="""
+class CatalogFields:
+    @staticmethod
+    def _row_catalog(row):
+        grade = getattr(row, "grade", None)
+        return {**({"grade": dict(grade)} if grade is not None else {})}
+""",
+                RowResource="""
+class RowResource(CatalogFields, BaseResource):
+    def to_array(self, request=None):
+        return {"id": self.opt_int(self.resource.id), **self._row_catalog(self.resource)}
+""",
+            )
+        ).extract()
+
+        row = schemas["RowResource"]
+        assert set(row["properties"]) == {"id", "grade"}
+        assert row["required"] == ["id"]
+        assert not row.get("x-fields-partial")
+
+    def test_a_helper_no_scanned_class_defines_still_opens_the_schema(
+        self, tmp_path: Path
+    ):
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                RowResource="""
+class RowResource(Elsewhere):
+    def to_array(self, request=None):
+        return {"id": self.opt_int(self.resource.id), **self._unknown(self.resource)}
+""",
+            )
+        ).extract()
+
+        assert schemas["RowResource"]["x-fields-partial"] is True

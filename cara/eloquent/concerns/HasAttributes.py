@@ -76,6 +76,10 @@ class HasAttributes:
 
             cast_instance = cast_registry.get_cast_instance(cast_type)
             if cast_instance:
+                sealed = getattr(type(self), "__seal_context__", None) or {}
+                if value is not None and attribute in sealed:
+                    context = self.seal_context(attribute, self._seal_row())
+                    return cast_instance.set(value, context)
                 return cast_instance.set(value)
 
         return value
