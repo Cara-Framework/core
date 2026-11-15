@@ -56,10 +56,20 @@ class DateTimeCast(BaseCast):
         every push confirmation, ``catalog_publish_run`` refused its own
         completion. The fraction is appended only when there is one, so an
         instant without microseconds renders exactly as before.
+
+        The string carries an explicit ``+00:00``. Postgres reads an
+        offset-less literal into ``timestamptz`` in the SESSION timezone, so
+        a bare UTC wall string was only correct while every session happened
+        to be UTC: a connection whose ``TimeZone`` came from the server
+        default, ``PGTZ`` or a pooler instead of ``server_settings`` stored
+        every ORM write shifted by that zone's offset (a "queued 10 minutes
+        ago" task read as overdue on a UTC+14 session, 2026-11-15).
         """
         utc = pendulum.instance(value).in_timezone("UTC")
         text = utc.to_datetime_string()
-        return f"{text}.{utc.microsecond:06d}" if utc.microsecond else text
+        if utc.microsecond:
+            text = f"{text}.{utc.microsecond:06d}"
+        return f"{text}+00:00"
 
     def _convert_format(self, format_str: str | None) -> str | None:
         """Convert PHP-style format to Pendulum format."""

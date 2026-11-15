@@ -30,7 +30,7 @@ from cara.eloquent.scopes.TimeStampsScope import TimeStampsScope
 # backwards by exactly that much, which is what makes the drift measurable.
 _APP_TIMEZONE = "Europe/Madrid"
 _NOW = pendulum.datetime(2026, 8, 8, 20, 29, 13, tz="UTC")
-_TRUE_UTC = "2026-08-08 20:29:13"
+_TRUE_UTC = "2026-08-08 20:29:13+00:00"
 
 
 @pytest.fixture
