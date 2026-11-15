@@ -9,6 +9,7 @@ import inspect
 from typing import Any
 
 from cara.broadcasting import drained
+from cara.commands.ProcessReload import import_when_settled
 from cara.configuration import config
 from cara.context import Tenancy
 from cara.exceptions import ConfigurationException
@@ -37,7 +38,14 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
         self.warning(f"⚠️  Invalid job path: '{job_path}'")
         return None
 
-    mod = importlib.import_module(module_path)
+    # A reloading scheduler imports the job from a tree an edit may have
+    # saved only half-way: wait for it to land (``import_when_settled``)
+    # rather than drop the job until the next reload. Without auto-reload a
+    # broken import is a broken deploy and fails at once.
+    if getattr(self, "_auto_reload_enabled", False):
+        mod = import_when_settled(module_path)
+    else:
+        mod = importlib.import_module(module_path)
     job_cls = getattr(mod, class_name)
     is_central_job = bool(getattr(job_cls, "central_job", False))
     scheduled_tenant_id = spec.get("tenant_id")

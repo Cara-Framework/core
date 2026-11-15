@@ -91,7 +91,6 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
     def handle(self, driver: str | None = None):
         """Handle schedule worker execution with enhanced monitoring."""
-        reloaded_boot_completed()
         self.console.print()  # Empty line for spacing
         self.console.print("[bold #e5c07b]╭─ Schedule Worker ─╮[/bold #e5c07b]")
         self.console.print()
@@ -186,6 +185,12 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             job_entries = self._register_jobs()
             if not job_entries:
                 raise ConfigurationException("No scheduled jobs were registered")
+            # The role runs from here. Until now a reloaded process still
+            # imported its jobs from a possibly half-saved tree, so the boot
+            # guard (``ProcessReload``) stayed on: a registration that fails
+            # even after ``import_when_settled`` waits for a bootable tree
+            # instead of exiting the role.
+            reloaded_boot_completed()
 
             self._show_jobs(job_entries)
 

@@ -33,10 +33,20 @@ again. So ``execv`` carries :data:`BOOT_GUARD_ENV`; :func:`guard_reloaded_boot`
 imports ``bootstrap``) turns an uncaught boot failure of such a process back
 into the wait-for-a-bootable-tree loop, and :func:`reloaded_boot_completed`
 drops the guard once the role is running, so a later crash exits as before.
+
+The probe and the guard speak for what ``bootstrap`` imports. ``schedule:work``
+imports each scheduled job's module later, while it registers its jobs, and an
+edit saved across two files a moment apart left that import raising
+``ImportError`` for that moment: the job was dropped with a warning and stayed
+unregistered until the next reload, and with every job dropped the role exited.
+:func:`import_when_settled` retries such an import with a short, growing
+backoff for up to :data:`IMPORT_SETTLE_SECONDS` before it gives up, and the
+scheduler drops the boot guard only once its jobs are registered.
 """
 
 from __future__ import annotations
 
+import importlib
 import os
 import signal
 import subprocess
@@ -54,6 +64,18 @@ PROBE_INTERVAL_SECONDS = 5.0
 
 #: A probe that has not finished by then counts as a failure.
 PROBE_TIMEOUT_SECONDS = 180.0
+
+#: How long a reloading role waits for a half-saved edit to land before an
+#: import that keeps failing is given up on.
+IMPORT_SETTLE_SECONDS = 30.0
+
+#: The first retry's wait; each next one doubles, up to the max step.
+IMPORT_SETTLE_FIRST_STEP = 0.25
+IMPORT_SETTLE_MAX_STEP = 4.0
+
+#: What an import of a file saved half-way raises: a missing name or module,
+#: an unfinished statement, a name the other half of the edit defines.
+_HALF_SAVED_ERRORS = (ImportError, SyntaxError, NameError)
 
 #: Directories no boot imports from; skipped when fingerprinting the tree.
 _UNIMPORTED_DIRS = frozenset(
@@ -152,6 +174,40 @@ def replace_process_when_bootable() -> None:
     os.execv(sys.executable, argv)
 
 
+def import_when_settled(
+    module_path: str, *, budget: float = IMPORT_SETTLE_SECONDS
+) -> object:
+    """``importlib.import_module(module_path)``, retried while a half-saved
+    edit breaks it: a short, doubling backoff (capped at
+    :data:`IMPORT_SETTLE_MAX_STEP`) for up to ``budget`` seconds, then the
+    last error is raised. Python already drops a module whose import failed
+    from ``sys.modules``, so each attempt reads the tree as it is now."""
+    deadline = time.monotonic() + float(budget)
+    step = IMPORT_SETTLE_FIRST_STEP
+    reported: str | None = None
+    while True:
+        try:
+            return importlib.import_module(module_path)
+        except _HALF_SAVED_ERRORS as exc:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            failure = f"{type(exc).__name__}: {exc}"
+            if failure != reported:
+                Log.warning(
+                    "Code reload: %s does not import yet (%s); retrying for up "
+                    "to %ss while the edit lands.",
+                    module_path,
+                    failure,
+                    int(budget),
+                    category="cara.reload",
+                )
+                reported = failure
+            time.sleep(min(step, remaining))
+            step = min(step * 2, IMPORT_SETTLE_MAX_STEP)
+            importlib.invalidate_caches()
+
+
 def _reloaded_boot_failed(kind, value, traceback) -> None:
     """``sys.excepthook`` of a process a reload ``execv``'d into, while it boots."""
     sys.__excepthook__(kind, value, traceback)
@@ -177,6 +233,7 @@ __all__ = [
     "BOOT_GUARD_ENV",
     "boot_failure",
     "guard_reloaded_boot",
+    "import_when_settled",
     "reloaded_boot_completed",
     "replace_process_when_bootable",
 ]
