@@ -581,7 +581,10 @@ class ResourceSchemaExtractor:
             return None
         seen.add(cls.name)
         for item in cls.body:
-            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name:
+            if (
+                isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and item.name == name
+            ):
                 return item
         for base in _base_names(cls):
             if (base_cls := self._all_classes.get(base)) is not None and (

@@ -147,7 +147,9 @@ class Crypt:
         except EncryptionException:
             raise
         except Exception as e:
-            raise EncryptionException(f"Decryption failed: {str(e) or type(e).__name__}") from e
+            raise EncryptionException(
+                f"Decryption failed: {str(e) or type(e).__name__}"
+            ) from e
 
     def encrypt_urlsafe(self, value: str, *, context: str | None = None) -> str:
         """Encrypt into an envelope that survives a URL unescaped.
@@ -187,4 +189,6 @@ class Crypt:
         except EncryptionException:
             raise
         except Exception as e:
-            raise EncryptionException(f"Decryption failed: {str(e) or type(e).__name__}") from e
+            raise EncryptionException(
+                f"Decryption failed: {str(e) or type(e).__name__}"
+            ) from e

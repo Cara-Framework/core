@@ -19,6 +19,7 @@ read, or that still holds ready messages, stays on the 2-h recovery.
 
 from __future__ import annotations
 
+import importlib
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -157,3 +158,28 @@ def test_publish_due_runs_the_lost_copy_pass(ready):
 
     assert calls == ["stale", "lost"]
     assert result["lost_requeued"] == 3
+
+
+def test_stale_lease_recovery_runs_once_per_interval(monkeypatch):
+    # Its leases are minutes long; the relay iterates many times a second.
+    module = importlib.import_module("cara.queues.delivery._DeliveryPublishing")
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    calls: list[int] = []
+    store = _store(_LedgerDB({}), _Driver())
+    store.recover_stale_executions = lambda n: (
+        calls.append(n) or {"requeued": 1, "reconciled": 0, "unclaimed": 0}
+    )
+    store.requeue_lost_broker_copies = lambda _n: 0
+    store.expire_due = lambda _n: 0
+    store._plan_publish = lambda _limit: []
+
+    first = store.publish_due()
+    clock[0] += store.STALE_RECOVERY_INTERVAL_SECONDS - 0.1
+    skipped = store.publish_due()
+    clock[0] += 0.2
+    store.publish_due()
+
+    assert len(calls) == 2
+    assert first["stale_requeued"] == 1
+    assert skipped["stale_requeued"] == 0

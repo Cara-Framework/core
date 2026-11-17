@@ -5,6 +5,9 @@ edges and repositories must therefore not open, commit or roll back business
 transactions. A repository may own one fully-contained atomic persistence
 primitive only when the product manifest names that exact method.
 
+Cara's ``atomic()`` (``with atomic():``, ``@atomic()``, ``atomic().run``)
+opens the same transaction as ``DB.transaction()``, so it counts too.
+
 Existing violations are counted per file in the exact, shrink-only
 ``seam_allowlists["transaction_ownership"]`` census.
 """
@@ -85,7 +88,25 @@ def _db_names(tree: ast.Module) -> set[str]:
     return names
 
 
-def _db_operation(call: ast.Call, db_names: set[str]) -> str | None:
+_ATOMIC_MODULES = frozenset({"cara.eloquent", "cara.eloquent.Atomic"})
+
+
+def _atomic_names(tree: ast.Module) -> set[str]:
+    """Local names bound to Cara's ``atomic`` (aliases included)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in _ATOMIC_MODULES:
+            for alias in node.names:
+                if alias.name == "atomic":
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _db_operation(
+    call: ast.Call, db_names: set[str], atomic_names: set[str] = frozenset()
+) -> str | None:
+    if isinstance(call.func, ast.Name) and call.func.id in atomic_names:
+        return "atomic"
     name = _call_name(call.func)
     operation = name.rsplit(".", 1)[-1]
     if operation not in _TRANSACTION_METHODS:
@@ -97,9 +118,10 @@ def _db_operation(call: ast.Call, db_names: set[str]) -> str | None:
 
 
 class _CallVisitor(ast.NodeVisitor):
-    def __init__(self, rel: str, db_names: set[str]) -> None:
+    def __init__(self, rel: str, db_names: set[str], atomic_names: set[str]) -> None:
         self.rel = rel
         self.db_names = db_names
+        self.atomic_names = atomic_names
         self.classes: list[str] = []
         self.functions: list[str] = []
         self.calls: list[_TransactionCall] = []
@@ -120,7 +142,7 @@ class _CallVisitor(ast.NodeVisitor):
         self.functions.pop()
 
     def visit_Call(self, node: ast.Call) -> None:
-        operation = _db_operation(node, self.db_names)
+        operation = _db_operation(node, self.db_names, self.atomic_names)
         if operation is not None:
             owner = ".".join([*self.classes, *self.functions]) or "<module>"
             self.calls.append(
@@ -134,9 +156,13 @@ class _CallVisitor(ast.NodeVisitor):
 
 
 def _calls(tree: ast.Module, rel: str) -> list[_TransactionCall]:
-    visitor = _CallVisitor(rel, _db_names(tree))
+    visitor = _CallVisitor(rel, _db_names(tree), _atomic_names(tree))
     visitor.visit(tree)
     return visitor.calls
+
+
+def _label(operation: str) -> str:
+    return "atomic()" if operation == "atomic" else f"DB.{operation}"
 
 
 class TransactionOwnership:
@@ -188,7 +214,7 @@ class TransactionOwnership:
             count = len(calls)
             pinned = allowlist.get(rel)
             detail = "; ".join(
-                f"line {call.line}: DB.{call.operation} in {call.identity}"
+                f"line {call.line}: {_label(call.operation)} in {call.identity}"
                 for call in calls
             )
             if pinned is None:

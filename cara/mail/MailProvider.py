@@ -7,16 +7,12 @@ subsystem, including SMTP, Log, Array, and Mailgun mail drivers.
 
 from __future__ import annotations
 
-from cara.configuration import config
+from cara.configuration import config, is_production_environment, normalize_environment
 from cara.environment import env
 from cara.exceptions import MailConfigurationException
 from cara.foundation import DeferredProvider
 from cara.mail.drivers import ArrayDriver, LogDriver, MailgunDriver, SmtpDriver
 from cara.mail.Mail import Mail
-
-#: APP_ENV values that mean "this is a real production deploy". Normalised
-#: case + the ``prod`` alias so a stray ``APP_ENV=Production`` still counts.
-_PRODUCTION_ENVS = ("production", "prod")
 
 #: Drivers that never deliver mail — ``log`` writes every email to the
 #: logger, ``array`` keeps them in memory. Fine for dev/test, catastrophic
@@ -84,8 +80,8 @@ class MailProvider(DeferredProvider):
         Non-production environments never raise — this guard only fires
         when ``APP_ENV`` is ``production`` / ``prod`` (any case).
         """
-        app_env = str(env("APP_ENV", "") or "").strip().lower()
-        if app_env not in _PRODUCTION_ENVS:
+        app_env = normalize_environment(env("APP_ENV", ""))
+        if not is_production_environment(app_env):
             return
 
         driver_name = mail_manager.default_driver

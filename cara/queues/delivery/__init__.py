@@ -18,6 +18,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "TerminalHookClaim": (".TerminalHookClaim", "TerminalHookClaim"),
     "UniqueDeliveryConflict": (".UniqueDeliveryConflict", "UniqueDeliveryConflict"),
     "relay_lane_of": ("._DeliveryConfiguration", "_delivery_relay_lane_of"),
+    "REDACTED_MARKER": ("._DeliveryRedaction", "REDACTED_MARKER"),
 }
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "QueueJobDeliveryStore",
     "QueueOperationsStore",
     "QueueOutboxHealth",
+    "REDACTED_MARKER",
     "ReplayDelivery",
     "TerminalHookClaim",
     "UniqueDeliveryConflict",

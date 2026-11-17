@@ -23,12 +23,30 @@ def config(key, default=None):
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "ConfigurationProvider": (".ConfigurationProvider", "ConfigurationProvider"),
+    "INSECURE_SECRET_DEFAULTS": (".Environments", "INSECURE_SECRET_DEFAULTS"),
+    "LOCAL_ENVIRONMENTS": (".Environments", "LOCAL_ENVIRONMENTS"),
+    "PRODUCTION_ENVIRONMENTS": (".Environments", "PRODUCTION_ENVIRONMENTS"),
+    "TEST_ENVIRONMENTS": (".Environments", "TEST_ENVIRONMENTS"),
+    "is_insecure_secret": (".Environments", "is_insecure_secret"),
+    "is_local_environment": (".Environments", "is_local_environment"),
+    "is_production_environment": (".Environments", "is_production_environment"),
+    "is_test_environment": (".Environments", "is_test_environment"),
+    "normalize_environment": (".Environments", "normalize_environment"),
 }
 
 __all__ = [
     "Configuration",
     "ConfigurationProvider",
+    "INSECURE_SECRET_DEFAULTS",
+    "LOCAL_ENVIRONMENTS",
+    "PRODUCTION_ENVIRONMENTS",
+    "TEST_ENVIRONMENTS",
     "config",
+    "is_insecure_secret",
+    "is_local_environment",
+    "is_production_environment",
+    "is_test_environment",
+    "normalize_environment",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

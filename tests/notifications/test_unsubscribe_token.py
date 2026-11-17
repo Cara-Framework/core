@@ -118,3 +118,10 @@ def test_verifying_with_anything_missing_is_a_plain_no(blank) -> None:
     assert not matches(token, _PUBLIC_ID, _EMAIL, blank)
     assert not matches(token, blank, _EMAIL, _SECRET)
     assert not matches(token, _PUBLIC_ID, blank, _SECRET)
+
+
+@pytest.mark.parametrize("mangled", ["é" * 64, "١" * 64, "tok\xff"])
+def test_a_non_ascii_token_is_a_plain_no_not_a_crash(mangled) -> None:
+    """A mangled link carries non-ASCII; ``compare_digest`` raises on a
+    non-ASCII ``str``, which would turn "not valid" into a 500."""
+    assert not matches(mangled, _PUBLIC_ID, _EMAIL, _SECRET)

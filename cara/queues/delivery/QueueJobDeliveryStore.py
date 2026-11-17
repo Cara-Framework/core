@@ -16,6 +16,7 @@ from . import (
     _DeliveryHooks,
     _DeliveryPublishing,
     _DeliveryRecovery,
+    _DeliveryRedaction,
     _DeliverySettlement,
 )
 
@@ -146,6 +147,12 @@ class QueueJobDeliveryStore:
     LOST_COPY_CHECK_INTERVAL_SECONDS = 30.0
     #: Process-local: when this relay last asked (monotonic seconds).
     _lost_copy_checked_at = float("-inf")
+    #: How often one relay runs ``recover_stale_executions``. Its leases are
+    #: minutes long, while the relay iterates up to ~15x/s; at 1M open rows
+    #: the pass cost 11-25 ms of a ~70 ms iteration.
+    STALE_RECOVERY_INTERVAL_SECONDS = 5.0
+    #: Process-local: when this relay last ran it (monotonic seconds).
+    _stale_recovered_at = float("-inf")
 
     _PUBLISH_BACKOFF_SECONDS = (1, 5, 30, 60, 300)
     _HOOK_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600, 86400)
@@ -157,6 +164,9 @@ class QueueJobDeliveryStore:
         "low": 3,
     }
     DEFAULT_JOB_TIMEOUT_SECONDS = 300
+    #: How far behind the body cutoff a redaction run looks: a missed night
+    #: is caught up, and a run never walks the whole retained ledger.
+    BODY_REDACTION_LOOKBACK_DAYS = 7
     POST_HOOK_LEASE_SECONDS = 300
 
     def __init__(self, application: Any, driver: Any, options: dict[str, Any]):
@@ -299,6 +309,14 @@ class QueueJobDeliveryStore:
             minimum=1,
             maximum=365,
             field="delivery_audit_safety_days",
+        )
+        # A settled row's body is redacted after this many days; the row itself
+        # stays ``audit_retention_days`` for dedupe (``redact_settled_bodies``).
+        self.body_retention_days = self._bounded_int(
+            options.get("delivery_body_retention_days", 1),
+            minimum=0,
+            maximum=self.audit_retention_days - 1,
+            field="delivery_body_retention_days",
         )
         self.hook_timeout_seconds = self._bounded_int(
             options.get("delivery_hook_timeout_seconds", 60),
@@ -548,6 +566,7 @@ class QueueJobDeliveryStore:
     recover_stale_executions = _DeliveryHooks._delivery_recover_stale_executions
     requeue_lost_broker_copies = _DeliveryHooks._delivery_requeue_lost_broker_copies
     prune_terminal = _DeliveryHooks._delivery_prune_terminal
+    redact_settled_bodies = _DeliveryRedaction._delivery_redact_settled_bodies
     execution_timeout_for = _DeliveryHooks._delivery_execution_timeout_for
 
     _expire_job_if_due = _DeliveryRecovery._delivery_expire_job_if_due

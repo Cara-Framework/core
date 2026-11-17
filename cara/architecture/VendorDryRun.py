@@ -16,8 +16,9 @@ but a submodule of ``shared`` and ``gates`` imported, under barrels too thin to
 reach it — which is why step 5 walks every kernel module, not the barrels.
 
 Staging mirrors the Dockerfile's source stage exactly, including reading each
-repository's ``.dockerignore`` for what the build context excludes (§5: read
-the SSOT, never restate it). That fidelity matters — a scratch directory left
+repository's build-context exclusions the way BuildKit does — ``Dockerfile.dockerignore``
+beside the Dockerfile wins over ``.dockerignore``, patterns use Docker's
+matching and ``!`` re-includes (§5: read the SSOT, never restate it). That fidelity matters — a scratch directory left
 in the kernel repo by a migration command makes the real build fail the same
 way it makes this dry-run fail, instead of being discovered in CI.
 
@@ -34,8 +35,8 @@ Five steps, each a hard gate:
 
 from __future__ import annotations
 
-import fnmatch
 import importlib
+import re
 import shutil
 import subprocess
 import sys
@@ -59,40 +60,89 @@ _ALWAYS_SKIP = frozenset(
 )
 
 
-def _dockerignore(root: Path) -> list[str]:
-    """The repository's own build-context exclusions, verbatim."""
-    path = root / ".dockerignore"
-    if not path.is_file():
+# BuildKit reads ``<Dockerfile name>.dockerignore`` beside the Dockerfile
+# before the context's ``.dockerignore``; a deployable that keeps both ships
+# by the first, so reading the second would stage a tree the image never had.
+_IGNORE_FILES = ("Dockerfile.dockerignore", ".dockerignore")
+
+_Rule = tuple[bool, re.Pattern[str]]
+
+
+def _docker_regex(pattern: str) -> re.Pattern[str]:
+    """Docker's ``.dockerignore`` match: ``*`` and ``?`` stay inside one path
+    segment, ``**`` spans segments, and a leading ``**/`` matches at the root
+    too (``**/venv`` excludes ``venv``)."""
+    out, i = [], 0
+    while i < len(pattern):
+        char = pattern[i]
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+            continue
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        if char == "*":
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        elif char == "[" and "]" in pattern[i + 1 :]:
+            close = pattern.index("]", i + 1)
+            body = pattern[i + 1 : close]
+            out.append("[" + ("^" + body[1:] if body.startswith("!") else body) + "]")
+            i = close
+        elif char == "\\" and i + 1 < len(pattern):
+            i += 1
+            out.append(re.escape(pattern[i]))
+        else:
+            out.append(re.escape(char))
+        i += 1
+    return re.compile("".join(out) + "$")
+
+
+def _dockerignore(root: Path) -> list[_Rule]:
+    """The repository's own build-context exclusions, in file order."""
+    path = next((root / n for n in _IGNORE_FILES if (root / n).is_file()), None)
+    if path is None:
         return []
-    return [
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    rules: list[_Rule] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        pattern = line[1:].strip() if negated else line
+        pattern = pattern.lstrip("/").removeprefix("./").rstrip("/")
+        if pattern:
+            rules.append((negated, _docker_regex(pattern)))
+    return rules
 
 
-def _ignored(rel: str, name: str, patterns: list[str]) -> bool:
+def _ignored(rel: str, name: str, rules: list[_Rule]) -> bool:
+    """The last matching rule decides, as in Docker; an excluded directory is
+    not walked, so a ``!`` re-include must name a path whose parents stay in
+    (``fixtures/*`` + ``!fixtures/amazon``, not ``fixtures`` + ``!fixtures/amazon``)."""
     if name in _ALWAYS_SKIP:
         return True
-    return any(
-        fnmatch.fnmatch(rel, pattern)
-        or fnmatch.fnmatch(name, pattern)
-        or rel.startswith(pattern.rstrip("/") + "/")
-        for pattern in patterns
-    )
+    excluded = False
+    for negated, regex in rules:
+        if regex.match(rel):
+            excluded = not negated
+    return excluded
 
 
-def _stage_tree(src: Path, dst: Path, patterns: list[str], prefix: str = "") -> None:
+def _stage_tree(src: Path, dst: Path, rules: list[_Rule], prefix: str = "") -> None:
     dst.mkdir(parents=True, exist_ok=True)
     for child in sorted(src.iterdir()):
         rel = f"{prefix}{child.name}"
-        if _ignored(rel, child.name, patterns):
+        if _ignored(rel, child.name, rules):
             continue
         target = dst / child.name
         if child.is_symlink():
             continue  # the Dockerfile drops and recreates the two kernel links
         if child.is_dir():
-            _stage_tree(child, target, patterns, prefix=f"{rel}/")
+            _stage_tree(child, target, rules, prefix=f"{rel}/")
         else:
             shutil.copy2(child, target)
 

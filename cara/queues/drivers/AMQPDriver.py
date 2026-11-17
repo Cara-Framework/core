@@ -243,70 +243,120 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
             self._runtime_health_cache[cache_key] = now
             return
 
+        # Every role probes every 10 s; a fresh connection per probe was
+        # broker connection churn. The probe keeps one connection per thread
+        # and reopens it only when the broker dropped it, so a refusal on a
+        # live connection still fails the probe and a dead broker still fails
+        # the reopen.
+        connection, reused = self._health_probe_connection()
+        try:
+            self._probe_broker_capability(connection, access, names)
+        except Exception:
+            if self._health_connection_alive(connection):
+                raise
+            self._drop_health_probe_connection()
+            if not reused:
+                raise
+            connection, _ = self._health_probe_connection()
+            self._probe_broker_capability(connection, access, names)
+        self._runtime_health_cache[cache_key] = now
+
+    def _health_probe_connection(self) -> tuple[Any, bool]:
+        """This thread's probe connection, and whether it was reused."""
+        connection = getattr(self._tls, "health_connection", None)
+        if connection is not None:
+            try:
+                # BlockingConnection has no background I/O loop: service the
+                # heartbeat frames that piled up since the last probe before
+                # trusting ``is_open``.
+                connection.process_data_events(time_limit=0)
+            except Exception:
+                self._drop_health_probe_connection()
+            else:
+                if self._health_connection_alive(connection):
+                    return connection, True
+                self._drop_health_probe_connection()
         connection, bootstrap = self.open_topology_connection()
         with contextlib.suppress(Exception):
             bootstrap.close()
+        self._tls.health_connection = connection
+        return connection, False
+
+    @staticmethod
+    def _health_connection_alive(connection: Any) -> bool:
         try:
-            if access == "publish":
-                # Prove write authorization without leaving a message behind.
-                # The default exchange routes only to an exactly named queue;
-                # a random nonexistent route with mandatory confirms must
-                # therefore return UnroutableError after Rabbit accepts the
-                # publish. AccessRefused/Nack/transport errors still propagate.
-                channel = connection.channel()
-                try:
-                    channel.confirm_delivery()
-                    try:
-                        channel.basic_publish(
-                            exchange="",
-                            routing_key=(f"__cara_write_probe__.{uuid.uuid4().hex}"),
-                            body=b"",
-                            mandatory=True,
-                            properties=pika.BasicProperties(
-                                content_type="application/octet-stream",
-                                delivery_mode=1,
-                                expiration="1",
-                                type="cara.queue.write-probe",
-                            ),
-                        )
-                    except pika.exceptions.UnroutableError:
-                        pass
-                    else:
-                        raise QueueException(
-                            "RabbitMQ write probe unexpectedly routed; "
-                            "the reserved health queue namespace is occupied."
-                        )
-                finally:
-                    with contextlib.suppress(Exception):
-                        channel.close()
-                self._runtime_health_cache[cache_key] = now
-                return
-            if access == "consume":
-                resources = [("queue", name) for name in names]
-            else:
-                resources = [
-                    ("exchange", DEAD_LETTER_EXCHANGE),
-                    ("queue", DEAD_LETTER_QUEUE),
-                    *(("queue", name) for name in names),
-                ]
-            for kind, name in resources:
-                channel = connection.channel()
-                try:
-                    if kind == "exchange":
-                        channel.exchange_declare(
-                            exchange=name,
-                            exchange_type="topic",
-                            passive=True,
-                        )
-                    else:
-                        channel.queue_declare(queue=name, passive=True)
-                finally:
-                    with contextlib.suppress(Exception):
-                        channel.close()
-        finally:
+            return bool(connection.is_open)
+        except Exception:
+            return False
+
+    def _drop_health_probe_connection(self) -> None:
+        connection = getattr(self._tls, "health_connection", None)
+        self._tls.health_connection = None
+        if connection is not None:
             with contextlib.suppress(Exception):
                 connection.close()
-        self._runtime_health_cache[cache_key] = now
+
+    def _probe_broker_capability(
+        self,
+        connection: Any,
+        access: str,
+        names: tuple[str, ...],
+    ) -> None:
+        if access == "publish":
+            # Prove write authorization without leaving a message behind.
+            # The default exchange routes only to an exactly named queue;
+            # a random nonexistent route with mandatory confirms must
+            # therefore return UnroutableError after Rabbit accepts the
+            # publish. AccessRefused/Nack/transport errors still propagate.
+            channel = connection.channel()
+            try:
+                channel.confirm_delivery()
+                try:
+                    channel.basic_publish(
+                        exchange="",
+                        routing_key=(f"__cara_write_probe__.{uuid.uuid4().hex}"),
+                        body=b"",
+                        mandatory=True,
+                        properties=pika.BasicProperties(
+                            content_type="application/octet-stream",
+                            delivery_mode=1,
+                            expiration="1",
+                            type="cara.queue.write-probe",
+                        ),
+                    )
+                except pika.exceptions.UnroutableError:
+                    pass
+                else:
+                    raise QueueException(
+                        "RabbitMQ write probe unexpectedly routed; "
+                        "the reserved health queue namespace is occupied."
+                    )
+            finally:
+                with contextlib.suppress(Exception):
+                    channel.close()
+            return
+        if access == "consume":
+            resources = [("queue", name) for name in names]
+        else:
+            resources = [
+                ("exchange", DEAD_LETTER_EXCHANGE),
+                ("queue", DEAD_LETTER_QUEUE),
+                *(("queue", name) for name in names),
+            ]
+        for kind, name in resources:
+            channel = connection.channel()
+            try:
+                if kind == "exchange":
+                    channel.exchange_declare(
+                        exchange=name,
+                        exchange_type="topic",
+                        passive=True,
+                    )
+                else:
+                    channel.queue_declare(queue=name, passive=True)
+            finally:
+                with contextlib.suppress(Exception):
+                    channel.close()
 
     def broker_ready_counts(self, queue_names: Any) -> dict[str, int]:
         """Ready (undelivered) message count per canonical queue, from the broker.

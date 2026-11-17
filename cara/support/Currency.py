@@ -64,6 +64,7 @@ _ZERO_DECIMAL_CURRENCIES = frozenset(
         "PYG",
         "RWF",
         "UGX",
+        "UYI",
         "VND",
         "VUV",
         "XAF",
@@ -95,6 +96,14 @@ def require_currency_code(value: object, *, context: str = "Money") -> str:
     if code is None:
         raise ValueError(f"{context} requires a 3-letter currency code.")
     return code
+
+
+def currency_minor_digits(currency: object) -> int:
+    """ISO 4217 exponent the amount steps in: 0 for zero-decimal currencies
+    (a yen share is a whole yen), 2 otherwise. A missing/malformed code is
+    treated as 2 — the cent every stored amount already rounds to."""
+
+    return 0 if normalize_currency_code(currency) in _ZERO_DECIMAL_CURRENCIES else 2
 
 
 def currency_symbol(currency: str) -> str:
@@ -156,7 +165,7 @@ def format_money(
         raise ValueError("Money formatting requires a finite amount.")
     code = require_currency_code(currency)
     if decimals is None:
-        decimals = 0 if code in _ZERO_DECIMAL_CURRENCIES else 2
+        decimals = currency_minor_digits(code)
     if isinstance(decimals, bool) or not isinstance(decimals, int) or decimals < 0:
         raise ValueError("Money formatting decimals must be a non-negative integer.")
     # ``,`` groups thousands; ``.{decimals}f`` fixes the precision and
@@ -166,6 +175,7 @@ def format_money(
 
 
 __all__ = [
+    "currency_minor_digits",
     "currency_symbol",
     "format_money",
     "normalize_currency_code",

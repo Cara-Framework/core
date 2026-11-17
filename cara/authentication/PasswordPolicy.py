@@ -47,6 +47,12 @@ from cara.exceptions import AuthenticationConfigurationException, InvalidArgumen
 # refuse a megabyte, not to argue with a passphrase.
 MAX_PASSWORD_BYTES = 1024
 
+# Character-length bounds every password-setting form validates against
+# (``auth.password_min_length`` / ``auth.password_max_length``). NIST
+# SP 800-63B: 15 for a single-factor password, 64+ allowed at the top.
+MIN_PASSWORD_LENGTH = 15
+MAX_PASSWORD_LENGTH = 128
+
 # Length alone does not stop "aaaaaaaaaaaaaaaa".
 MIN_UNIQUE_CHARS = 4
 
@@ -88,6 +94,32 @@ def password_max_bytes() -> int:
     if boundary is None:
         return ceiling
     return min(ceiling, boundary)
+
+
+def password_length_bounds() -> tuple[int, int]:
+    """``(min, max)`` password length in characters, read at call time.
+
+    Every Form Request that sets or checks a password reads THIS, so the
+    register, reset, change and set forms (and the policy endpoint the
+    frontend reads) can never disagree. A product pins its own numbers in
+    ``config/auth.py``; an absent key uses the framework default, a
+    malformed one or an inverted pair raises.
+    """
+    minimum = _configured_positive_int(
+        "auth.password_min_length",
+        config("auth.password_min_length"),
+        MIN_PASSWORD_LENGTH,
+    )
+    maximum = _configured_positive_int(
+        "auth.password_max_length",
+        config("auth.password_max_length"),
+        MAX_PASSWORD_LENGTH,
+    )
+    if minimum > maximum:
+        raise AuthenticationConfigurationException(
+            "auth.password_min_length must not exceed auth.password_max_length"
+        )
+    return minimum, maximum
 
 
 def check_password_strength(password: str) -> str | None:
@@ -168,8 +200,11 @@ def _configured_positive_int(name: str, value: object, default: int) -> int:
 __all__ = [
     "COMMON_PASSWORD_PREFIXES",
     "MAX_PASSWORD_BYTES",
+    "MAX_PASSWORD_LENGTH",
+    "MIN_PASSWORD_LENGTH",
     "MIN_UNIQUE_CHARS",
     "check_password_strength",
     "denied_prefixes",
+    "password_length_bounds",
     "password_max_bytes",
 ]

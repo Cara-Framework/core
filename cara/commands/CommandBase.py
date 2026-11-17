@@ -12,7 +12,7 @@ from rich.console import Console as RichConsole
 from rich.progress import track
 from rich.table import Table
 
-from cara.configuration import config
+from cara.configuration import config, is_production_environment
 
 
 class CommandBase:
@@ -76,8 +76,7 @@ class CommandBase:
 
     def _is_production(self) -> bool:
         """Check if running in production environment."""
-        env = str(config("app.env", "")).lower()
-        return env in ("production", "prod")
+        return is_production_environment(config("app.env", ""))
 
     def confirm(
         self, prompt: str = "Are you sure you want to continue?", default: bool = False

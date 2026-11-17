@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import cara.schema.Scratch as Scratch
 from cara.commands.CommandBase import CommandBase
-from cara.configuration import config
+from cara.configuration import config, is_production_environment
 from cara.decorators import command
 from cara.support import base_path
 
@@ -88,7 +88,7 @@ def _derive_scratch_name(configured: str) -> str:
 class SchemaVerifyCommand(CommandBase):
     def handle(self):
         """Create scratch → migrate from zero → schema:check → drop."""
-        if (config("app.env", "") or "").lower() in ("production", "prod"):
+        if is_production_environment(config("app.env", "")):
             self.error(
                 "Refusing to run schema:verify in production. The invariant is "
                 "proved against a disposable scratch database in development; "

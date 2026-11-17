@@ -25,6 +25,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "DEFAULT_RETRY_BACKOFF_SECONDS": (".retry", "DEFAULT_RETRY_BACKOFF_SECONDS"),
     "DEFAULT_RETRY_JITTER_FRACTION": (".retry", "DEFAULT_RETRY_JITTER_FRACTION"),
     "DeliveryClaim": (".delivery", "DeliveryClaim"),
+    "REDACTED_MARKER": (".delivery", "REDACTED_MARKER"),
     "DeliveryEnvelopeExpired": (".delivery", "DeliveryEnvelopeExpired"),
     "DeliveryEnvelopeMismatch": (".delivery", "DeliveryEnvelopeMismatch"),
     "DeliveryLeaseLost": (".delivery", "DeliveryLeaseLost"),
@@ -84,6 +85,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "run_through_middleware": (".middleware", "run_through_middleware"),
     "run_through_middleware_async": (".middleware", "run_through_middleware_async"),
     "safe_dispatch": (".helpers", "safe_dispatch"),
+    "normalize_idempotency_param": (".idempotency", "normalize_idempotency_param"),
 }
 
 __all__ = [
@@ -135,6 +137,7 @@ __all__ = [
     "QueueRouter",
     "QueueState",
     "Queueable",
+    "REDACTED_MARKER",
     "RateLimited",
     "ReplayDelivery",
     "RoutingKey",
@@ -157,6 +160,7 @@ __all__ = [
     "inspect_queue",
     "instantiate_job",
     "matches_pattern",
+    "normalize_idempotency_param",
     "patterns_overlap",
     "queue_signing_keyring",
     "rabbit_broker_access",

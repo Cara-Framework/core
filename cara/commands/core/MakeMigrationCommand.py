@@ -56,7 +56,7 @@ from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
 from cara.commands.OptionalDependencyError import missing_optional
-from cara.configuration import config
+from cara.configuration import config, is_production_environment
 from cara.decorators import command
 from cara.eloquent.migrations.MigrationGenerator import _atomic_write
 from cara.support import paths
@@ -145,7 +145,7 @@ class MakeMigrationCommand(CommandBase):
         files the applied ledger references by filename, so on a deployed
         database every already-applied migration would look pending again.
         """
-        if (config("app.env", "") or "").lower() in ("production", "prod"):
+        if is_production_environment(config("app.env", "")):
             self.error(
                 "Refusing to run make:migration in production. The migrations "
                 "directory is regenerated from models in development only; the "

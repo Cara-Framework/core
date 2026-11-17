@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import Any
 
 from cara.commands.CommandBase import CommandBase
-from cara.configuration import config
+from cara.configuration import config, is_production_environment
 from cara.facades import Cache, Log
 from cara.queues import DEAD_LETTER_EXCHANGE
 from cara.support import Process, Sleep
@@ -122,7 +122,7 @@ class DevResetCommand(CommandBase):
         if db:
             # Belt-and-suspenders: ``--yes`` is enough for a dev cluster, but
             # one paste into the wrong shell would otherwise wipe production.
-            if (config("app.env", "") or "").lower() in ("production", "prod"):
+            if is_production_environment(config("app.env", "")):
                 self.error(
                     "Refusing to TRUNCATE operational tables in production. "
                     "If you really need to reset, switch APP_ENV first."

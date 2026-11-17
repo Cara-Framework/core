@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -85,6 +86,7 @@ def _runtime_health_driver(access: str):
     driver.options = {"broker_access": access}
     driver._canonical_queues = frozenset({"connector", "sync"})
     driver._runtime_health_cache = {}
+    driver._tls = threading.local()
     driver._delivery_store = SimpleNamespace(verify_schema=MagicMock())
     bootstrap = MagicMock()
     channel = MagicMock()
@@ -105,7 +107,7 @@ def test_consumer_health_checks_only_assigned_readable_queues() -> None:
         passive=True,
     )
     channel.exchange_declare.assert_not_called()
-    connection.close.assert_called_once_with()
+    connection.close.assert_not_called()
 
 
 def test_publisher_health_proves_write_permission_with_unroutable_probe() -> None:
@@ -126,7 +128,7 @@ def test_publisher_health_proves_write_permission_with_unroutable_probe() -> Non
     channel.queue_declare.assert_not_called()
     channel.exchange_declare.assert_not_called()
     channel.close.assert_called_once_with()
-    connection.close.assert_called_once_with()
+    connection.close.assert_not_called()
 
 
 def test_publisher_health_fails_when_default_exchange_write_is_denied() -> None:
@@ -147,3 +149,81 @@ def test_db_only_health_never_attempts_broker_authentication() -> None:
 
     driver._delivery_store.verify_schema.assert_called_once_with()
     driver.open_topology_connection.assert_not_called()
+
+
+def test_health_probe_reuses_one_connection_per_thread() -> None:
+    driver, connection, channel = _runtime_health_driver("consume")
+
+    driver.verify_runtime_health(["sync"], force=True)
+    driver.verify_runtime_health(["sync"], force=True)
+
+    driver.open_topology_connection.assert_called_once_with()
+    connection.process_data_events.assert_called_once_with(time_limit=0)
+    assert channel.queue_declare.call_count == 2
+    connection.close.assert_not_called()
+
+
+def test_health_probe_reopens_a_connection_the_broker_dropped() -> None:
+    driver, stale, _channel = _runtime_health_driver("consume")
+    driver.verify_runtime_health(["sync"], force=True)
+    fresh = MagicMock()
+    fresh.channel.return_value = MagicMock()
+    driver.open_topology_connection.return_value = (fresh, MagicMock())
+    stale.process_data_events.side_effect = pika.exceptions.StreamLostError()
+
+    driver.verify_runtime_health(["sync"], force=True)
+
+    stale.close.assert_called_once_with()
+    fresh.channel.return_value.queue_declare.assert_called_once_with(
+        queue="sync",
+        passive=True,
+    )
+
+
+def test_health_probe_retries_once_when_a_reused_connection_dies_mid_probe() -> None:
+    driver, stale, channel = _runtime_health_driver("consume")
+    driver.verify_runtime_health(["sync"], force=True)
+    fresh = MagicMock()
+    fresh.channel.return_value = MagicMock()
+    driver.open_topology_connection.return_value = (fresh, MagicMock())
+
+    def lost(**_kwargs):
+        stale.is_open = False
+        raise pika.exceptions.StreamLostError()
+
+    channel.queue_declare.side_effect = lost
+
+    driver.verify_runtime_health(["sync"], force=True)
+
+    assert driver.open_topology_connection.call_count == 2
+    fresh.channel.return_value.queue_declare.assert_called_once()
+
+
+def test_health_probe_refusal_on_a_live_connection_fails_and_keeps_it() -> None:
+    driver, connection, channel = _runtime_health_driver("consume")
+    channel.queue_declare.side_effect = pika.exceptions.ChannelClosedByBroker(
+        404,
+        "NOT_FOUND",
+    )
+
+    with pytest.raises(pika.exceptions.ChannelClosedByBroker):
+        driver.verify_runtime_health(["sync"], force=True)
+
+    driver.open_topology_connection.assert_called_once_with()
+    connection.close.assert_not_called()
+
+
+def test_health_probe_fresh_connection_failure_propagates() -> None:
+    driver, connection, channel = _runtime_health_driver("consume")
+
+    def lost(**_kwargs):
+        connection.is_open = False
+        raise pika.exceptions.StreamLostError()
+
+    channel.queue_declare.side_effect = lost
+
+    with pytest.raises(pika.exceptions.StreamLostError):
+        driver.verify_runtime_health(["sync"], force=True)
+
+    driver.open_topology_connection.assert_called_once_with()
+    assert driver._tls.health_connection is None

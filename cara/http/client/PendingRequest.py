@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import random
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
+
+from cara.support import retry_after_seconds
 
 from . import HttpFake
 
@@ -173,20 +173,8 @@ _RETRY_AFTER_CAP_SECONDS = 60.0
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
-    """Parse ``Retry-After`` (delta-seconds or HTTP-date), capped; None if absent/invalid."""
-    raw = (response.headers.get("Retry-After") or "").strip()
-    if not raw:
-        return None
-    if raw.isdigit():
-        return min(float(raw), _RETRY_AFTER_CAP_SECONDS)
-    try:
-        when = parsedate_to_datetime(raw)
-    except TypeError, ValueError:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
-    seconds = (when - datetime.now(UTC)).total_seconds()
-    return min(max(seconds, 0.0), _RETRY_AFTER_CAP_SECONDS)
+    """The answer's ``Retry-After``, capped for an in-request wait."""
+    return retry_after_seconds(response.headers, cap=_RETRY_AFTER_CAP_SECONDS)
 
 
 def _log_retry(url: str, attempt: int, exc: Exception) -> None:

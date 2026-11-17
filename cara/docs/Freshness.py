@@ -47,6 +47,42 @@ def front_matter(src: str) -> dict:
     return out
 
 
+def source_files(root: Path, pattern: str) -> list[Path]:
+    """Files one ``sources:`` glob binds a page to (bytecode never counts)."""
+    return [f for f in root.glob(pattern) if f.is_file() and "__pycache__" not in f.parts]
+
+
+def hand_written_pages(manifest: DocsManifest) -> list[Path]:
+    """Every markdown under docs/ except the generated reference."""
+    return [
+        f
+        for f in sorted(manifest.docs.rglob("*.md"))
+        if manifest.reference not in f.parents
+    ]
+
+
+def empty_source_globs(manifest: DocsManifest) -> list[str]:
+    """Every ``sources:`` entry, across hand-written pages, matching no file.
+
+    The STRUCTURAL half of freshness. Being stale is normal — code moves and a
+    human re-reads the page — but a glob that matches nothing binds the page
+    to no code at all, and no amount of re-reading fixes that: the page must be
+    re-pointed. The report marks it STALE among the ordinary stale rows; a
+    product gate fails on this list alone.
+    """
+    empty: list[str] = []
+    for doc in hand_written_pages(manifest):
+        sources = front_matter(read(doc)).get("sources") or []
+        if not isinstance(sources, list):
+            continue
+        empty += [
+            f"{doc.relative_to(manifest.docs)}: {pattern}"
+            for pattern in sources
+            if not source_files(manifest.root, pattern)
+        ]
+    return empty
+
+
 def doc_title(path: Path) -> str:
     """Title from front matter, else the first heading, else the file stem."""
     src = read(path)
@@ -145,8 +181,7 @@ def freshness(manifest: DocsManifest, write: bool, now: str, say: Say) -> int:
     # surface ``owned_markdowns`` judges. Enumerating the subtrees by name
     # instead left docs/README.md (which documents this very command and the
     # viewer) permanently unscanned: no front-matter, no STALE, ever.
-    pages = [f for f in sorted(docs.rglob("*.md")) if reference not in f.parents]
-    for doc in pages:
+    for doc in hand_written_pages(manifest):
         fm = front_matter(read(doc))
         sources = fm.get("sources") or []
         if not isinstance(sources, list) or not sources:
@@ -157,19 +192,15 @@ def freshness(manifest: DocsManifest, write: bool, now: str, say: Say) -> int:
             rows.append((doc, "—", "no verified: date", True))
             stale_count += 1
             continue
-        source_files: list[Path] = []
+        bound: list[Path] = []
         missing: list[str] = []
         for source_glob in sources:
-            matches = [
-                f
-                for f in root.glob(source_glob)
-                if f.is_file() and "__pycache__" not in f.parts
-            ]
+            matches = source_files(root, source_glob)
             if not matches:
                 missing.append(source_glob)
                 continue
-            source_files.extend(matches)
-        newest = newest_change(source_files, root)
+            bound.extend(matches)
+        newest = newest_change(bound, root)
         if missing:
             rows.append((doc, "—", f"empty source glob(s): {missing}", True))
             stale_count += 1
@@ -214,4 +245,13 @@ def freshness(manifest: DocsManifest, write: bool, now: str, say: Say) -> int:
     return stale_count
 
 
-__all__ = ["FM_RE", "doc_title", "freshness", "front_matter", "gen_nav"]
+__all__ = [
+    "FM_RE",
+    "doc_title",
+    "empty_source_globs",
+    "freshness",
+    "front_matter",
+    "gen_nav",
+    "hand_written_pages",
+    "source_files",
+]

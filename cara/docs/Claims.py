@@ -56,6 +56,22 @@ LEGEND_PAIR_RE = re.compile(r"(?<![\w/])([A-Z][A-Z0-9]{0,5})/?\s+=\s+`?([^\s·;,
 Finding = tuple[str, int, str, str, str]
 
 
+def marked(line: str, marker: str) -> bool:
+    """Whether ``line`` CARRIES ``marker`` rather than quoting it.
+
+    A doc that explains the markers writes them in backticks; read raw, that
+    sentence switched the gate off for its own line — and the ignore-FILE
+    marker for the whole page, so both docs READMEs went unchecked while
+    looking covered. Only a marker outside an inline code span counts.
+    """
+    return marker in INLINE_CODE.sub("", line)
+
+
+def ignores_file(text: str) -> bool:
+    """Whether ``text`` opts out whole, by a marker outside code."""
+    return any(marked(line, IGNORE_FILE) for line in strip_fences(text))
+
+
 def path_legends(lines: list[str]) -> list[dict[str, str]]:
     """The shorthand prefixes in force on each line.
 
@@ -256,7 +272,7 @@ def check_forbidden(
     """
     out: list[Finding] = []
     for number, line in enumerate(raw_lines, 1):
-        if IGNORE_LINE in line or line.lstrip().startswith("```"):
+        if marked(line, IGNORE_LINE) or line.lstrip().startswith("```"):
             continue
         if NEGATION_RE.search(line):
             continue
@@ -304,7 +320,7 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
 
     for doc in owned_markdowns(manifest):
         text = read(doc)
-        if IGNORE_FILE in text:
+        if ignores_file(text):
             continue
         label = str(doc.relative_to(root)) if root in doc.parents else str(doc)
         broken += check_forbidden(label, text.splitlines(), bans)
@@ -339,7 +355,7 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
         prose = strip_fences(text)
         legends = path_legends(prose)
         for number, line in enumerate(prose, 1):
-            if IGNORE_LINE in line or not line.strip():
+            if marked(line, IGNORE_LINE) or not line.strip():
                 continue
             legend = legends[number - 1]
             for span in INLINE_CODE.findall(line):
@@ -544,7 +560,9 @@ __all__ = [
     "check_forbidden",
     "claims_report",
     "command_names",
+    "ignores_file",
     "invocation_re",
+    "marked",
     "owned_markdowns",
     "verify_claims",
 ]

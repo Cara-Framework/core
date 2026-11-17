@@ -74,4 +74,9 @@ def matches(token: str, public_id: str, email: str, secret: str) -> bool:
     """
     if not token or not public_id or not email or not secret:
         return False
-    return hmac.compare_digest(token, mint(public_id, email, secret))
+    # Bytes, not ``str``: the token arrives from a query string, and
+    # ``compare_digest`` raises ``TypeError`` on a non-ASCII ``str`` — a
+    # mangled link would surface as a 500 instead of "not valid".
+    return hmac.compare_digest(
+        str(token).encode("utf-8"), mint(public_id, email, secret).encode("utf-8")
+    )

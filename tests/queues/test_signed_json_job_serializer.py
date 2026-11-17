@@ -287,7 +287,9 @@ def test_signed_json_rejects_secret_bearing_constructor_keys(
         )
 
 
-@pytest.mark.parametrize("reference_key", ["api_token_id", "token_id", "refresh_token_ids"])
+@pytest.mark.parametrize(
+    "reference_key", ["api_token_id", "token_id", "refresh_token_ids"]
+)
 def test_signed_json_accepts_a_durable_reference_named_after_a_secret(reference_key):
     """Live 2026-11-14: the audit actor's ``api_token_id`` (an ApiToken row id)
     crossed the hop in ``_ambient`` and every API-token request that queued a

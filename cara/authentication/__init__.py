@@ -22,6 +22,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "LoginAttemptTracker": (".LoginAttemptTracker", "LoginAttemptTracker"),
     "LoginLocked": (".LoginLocked", "LoginLocked"),
     "MAX_PASSWORD_BYTES": (".PasswordPolicy", "MAX_PASSWORD_BYTES"),
+    "MAX_PASSWORD_LENGTH": (".PasswordPolicy", "MAX_PASSWORD_LENGTH"),
+    "MIN_PASSWORD_LENGTH": (".PasswordPolicy", "MIN_PASSWORD_LENGTH"),
     "MAX_TOKEN_LENGTH": (".SignInHint", "MAX_TOKEN_LENGTH"),
     "MIN_UNIQUE_CHARS": (".PasswordPolicy", "MIN_UNIQUE_CHARS"),
     "SignInHint": (".SignInHint", "SignInHint"),
@@ -30,6 +32,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "TwoFactor": (".TwoFactor", "TwoFactor"),
     "check_password_strength": (".PasswordPolicy", "check_password_strength"),
     "denied_prefixes": (".PasswordPolicy", "denied_prefixes"),
+    "password_length_bounds": (".PasswordPolicy", "password_length_bounds"),
     "password_max_bytes": (".PasswordPolicy", "password_max_bytes"),
 }
 
@@ -46,7 +49,9 @@ __all__ = [
     "LoginAttemptTracker",
     "LoginLocked",
     "MAX_PASSWORD_BYTES",
+    "MAX_PASSWORD_LENGTH",
     "MAX_TOKEN_LENGTH",
+    "MIN_PASSWORD_LENGTH",
     "MIN_UNIQUE_CHARS",
     "SignInHint",
     "TOKEN_TYPE_ACCESS",
@@ -54,6 +59,7 @@ __all__ = [
     "TwoFactor",
     "check_password_strength",
     "denied_prefixes",
+    "password_length_bounds",
     "password_max_bytes",
 ]
 

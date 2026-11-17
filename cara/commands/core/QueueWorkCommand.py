@@ -20,7 +20,7 @@ from cara.commands.ProcessReload import (
     reloaded_boot_completed,
     replace_process_when_bootable,
 )
-from cara.configuration import config
+from cara.configuration import config, is_production_environment
 from cara.decorators import command
 from cara.exceptions import (
     CaraException,
@@ -253,7 +253,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             if _port:
                 Log.info("📈 Metrics server on :%s/metrics", _port)
         except Exception as e:
-            if str(config("app.env", "local")).lower() in {"production", "prod"}:
+            if is_production_environment(config("app.env", "")):
                 raise CaraException("Worker metrics server failed to start") from e
             Log.warning("metrics server startup failed: %s", e)
 

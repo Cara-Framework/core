@@ -23,6 +23,16 @@ PRUNE = {
     "coverage",
 }
 
+# Dot-directories that hold TRACKED, hand-maintained configuration a doc
+# legitimately cites — CI workflows above all (`api/.github/workflows/ci.yml`).
+# Every other dot-directory stays pruned: they hold caches, tool state or whole
+# snapshot copies of the tree, and the basename index matches by suffix, so a
+# stale copy would certify a claim the real tree no longer satisfies. Pruning
+# ALL of them made every real workflow path read "path does not exist".
+INDEXED_DOT_DIRS = frozenset(
+    {".github", ".gitlab", ".circleci", ".husky", ".devcontainer", ".changeset"}
+)
+
 CODE_EXT = {
     ".py",
     ".ts",
@@ -62,7 +72,11 @@ def path_index(root: Path) -> tuple[dict[str, list[str]], set[str]]:
     by_name: dict[str, list[str]] = {}
     top: set[str] = set()
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in PRUNE and not d.startswith(".")]
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in PRUNE and (not d.startswith(".") or d in INDEXED_DOT_DIRS)
+        ]
         here = Path(dirpath)
         if here == root:
             top = set(dirnames) | set(filenames)
@@ -157,7 +171,10 @@ def check_path_claim(token: str, roots: list[Path]) -> tuple[str, str] | None:
     if "node_modules/" in token:
         return ("unverifiable", "inside node_modules; not indexed")
     first = token.split("/", 1)[0]
-    if "." in first or not first or any(char in token for char in "<>{}\"'"):
+    # A dot in the first segment reads as a host (`example.com/x`), not a path —
+    # except a tracked config directory, which is exactly a path.
+    dotted = "." in first and first not in INDEXED_DOT_DIRS
+    if dotted or not first or any(char in token for char in "<>{}\"'"):
         return None
     last = token.rsplit("/", 1)[-1]
     extension = "." + last.rsplit(".", 1)[-1] if "." in last else ""
@@ -251,6 +268,7 @@ def _owned_markdowns(
 
 __all__ = [
     "CODE_EXT",
+    "INDEXED_DOT_DIRS",
     "PRUNE",
     "check_path_claim",
     "declared_ports",

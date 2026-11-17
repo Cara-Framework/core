@@ -20,10 +20,17 @@ assert it emits NOTHING. Both would have passed a wildcard before.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from cara.exceptions.handlers.DefaultExceptionHandler import DefaultExceptionHandler
 from cara.middleware.http import Cors
+
+# The barrel loads its submodules lazily, so the module is imported here, at
+# collection: imported first inside a test that patches
+# ``Cors.load_cors_policy``, it would bind that test's stub for good.
+_HANDLE_CORS = importlib.import_module("cara.middleware.http.HandleCors")
 
 
 @pytest.fixture
@@ -141,11 +148,7 @@ def test_an_explicitly_allowed_origin_is_echoed_with_vary(
 
 def _handle_cors_module():
     """``cara.middleware.http.HandleCors`` the ATTRIBUTE is the class."""
-    import sys
-
-    import cara.middleware.http  # noqa: F401 — registers the submodule
-
-    return sys.modules["cara.middleware.http.HandleCors"]
+    return _HANDLE_CORS
 
 
 def test_the_middleware_reads_the_shared_policy_rather_than_its_own(

@@ -142,6 +142,10 @@ class QueueProvider(DeferredProvider):
                     "queue.drivers.amqp.delivery_audit_safety_days",
                     7,
                 ),
+                "delivery_body_retention_days": config(
+                    "queue.drivers.amqp.delivery_body_retention_days",
+                    1,
+                ),
                 "delivery_hook_timeout_seconds": config(
                     "queue.drivers.amqp.delivery_hook_timeout_seconds",
                     60,
