@@ -46,3 +46,40 @@ def test_callable_ttl_resolved_at_call_time():
         vc.bump()
     assert cache.increment.call_args_list[0].args == ("k", 0, 100)
     assert cache.increment.call_args_list[1].args == ("k", 1, 200)
+
+
+def test_read_or_none_answers_none_on_cache_fault_not_zero():
+    cache = MagicMock()
+    cache.increment.side_effect = ConnectionError("redis down")
+    with patch("cara.cache.VersionedCache.Cache", cache):
+        assert VersionedCache("k", 60).read_or_none() is None
+
+
+def test_try_bump_swallows_cache_fault():
+    cache = MagicMock()
+    cache.increment.side_effect = ConnectionError("redis down")
+    with patch("cara.cache.VersionedCache.Cache", cache):
+        assert VersionedCache("k", 60).try_bump() is None
+
+
+def test_remember_bypasses_cache_when_stamp_unreadable():
+    cache = MagicMock()
+    cache.increment.side_effect = ConnectionError("redis down")
+    with patch("cara.cache.VersionedCache.Cache", cache):
+        value = VersionedCache("k", 60).remember(
+            lambda v: f"page:v{v}", 30, lambda: "fresh"
+        )
+    assert value == "fresh"
+    cache.remember.assert_not_called()
+
+
+def test_remember_keys_by_stamp_and_is_not_strict():
+    cache = MagicMock()
+    cache.increment.return_value = 4
+    cache.remember.return_value = "cached"
+    with patch("cara.cache.VersionedCache.Cache", cache):
+        value = VersionedCache("k", 60).remember(lambda v: f"page:v{v}", 30, lambda: "x")
+    assert value == "cached"
+    args, kwargs = cache.remember.call_args
+    assert args[0] == "page:v4" and args[1] == 30
+    assert kwargs == {"strict": False}

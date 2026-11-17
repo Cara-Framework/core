@@ -1,10 +1,11 @@
-"""dev:reset template — step order, the production refusal, the confirm gate.
+"""dev:reset template — step order, the local-only refusal, the confirm gate.
 
 Three things the framework owns and must never get wrong:
 
 * ORDER. Workers stop before anything else; a live consumer re-populates the
   cache you just flushed and re-fills the queue you just purged.
-* The production refusal, which no ``--yes`` can talk past.
+* The local-only refusal (environment whitelist + a database on this
+  machine), which no ``--yes`` can talk past.
 * The confirm gate: ``--db`` without ``--yes`` deletes nothing.
 
 And one thing it must never own: the truncate statement. The base declares
@@ -77,13 +78,18 @@ class _RecordingReset(DevResetCommand):
         return ["search index cleared"]
 
 
+def _config(app_env: object, db_host: object = "127.0.0.1"):
+    values = {
+        "app.env": app_env,
+        "database.default": "app",
+        "database.drivers": {"app": {"host": db_host}},
+    }
+    return lambda key, default=None: values.get(key, default)
+
+
 @pytest.fixture
 def _dev_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        _MODULE,
-        "config",
-        lambda key, default=None: "local" if key == "app.env" else default,
-    )
+    monkeypatch.setattr(_MODULE, "config", _config("local"))
 
 
 def test_the_base_is_not_a_registered_command() -> None:
@@ -121,24 +127,74 @@ def test_keep_flags_skip_their_steps(_dev_env) -> None:
 
 
 def test_db_without_yes_refuses_and_deletes_nothing(_dev_env) -> None:
+    # Not even the cache or the queues: the confirm gate runs before any step.
     command = _RecordingReset()
-    assert command.handle(db=True, keep_cache=True, keep_queues=True) == 1
+    assert command.handle(db=True, kill_workers=True, dlx=True) == 1
     assert command.steps == []
     assert any("--yes" in message for message in command.messages)
 
 
-def test_production_refuses_the_truncate_even_with_yes(
+@pytest.mark.parametrize(
+    "app_env", ["production", "prod", "staging", "preprod", "ci", "", None, "lokal"]
+)
+def test_a_non_local_environment_refuses_every_step_even_with_yes(
+    monkeypatch: pytest.MonkeyPatch, app_env: object
+) -> None:
+    # A whitelist, not a production blacklist: staging, a typo or an unset
+    # APP_ENV must not flush caches, purge queues or truncate anything.
+    monkeypatch.setattr(_MODULE, "config", _config(app_env))
+    command = _RecordingReset()
+    assert command.handle(db=True, yes=True, kill_workers=True, dlx=True) == 1
+    assert command.steps == []
+    assert any("not a local environment" in message for message in command.messages)
+
+
+@pytest.mark.parametrize("db_host", ["db.internal", "10.0.0.5", "", None])
+def test_db_refuses_a_remote_database_even_in_a_local_environment(
+    monkeypatch: pytest.MonkeyPatch, db_host: object
+) -> None:
+    # A dev shell with APP_ENV=local pointed at a remote database: --db
+    # refuses before ANY step runs, so nothing is half-reset either.
+    monkeypatch.setattr(_MODULE, "config", _config("local", db_host))
+    command = _RecordingReset()
+    assert command.handle(db=True, yes=True) == 1
+    assert command.steps == []
+    assert any("not a local database" in message for message in command.messages)
+
+
+def test_a_remote_database_still_allows_the_non_db_steps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        _MODULE,
-        "config",
-        lambda key, default=None: "production" if key == "app.env" else default,
-    )
+    monkeypatch.setattr(_MODULE, "config", _config("dev", "db.internal"))
     command = _RecordingReset()
-    assert command.handle(db=True, yes=True, keep_cache=True, keep_queues=True) == 1
-    assert command.steps == []
-    assert any("Refusing to TRUNCATE" in message for message in command.messages)
+    assert command.handle() == 0
+    assert command.steps == ["cache", "extra-cache", "queues"]
+
+
+@pytest.mark.parametrize("db_host", ["127.0.0.1", "localhost", " LOCALHOST ", "::1"])
+def test_db_runs_against_a_local_database(
+    monkeypatch: pytest.MonkeyPatch, db_host: str
+) -> None:
+    monkeypatch.setattr(_MODULE, "config", _config(" Local ", db_host))
+    command = _RecordingReset()
+    assert command.handle(db=True, yes=True, keep_cache=True, keep_queues=True) == 0
+    assert command.steps == ["pre-db", "truncate", "extra-db"]
+
+
+def test_a_product_may_whitelist_an_extra_environment_but_not_the_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CiReset(_RecordingReset):
+        EXTRA_RESET_ENVIRONMENTS = ("ci",)
+
+    monkeypatch.setattr(_MODULE, "config", _config("ci"))
+    allowed = _CiReset()
+    assert allowed.handle(db=True, yes=True, keep_cache=True, keep_queues=True) == 0
+
+    monkeypatch.setattr(_MODULE, "config", _config("ci", "db.internal"))
+    refused = _CiReset()
+    assert refused.handle(db=True, yes=True) == 1
+    assert refused.steps == []
 
 
 def test_pre_db_cleanup_runs_before_the_wipe_and_both_labels_are_reported(

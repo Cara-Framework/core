@@ -14,9 +14,12 @@ from cara.configuration import config
 from cara.context import Tenancy
 from cara.exceptions import ConfigurationException
 from cara.facades import Schedule
+from cara.queues import Bus
 from cara.queues.middleware import run_through_middleware_async
+from cara.scheduling import declared_interval_seconds, on_wall_clock
 
 from . import _ScheduledThrottle
+from .ScheduledJobRunner import instantiate_scheduled_job, scheduled_handle_kwargs
 
 
 def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] | None:
@@ -30,7 +33,14 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
         + interval fields: hours, minutes, seconds
           or hour/minute/day_of_week (cron)
         kwargs   – (optional) passed to handle()
+        dispatch – (optional) True queues the job for a worker instead of
+                   running it inline in the scheduler
     """
+
+    # Every entry is registered on the wall clock (``cara.scheduling.WallClock``):
+    # an interval the clock divides becomes its cron, so a scheduler restart
+    # no longer pushes the next fire a whole interval out.
+    spec = on_wall_clock(spec)
 
     job_path: str = spec.get("job", "")
     module_path, _, class_name = job_path.rpartition(".")
@@ -69,13 +79,9 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
     # If handle() needs DI-resolved arguments (contracts), resolve them
     # through the container; if handle() is a coroutine, run it via
     # asyncio so async jobs work transparently.
-    interval_seconds = (
-        float(spec.get("seconds", 0) or 0)
-        + float(spec.get("minutes", 0) or 0) * 60
-        + float(spec.get("hours", 0) or 0) * 3600
-        if trigger == "interval"
-        else None
-    )
+    # The DECLARED period, kept on an entry ``on_wall_clock`` moved to a cron:
+    # the throttle budget is half of it either way.
+    interval_seconds = declared_interval_seconds(spec)
 
     def _make_and_run(
         _cls=job_cls,
@@ -85,45 +91,30 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
         _tenant_id=scheduled_tenant_id,
         _identifier=job_id,
         _budget=_ScheduledThrottle._throttle_budget_seconds(interval_seconds),
+        _dispatch=bool(spec.get("dispatch")),
     ):
 
-        # Instantiate — pass kwargs to __init__ so required params
-        # like a scheduled job(source=...) are satisfied.
-        try:
-            instance = _cls(**_kw) if _kw else _app.make(_cls)
-        except TypeError:
-            # Fallback: kwargs don't match __init__ signature,
-            # try DI container without kwargs.
-            instance = _app.make(_cls)
+        # Instantiation, the idempotency result-cache opt-out and handle()'s
+        # arguments are shared with every hand-run of a schedule entry
+        # (``ScheduledJobRunner``), so a manual run cannot drift from a tick.
+        instance = instantiate_scheduled_job(_app, _cls, _kw)
+        if _dispatch:
+            # ``"dispatch": True``: the tick only QUEUES the job and a worker
+            # runs it on its own lane, under its kill timer and middleware.
+            # Every tick runs inline in ``schedule:work`` otherwise, holding a
+            # pool thread (and a reload) for its whole run — a long or
+            # remote-calling tick made the others miss their fire.
+            async def _queue_scoped():
+                scope = Tenancy.central() if _central else Tenancy.as_tenant(_tenant_id)
+                with scope:
+                    await Bus.dispatch(instance)
 
-        # Scheduled jobs run on a fixed cadence — the scheduler IS the
-        # dedup authority. Opt them out of the 24h idempotency *result
-        # cache*: a no-arg recurring job (e.g. one that runs every 30s)
-        # hashes to one stable key, so the result cache would return
-        # the first tick's cached result for a full day and the job would
-        # effectively run once per 24h. That silently broke deferred
-        # flush-style jobs, so freshly processed records never got their
-        # follow-up work and stayed in their initial state (hidden from
-        # the client). Overlap between slow ticks is still guarded by the
-        # idempotency job lock + any WithoutOverlapping middleware.
-        with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
-            instance.idempotency_cache_results = False
-
-        # Resolve handle() parameters via DI container if needed.
+            asyncio.run(drained(_queue_scoped()))
+            return
         handle_method = getattr(instance, "handle", None)
         if handle_method is None:
             return
-
-        sig = inspect.signature(handle_method)
-        handle_kwargs = {}
-        for param_name, param in sig.parameters.items():
-            if param_name in _kw:
-                handle_kwargs[param_name] = _kw[param_name]
-            elif param.annotation != inspect.Parameter.empty:
-                with contextlib.suppress(
-                    OSError, RuntimeError, AttributeError, ConnectionError
-                ):
-                    handle_kwargs[param_name] = _app.make(param.annotation)
+        handle_kwargs = scheduled_handle_kwargs(_app, handle_method, _kw)
 
         # OPT-IN scheduler-tick observability (default OFF). The scheduler
         # runs jobs INLINE via handle() — bypassing Bus/driver — so a

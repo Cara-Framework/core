@@ -326,9 +326,15 @@ class JobProcessor:
         # A throttle that knows WHEN its gate reopens outranks the generic
         # schedule. ``ThrottlesExceptions`` opens after ``retry_after``
         # seconds (300 by default); coming back on the 1s/5s/30s schedule
-        # just spends the starvation budget knocking on a closed door.
+        # just spends the starvation budget knocking on a closed door. A
+        # FAILURE that names its wait (an upstream's ``Retry-After`` carried
+        # on the exception) is honoured the same way: a floor, never a cut.
         retry_after = getattr(exc, "retry_after", None)
-        if is_throttle and isinstance(retry_after, (int, float)) and retry_after > 0:
+        if (
+            isinstance(retry_after, (int, float))
+            and not isinstance(retry_after, bool)
+            and retry_after > 0
+        ):
             base_delay = max(base_delay, int(retry_after))
 
         try:

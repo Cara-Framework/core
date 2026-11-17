@@ -6,7 +6,7 @@ and getting the ORDER wrong is what makes a "reset" produce results that are
 still contaminated. Flushing the cache while a worker is still consuming
 re-populates it; truncating tables while messages are queued leaves jobs
 referencing rows that no longer exist. That sequence, the flag surface, the
-confirmation gate and the production refusal are the same for any application,
+confirmation gate and the local-only refusal are the same for any application,
 so they live here.
 
 What is NOT here, deliberately: the SQL. ``_truncate()`` is abstract and the
@@ -31,7 +31,11 @@ from __future__ import annotations
 from typing import Any
 
 from cara.commands.CommandBase import CommandBase
-from cara.configuration import config, is_production_environment
+from cara.configuration import (
+    config,
+    configured_local_database_refusal,
+    local_environment_refusal,
+)
 from cara.facades import Cache, Log
 from cara.queues import DEAD_LETTER_EXCHANGE
 from cara.support import Process, Sleep
@@ -90,6 +94,12 @@ class DevResetCommand(CommandBase):
     #: Seconds a worker gets to finish its current job before SIGKILL.
     WORKER_DRAIN_SECONDS: int = 4
 
+    #: ``APP_ENV`` values beyond ``LOCAL_ENVIRONMENTS`` a product explicitly
+    #: allows (e.g. a CI lane on a throwaway database). Empty by default: the
+    #: refusal is a WHITELIST, so staging, preprod, a typo or an unset value
+    #: are refused as firmly as production.
+    EXTRA_RESET_ENVIRONMENTS: tuple[str, ...] = ()
+
     # ── the sequence ──────────────────────────────────────────────────
     def handle(
         self,
@@ -101,6 +111,28 @@ class DevResetCommand(CommandBase):
         yes: bool = False,
     ) -> int:
         steps_run: list[str] = []
+
+        # Every step below is destructive somewhere: a cache flush drops
+        # idempotency keys, a purge drops in-flight jobs. The whole command is
+        # a developer tool, so it runs only in a whitelisted environment; the
+        # database wipe additionally requires a database on this machine.
+        refusal = self.environment_refusal()
+        if refusal is not None:
+            self.error(f"Refusing dev:reset: {refusal}.")
+            return 1
+        if db:
+            refusal = self.database_refusal()
+            if refusal is not None:
+                self.error(
+                    f"Refusing to TRUNCATE operational tables: {refusal}. "
+                    "--db runs only against a local database in a local APP_ENV."
+                )
+                return 1
+            # Confirm BEFORE any step: a ``--db`` run without ``--yes`` used
+            # to flush the cache and purge the queues and only then stop.
+            if not yes:
+                self.warning(self.db_confirm_message())
+                return 1
 
         # Workers first: anything below is undone by a live consumer.
         if kill_workers:
@@ -120,21 +152,31 @@ class DevResetCommand(CommandBase):
             steps_run.append("DLX queues rebuilt")
 
         if db:
-            # Belt-and-suspenders: ``--yes`` is enough for a dev cluster, but
-            # one paste into the wrong shell would otherwise wipe production.
-            if is_production_environment(config("app.env", "")):
-                self.error(
-                    "Refusing to TRUNCATE operational tables in production. "
-                    "If you really need to reset, switch APP_ENV first."
-                )
-                return 1
-            if not yes:
-                self.warning(self.db_confirm_message())
-                return 1
             steps_run.extend(self._run_db_steps())
 
         self.info(f"✓ Reset complete — {', '.join(steps_run) or 'noop'}")
         return 0
+
+    # ── refusals ──────────────────────────────────────────────────────
+    def environment_refusal(self) -> str | None:
+        """Why this process's ``APP_ENV`` may not run a reset, or ``None``.
+
+        The host is irrelevant until ``--db`` asks for a wipe.
+        """
+        return local_environment_refusal(
+            app_env=config("app.env", ""),
+            extra_environments=self.EXTRA_RESET_ENVIRONMENTS,
+        )
+
+    def database_refusal(self) -> str | None:
+        """Why ``--db`` may not wipe the configured database, or ``None``.
+
+        Whitelist on both axes: a local ``APP_ENV`` AND the default
+        connection's host on this machine. ``--yes`` never talks past it.
+        """
+        return configured_local_database_refusal(
+            config, extra_environments=self.EXTRA_RESET_ENVIRONMENTS
+        )
 
     # ── application seams ─────────────────────────────────────────────
     def queue_names(self) -> set[str]:

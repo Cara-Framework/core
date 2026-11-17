@@ -10,6 +10,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "HandleListenerJob": (".jobs", "HandleListenerJob"),
     "Listener": (".contracts", "Listener"),
     "event_payload_gaps": (".PayloadGate", "event_payload_gaps"),
+    "fire_after_commit": (".AfterCommit", "fire_after_commit"),
 }
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "HandleListenerJob",
     "Listener",
     "event_payload_gaps",
+    "fire_after_commit",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

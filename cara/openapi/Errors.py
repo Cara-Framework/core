@@ -42,6 +42,7 @@ _CARA_ROOT = Path(__file__).resolve().parents[1]
 # the framework knows where it raises.
 FRAMEWORK_ERROR_ROOTS: tuple[Path, ...] = (
     _CARA_ROOT / "exceptions" / "types",
+    _CARA_ROOT / "exceptions" / "service",
     _CARA_ROOT / "exceptions" / "handlers",
     _CARA_ROOT / "middleware" / "http",
 )

@@ -25,17 +25,32 @@ stamps, ...):
 
 ``VersionedCache`` folds those two ops behind one object so every
 version-stamped site shares one implementation instead of re-spelling
-the increment calls. Callers that need to swallow Redis errors and degrade to an
-"unversioned" 0 stamp keep their own try/except around ``read()`` /
-``bump()`` — the primitive itself is a thin, faithful wrapper over the
-facade and lets exceptions propagate.
+the increment calls. ``read()`` / ``bump()`` are thin, faithful wrappers
+over the facade and let exceptions propagate.
+
+A read cache under a stamp must NEVER degrade to a fallback stamp when the
+stamp is unreadable. Every bump moves the stamp to >= 1, so an entry kept
+under a substitute ``0`` is never invalidated: during a partial cache fault
+(read fails, write works) the reader would be served a ``v0`` page that is
+arbitrarily stale. ``read_or_none()`` answers ``None`` instead, and
+``remember()`` turns that into "compute uncached" — the source of truth is
+the callback, so the read cache is disposable (``strict=False``) and a cache
+outage costs a cold read, never a 500. ``try_bump()`` is the writer's
+best-effort counterpart: a failed bump is logged, never raised into the
+write that already committed.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
+from typing import Any, TypeVar
 
 from cara.facades import Cache
+
+_logger = logging.getLogger("cara.cache")
+
+_T = TypeVar("_T")
 
 
 class VersionedCache:
@@ -67,3 +82,44 @@ class VersionedCache:
     def bump(self) -> int:
         """Atomically advance the stamp by one (Redis ``INCRBY``)."""
         return int(Cache.increment(self._key, 1, self._resolve_ttl()))
+
+    def read_or_none(self) -> int | None:
+        """Current stamp, or ``None`` when the cache cannot answer.
+
+        Never a substitute number: a guessed stamp names a key no bump
+        will ever retire.
+        """
+        try:
+            return self.read()
+        except Exception as exc:
+            _logger.warning(
+                "version stamp read failed for %s: %s", self._key, type(exc).__name__
+            )
+            return None
+
+    def try_bump(self) -> int | None:
+        """Advance the stamp; log and answer ``None`` on a cache fault."""
+        try:
+            return self.bump()
+        except Exception as exc:
+            _logger.warning(
+                "version stamp bump failed for %s: %s", self._key, type(exc).__name__
+            )
+            return None
+
+    def remember(
+        self,
+        key_for: Callable[[int], str],
+        ttl: int,
+        callback: Callable[[], _T],
+    ) -> _T | Any:
+        """Read-through cache under the current stamp.
+
+        ``key_for(stamp)`` spells the entry's key. An unreadable stamp
+        computes uncached; the entry itself is disposable (``strict=False``),
+        so a cache outage never fails the read.
+        """
+        stamp = self.read_or_none()
+        if stamp is None:
+            return callback()
+        return Cache.remember(key_for(stamp), ttl, callback, strict=False)

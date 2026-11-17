@@ -46,6 +46,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "MigrationsCheckCommand": (".MigrationsCheckCommand", "MigrationsCheckCommand"),
     "ModelPruneCommand": (".ModelPruneCommand", "ModelPruneCommand"),
     "OK": (".CheckResult", "OK"),
+    "OPTIONAL_SETUP_ERRORS": (".ScheduledJobRunner", "OPTIONAL_SETUP_ERRORS"),
     "PreflightCommand": (".PreflightCommand", "PreflightCommand"),
     "QueueFlushCommand": (".QueueFlushCommand", "QueueFlushCommand"),
     "QueueHookCommand": (".QueueHookCommand", "QueueHookCommand"),
@@ -83,8 +84,11 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
         "check_required_config_present",
     ),
     "fail": (".PreflightCommand", "fail"),
+    "instantiate_scheduled_job": (".ScheduledJobRunner", "instantiate_scheduled_job"),
     "ok": (".PreflightCommand", "ok"),
     "parse_migration_file": (".MigrationsCheckCommand", "parse_migration_file"),
+    "run_scheduled_job_inline": (".ScheduledJobRunner", "run_scheduled_job_inline"),
+    "scheduled_handle_kwargs": (".ScheduledJobRunner", "scheduled_handle_kwargs"),
     "warn": (".PreflightCommand", "warn"),
 }
 
@@ -126,6 +130,7 @@ __all__ = [
     "MigrationsCheckCommand",
     "ModelPruneCommand",
     "OK",
+    "OPTIONAL_SETUP_ERRORS",
     "PreflightCommand",
     "QueueFlushCommand",
     "QueueHookCommand",
@@ -157,8 +162,11 @@ __all__ = [
     "check_debug_off_in_prod",
     "check_required_config_present",
     "fail",
+    "instantiate_scheduled_job",
     "ok",
     "parse_migration_file",
+    "run_scheduled_job_inline",
+    "scheduled_handle_kwargs",
     "warn",
 ]
 

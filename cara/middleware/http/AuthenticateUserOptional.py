@@ -31,7 +31,14 @@ from .AuthenticateUser import AuthenticateUser
 
 
 class AuthenticateUserOptional(AuthenticateUser):
-    """JWT auth that NEVER 401s — populates request.user when possible."""
+    """JWT auth that NEVER 401s — populates request.user when possible.
+
+    A resolved identity is still offered to :meth:`admit` before it is
+    attached. A product whose tokens carry a server-side session (``sid``)
+    overrides it to require that session to be live: a token whose session
+    was logged out or revoked then degrades to the guest path instead of
+    keeping the personalized response until the JWT expires.
+    """
 
     async def handle(self, request: Request, next_fn: Callable) -> Response:
         # Container resolution failure should not block a public-with-
@@ -44,14 +51,22 @@ class AuthenticateUserOptional(AuthenticateUser):
             return await next_fn(request)
 
         user: Any = None
+        claims: Any = None
         successful_guard: str | None = None
 
         for guard_name in self._resolve_guards():
             try:
                 guard = auth_manager.guard(guard_name)
+
                 # Offload the sync ``guard.user()`` (a ``User.find()`` SELECT)
                 # off the event loop — same rationale as AuthenticateUser.
-                user = await ExecutionContext.run_in_thread(guard.user)
+                # ``run_in_thread`` runs in a COPY of the context, so the
+                # guard's verified claims are captured inside the thread;
+                # read afterwards they would be empty.
+                def _resolve(g=guard):
+                    return g.user(), getattr(g, "_last_payload", None)
+
+                user, claims = await ExecutionContext.run_in_thread(_resolve)
                 if user:
                     successful_guard = guard_name
                     break
@@ -68,8 +83,20 @@ class AuthenticateUserOptional(AuthenticateUser):
                 )
                 continue
 
-        if user is not None:
-            request.set_user(user)
-            request._route_auth_guard = successful_guard
+        if user:
+            verified_claims = dict(claims or {})
+            if await self.admit(request, user, verified_claims):
+                request.set_user(user)
+                request._route_auth_guard = successful_guard
+                request.jwt_claims = verified_claims
 
         return await next_fn(request)
+
+    async def admit(self, request: Request, user: Any, claims: dict[str, Any]) -> bool:
+        """Decide whether a token-resolved ``user`` may personalize this request.
+
+        ``claims`` are the token's verified claims. Refusing never fails the
+        request — it proceeds as a guest. The default admits every identity
+        the guard resolved.
+        """
+        return True

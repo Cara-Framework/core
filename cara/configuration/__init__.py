@@ -24,13 +24,22 @@ def config(key, default=None):
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "ConfigurationProvider": (".ConfigurationProvider", "ConfigurationProvider"),
     "INSECURE_SECRET_DEFAULTS": (".Environments", "INSECURE_SECRET_DEFAULTS"),
+    "LOCAL_DATABASE_HOSTS": (".LocalDatabase", "LOCAL_DATABASE_HOSTS"),
     "LOCAL_ENVIRONMENTS": (".Environments", "LOCAL_ENVIRONMENTS"),
     "PRODUCTION_ENVIRONMENTS": (".Environments", "PRODUCTION_ENVIRONMENTS"),
     "TEST_ENVIRONMENTS": (".Environments", "TEST_ENVIRONMENTS"),
+    "configured_database_host": (".LocalDatabase", "configured_database_host"),
+    "configured_local_database_refusal": (
+        ".LocalDatabase",
+        "configured_local_database_refusal",
+    ),
+    "is_local_database_host": (".LocalDatabase", "is_local_database_host"),
     "is_insecure_secret": (".Environments", "is_insecure_secret"),
     "is_local_environment": (".Environments", "is_local_environment"),
     "is_production_environment": (".Environments", "is_production_environment"),
     "is_test_environment": (".Environments", "is_test_environment"),
+    "local_database_refusal": (".LocalDatabase", "local_database_refusal"),
+    "local_environment_refusal": (".LocalDatabase", "local_environment_refusal"),
     "normalize_environment": (".Environments", "normalize_environment"),
 }
 
@@ -38,14 +47,20 @@ __all__ = [
     "Configuration",
     "ConfigurationProvider",
     "INSECURE_SECRET_DEFAULTS",
+    "LOCAL_DATABASE_HOSTS",
     "LOCAL_ENVIRONMENTS",
     "PRODUCTION_ENVIRONMENTS",
     "TEST_ENVIRONMENTS",
     "config",
+    "configured_database_host",
+    "configured_local_database_refusal",
     "is_insecure_secret",
+    "is_local_database_host",
     "is_local_environment",
     "is_production_environment",
     "is_test_environment",
+    "local_database_refusal",
+    "local_environment_refusal",
     "normalize_environment",
 ]
 

@@ -58,9 +58,23 @@ class Ambient:
             raise ValueError("Too many ambient carriers.")
         cls._carriers[name] = _Carrier(var=var, encode=encode, decode=decode)
 
+    @staticmethod
+    def _framework_carriers() -> None:
+        """Register Cara's own carriers (the acting :class:`Actor`).
+
+        A product registers its carriers when its modules load; the
+        framework's must be known on BOTH sides of the hop even when the
+        worker has not imported the module that reads it yet, or the value
+        is dropped at restore.
+        """
+        from cara.context import (
+            Actor,  # noqa: F401  # local: cycle with cara.context.Actor
+        )
+
     @classmethod
     def capture(cls) -> dict[str, Any]:
         """Every registered var that holds a value now, encoded."""
+        cls._framework_carriers()
         captured: dict[str, Any] = {}
         for name, carrier in cls._carriers.items():
             value = carrier.var.get(None)
@@ -78,6 +92,7 @@ class Ambient:
     @contextlib.contextmanager
     def restored(cls, captured: Any) -> Iterator[None]:
         """Set each carried var from ``captured`` for the block, then reset."""
+        cls._framework_carriers()
         tokens: list[tuple[ContextVar, Any]] = []
         if isinstance(captured, dict):
             for name, raw in captured.items():
