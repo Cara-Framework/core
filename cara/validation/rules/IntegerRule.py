@@ -16,7 +16,7 @@ from cara.validation.rules.BaseRule import BaseRule
 class IntegerRule(BaseRule):
     """Validates that a value is an integer or integer string.
 
-    String inputs must match the canonical form ``^[+-]?\\d+$``
+    String inputs must match the canonical form ``^[+-]?[0-9]+$``
     — no surrounding whitespace, no PEP 515 underscore separators,
     no control characters. Python's ``int()`` accepts all of those
     (``int("\\t42") == 42``, ``int("1_000") == 1000``), so a pre-fix
@@ -32,7 +32,9 @@ class IntegerRule(BaseRule):
     # Anchored shape — ``fullmatch`` removes the default-mode ``$``
     # quirk that lets ``"42\n"`` slip past ``match()`` with a
     # trailing ``$`` anchor.
-    _STRICT_INT_PATTERN = re.compile(r"^[+-]?\d+$")
+    # ``[0-9]``, not ``\d``: ``\d`` matches every Unicode digit, so ``"١٢"`` and
+    # fullwidth ``"１２"`` passed and reached SQL as text Postgres refuses.
+    _STRICT_INT_PATTERN = re.compile(r"^[+-]?[0-9]+$")
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value is an integer."""

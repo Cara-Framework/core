@@ -10,6 +10,7 @@ import pendulum
 from cara.exceptions import QueueException
 from cara.facades import Log
 from cara.queues.serializers import SignedJsonJobSerializer
+from cara.queues.tracking.JobTracker import JobTracker
 
 from .DeliveryClaim import DeliveryClaim
 from .DeliveryLeaseLost import DeliveryLeaseLost
@@ -45,12 +46,11 @@ def _stamp_tracker_processing(
     """
     if db_job_id is None:
         return
-    sql = "UPDATE job SET status = %s, started_at = %s, updated_at = %s WHERE id = %s"
-    bindings: list[Any] = ["processing", now, now, int(db_job_id)]
-    if reclaimed:
-        sql += " AND status <> ALL(%s)"
-        bindings.append(list(_TRACKER_FINISHED))
-    affected = database.statement(sql, bindings)
+    affected = database.statement(
+        *JobTracker.processing_statement(
+            int(db_job_id), now, unless=_TRACKER_FINISHED if reclaimed else ()
+        )
+    )
     if not reclaimed and not QueueJobDeliveryStore._affected(affected):
         raise QueueException(f"Tracked queue job {db_job_id} does not exist.")
 

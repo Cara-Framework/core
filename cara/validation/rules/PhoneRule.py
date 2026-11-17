@@ -13,7 +13,7 @@ class PhoneRule(BaseRule):
         if value is None or not isinstance(value, str):
             return False
         stripped_value = value.strip()
-        return re.fullmatch(r"\+\d{7,15}", stripped_value) is not None
+        return re.fullmatch(r"\+[0-9]{7,15}", stripped_value) is not None
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attribute = MessageFormatter.format_attribute_name(field)

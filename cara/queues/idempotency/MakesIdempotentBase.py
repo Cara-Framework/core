@@ -39,9 +39,14 @@ from typing import Any
 import pendulum
 
 from cara.cache import cache_backend_fault_types
-from cara.exceptions import IdempotencyGateFaultException, IdempotencyOverlapException
+from cara.exceptions import (
+    IdempotencyGateFaultException,
+    IdempotencyLeaseLostException,
+    IdempotencyOverlapException,
+)
 from cara.facades import Cache, Log
 from cara.queues.idempotency.ClaimsSourceCooldown import ClaimsSourceCooldown
+from cara.queues.idempotency.IdempotencyParams import normalize_idempotency_param
 from cara.queues.LeaseHeartbeat import LeaseHeartbeat
 
 
@@ -93,6 +98,10 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
     #: poll's lease for 65 minutes and every later poll of that channel
     #: waited on it and settled having done nothing (live, 2026-10-30).
     JOB_LOCK_LEASE_SECONDS = 120
+
+    # A run whose lease is LOST (``renew`` finds another holder) is fenced:
+    # cancelled at its next ``await`` and redelivered as
+    # ``IdempotencyLeaseLostException`` (a throttle), its result never cached.
 
     #: Floor, before jitter, on when a job the gate could not clear comes
     #: back: with the throttle budget of 50 it rides out a cache outage.
@@ -306,30 +315,17 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 continue
             if whitelist is not None and key not in whitelist:
                 continue
-            normalized = self._normalize_param_value(value)
+            normalized = self._normalize_param_value(value, strict=whitelist is not None)
             if normalized is not None:
                 params[key] = normalized
         return params
 
-    def _normalize_param_value(self, value: Any) -> Any:
-        """Normalize parameter values into stable JSON-serializable shapes."""
-        if value is None or isinstance(value, (bool, int, float, str)):
-            return value
-        if isinstance(value, (list, tuple, set)):
-            normalized_items = [self._normalize_param_value(v) for v in value]
-            return [v for v in normalized_items if v is not None]
-        if isinstance(value, dict):
-            normalized_dict: dict[str, Any] = {}
-            for key in sorted(value.keys(), key=lambda k: str(k)):
-                nv = self._normalize_param_value(value[key])
-                if nv is not None:
-                    normalized_dict[str(key)] = nv
-            return normalized_dict
-        if hasattr(value, "id"):
-            return value.id
-        if hasattr(value, "public_id"):
-            return value.public_id
-        return None
+    def _normalize_param_value(self, value: Any, *, strict: bool = False) -> Any:
+        """One parameter's key form (``IdempotencyParams``)."""
+        try:
+            return normalize_idempotency_param(value, strict=strict)
+        except TypeError as exc:
+            raise TypeError(f"{self.__class__.__name__}: {exc}") from None
 
     # ── Cache / lock primitives ────────────────────────────────────
 
@@ -522,6 +518,9 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
 
         self._emit_idempotency_metric("fresh")
         heartbeat = self._hold_job_lock()
+        # A lease lost mid-run means another run of this key may be executing:
+        # the heartbeat cancels this one at its next ``await`` (LeaseHeartbeat).
+        heartbeat.fence_current_task()
         try:
             Log.debug(
                 "Executing job with idempotency: %s",
@@ -529,7 +528,18 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 category="idempotency",
             )
             result = await callback()
-            if getattr(self, "idempotency_cache_results", True):
+            if heartbeat.lost:
+                # Finished without another ``await`` after the loss: the work
+                # is done, but the result is not this lease's to publish — a
+                # waiter or a later dispatch must not be answered by a run
+                # that overlapped the key's current owner.
+                Log.warning(
+                    "Job finished after losing its idempotency lease; result not "
+                    "cached: %s",
+                    self.get_job_identifier(),
+                    category="idempotency",
+                )
+            elif getattr(self, "idempotency_cache_results", True):
                 self.cache_result(result)
             Log.debug(
                 "Job completed successfully: %s",
@@ -537,6 +547,22 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 category="idempotency",
             )
             return result
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            # Only the fence's own cancel becomes the lease outcome; a worker
+            # shutdown that cancelled too stays a cancellation.
+            if heartbeat.fenced and task is not None and task.uncancel() == 0:
+                Log.warning(
+                    "Job cancelled: its idempotency lease was taken while it ran: %s",
+                    self.get_job_identifier(),
+                    category="idempotency",
+                )
+                raise IdempotencyLeaseLostException(
+                    f"{IdempotencyLeaseLostException.REASON}: "
+                    f"{self.get_job_identifier()}",
+                    retry_after=self.GATE_FAULT_RETRY_SECONDS,
+                ) from None
+            raise
         except Exception as e:
             # A throttle is put back, not broken: the worker's own marker.
             if not getattr(e, "is_throttle", False):
@@ -548,7 +574,12 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 )
             raise
         finally:
+            heartbeat.unfence()
             heartbeat.stop()
+            if heartbeat.lost:
+                # The key is another run's now; the owner-fenced delete would
+                # miss anyway, so skip the round trip.
+                self._idempotency_lock_value = None
             self.release_job_lock()
 
     def _hold_job_lock(self) -> LeaseHeartbeat:

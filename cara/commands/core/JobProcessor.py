@@ -17,7 +17,7 @@ from cara.queues import (
     DEFAULT_MAX_THROTTLE_ATTEMPTS as _RETRY_DEFAULT_MAX_THROTTLE_ATTEMPTS,
 )
 from cara.queues import DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS
-from cara.queues import MAX_AMQP_JOB_PAYLOAD_BYTES
+from cara.queues import MAX_AMQP_JOB_PAYLOAD_BYTES, LeaseHeartbeat
 
 from . import _JobExecution
 from .ActiveJobCancellationRegistry import ActiveJobCancellationRegistry
@@ -31,6 +31,10 @@ class JobProcessor:
     DEFAULT_JOB_TIMEOUT = 300
     MAX_PAYLOAD_SIZE = MAX_AMQP_JOB_PAYLOAD_BYTES
     _SETTLEMENT_BACKOFF_SECONDS = (0.05, 0.25, 1.0, 2.0, 5.0)
+    #: Prefix of a terminal reason whose exception declared ``do_not_retry``.
+    #: The flag lives on the live exception only; without it in the ledger a
+    #: dead-letter replay cannot tell "will fail identically" from transient.
+    DO_NOT_RETRY_REASON_PREFIX = "do_not_retry: "
 
     @staticmethod
     def _broker_ack(channel, delivery_tag) -> None:
@@ -38,6 +42,23 @@ class JobProcessor:
             channel.basic_ack(delivery_tag=delivery_tag)
         except Exception as exc:
             raise DeliverySettlementError("Broker ACK outcome is unknown.") from exc
+
+    @staticmethod
+    def _drop_fenced_delivery(channel, method_frame, job_label: str) -> None:
+        """Acknowledge away a run its lease heartbeat fenced.
+
+        The relay took the ledger row back and it may already run elsewhere:
+        the row and its tracker are the new owner's and the relay's copy is
+        the delivery now, so nothing is settled or released here. Before
+        2026-11-17 the stale run finished beside the new owner, then failed
+        its settlement CAS.
+        """
+        Log.warning(
+            "Job %s cancelled: its delivery lease was recovered while it ran",
+            job_label,
+            category="cara.queue.lease",
+        )
+        JobProcessor._broker_ack(channel, method_frame.delivery_tag)
 
     @staticmethod
     def _broker_nack(channel, delivery_tag, *, requeue: bool) -> None:
@@ -84,8 +105,15 @@ class JobProcessor:
         init_args,
         timeout_seconds,
         cancellation_registry: ActiveJobCancellationRegistry | None = None,
+        lease: LeaseHeartbeat | None = None,
     ):
         """Execute async job with timeout enforcement.
+
+        ``lease`` is the delivery's execution heartbeat: it fences the run, so
+        a run whose ledger lease was recovered and re-claimed elsewhere is
+        cancelled at its next ``await`` instead of finishing beside the new
+        owner (``LeaseHeartbeat.fence_current_task``). The fence is lifted
+        before the detached-task drain, which is not the job's work.
 
         Wraps the coroutine in ``asyncio.wait_for(...)`` so a hung
         ``await`` (a stuck HTTP call without its own timeout, a DB
@@ -106,11 +134,15 @@ class JobProcessor:
                 if cancellation_registry is not None
                 else None
             )
+            if lease is not None:
+                lease.fence_current_task()
             try:
                 return await asyncio.wait_for(
                     method_to_call(*init_args), timeout=timeout_seconds
                 )
             finally:
+                if lease is not None:
+                    lease.unfence()
                 if token is not None:
                     cancellation_registry.unregister(token)
 
@@ -433,6 +465,10 @@ class JobProcessor:
         terminal_reason = str(exc)
         if not can_retry and getattr(exc, "is_throttle", False):
             terminal_reason = f"throttle_exhausted: {exc}"
+        elif do_not_retry:
+            terminal_reason = (
+                f"{JobProcessor.DO_NOT_RETRY_REASON_PREFIX}{type(exc).__name__}: {exc}"
+            )
 
         if can_retry:
             if delivery_store is None or delivery_lease_token is None:

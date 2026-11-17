@@ -84,6 +84,14 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
         ".IdempotencyGateFaultException",
         "IdempotencyGateFaultException",
     ),
+    "IdempotencyKeyConflictException": (
+        ".IdempotencyKeyConflictException",
+        "IdempotencyKeyConflictException",
+    ),
+    "IdempotencyLeaseLostException": (
+        ".IdempotencyLeaseLostException",
+        "IdempotencyLeaseLostException",
+    ),
     "IdempotencyOverlapException": (
         ".IdempotencyOverlapException",
         "IdempotencyOverlapException",
@@ -248,6 +256,8 @@ __all__ = [
     "Http404Exception",
     "HttpException",
     "IdempotencyGateFaultException",
+    "IdempotencyKeyConflictException",
+    "IdempotencyLeaseLostException",
     "IdempotencyOverlapException",
     "InvalidArgumentException",
     "InvalidConfigurationLocationException",

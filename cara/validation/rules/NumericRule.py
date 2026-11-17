@@ -48,7 +48,10 @@ class NumericRule(BaseRule):
     # Canonical decimal-with-optional-scientific shape. Anchored with
     # ``fullmatch`` to defeat the default-mode ``$``-allows-trailing-
     # newline quirk.
-    _STRICT_NUMERIC_PATTERN = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+    # ASCII digits only (``\d`` admits every Unicode digit; see IntegerRule).
+    _STRICT_NUMERIC_PATTERN = re.compile(
+        r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"
+    )
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value is a finite numeric."""

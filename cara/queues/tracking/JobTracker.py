@@ -8,6 +8,8 @@ and performance analytics. Similar to Laravel's job tracking but enhanced.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from typing import Any
 
 import pendulum
 
@@ -41,6 +43,13 @@ class JobTracker:
 
     # Default retry configuration (apps can override)
     DEFAULT_MAX_RETRIES = {"default": 3}
+
+    #: The tracked-job table and the lifecycle words the delivery store's
+    #: in-transaction statements write (no model there: the claim, reset and
+    #: settlement must share the ledger row's transaction).
+    TABLE = "job"
+    STATUS_PENDING = "pending"
+    STATUS_PROCESSING = "processing"
 
     DEFAULT_RETRY_DELAYS = [60, 300, 900]  # 1min, 5min, 15min
 
@@ -535,8 +544,11 @@ class JobTracker:
 
         SINGLE OWNER of the status → timestamp mapping for the ``job`` table.
         The lifecycle vocabulary is ``started_at`` / ``completed_at``; no other
-        code path may write those columns. Callers still ``save()`` so they can
-        batch other field writes into the same round-trip.
+        code path may write those columns. The delivery store, which must
+        write inside its ledger transaction without a model, uses this class's
+        ``processing_statement`` / ``reset_statement`` / ``terminal_statement``.
+        Callers still ``save()`` so they can batch other field writes into the
+        same round-trip.
 
         Args:
             job_record: Job model instance to mutate (NOT persisted here)
@@ -550,6 +562,49 @@ class JobTracker:
             job_record.started_at = moment
         elif status in self._terminal_statuses():
             job_record.completed_at = moment
+
+    @classmethod
+    def processing_statement(
+        cls, job_id: Any, now: Any, *, unless: Sequence[str] = ()
+    ) -> tuple[str, list[Any]]:
+        """``(sql, bindings)`` that marks ``job_id`` processing and stamps
+        ``started_at`` — the claim's in-transaction form of ``_transition``.
+        ``unless``: statuses the row keeps (a reclaimed body that finished)."""
+        sql = (
+            f"UPDATE {cls.TABLE} SET status = %s, started_at = %s, "
+            "updated_at = %s WHERE id = %s"
+        )
+        bindings: list[Any] = [cls.STATUS_PROCESSING, now, now, job_id]
+        if unless:
+            sql += " AND status <> ALL(%s)"
+            bindings.append(list(unless))
+        return sql, bindings
+
+    @classmethod
+    def reset_statement(
+        cls, job_id: Any, now: Any, *, only_from: Sequence[str]
+    ) -> tuple[str, list[Any]]:
+        """``(sql, bindings)`` that puts ``job_id`` back to pending and clears
+        both lifecycle stamps — a stale execution lease being re-run."""
+        return (
+            f"UPDATE {cls.TABLE} SET status = %s, started_at = NULL, "
+            "completed_at = NULL, updated_at = %s WHERE id = %s "
+            "AND status = ANY(%s)",
+            [cls.STATUS_PENDING, now, job_id, list(only_from)],
+        )
+
+    @classmethod
+    def terminal_statement(
+        cls, job_id: Any, status: str, now: Any, *, only_from: Sequence[str]
+    ) -> tuple[str, list[Any]]:
+        """``(sql, bindings)`` that settles ``job_id`` in terminal ``status``,
+        keeping the first ``completed_at`` a replay may already have set."""
+        return (
+            f"UPDATE {cls.TABLE} SET status = %s, completed_at = COALESCE("
+            "completed_at, %s), updated_at = %s WHERE id = %s "
+            "AND status = ANY(%s)",
+            [status, now, now, job_id, list(only_from)],
+        )
 
     def _terminal_statuses(self) -> set[str]:
         """Statuses that end the job's run and therefore stamp ``completed_at``."""

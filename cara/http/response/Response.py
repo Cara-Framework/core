@@ -593,6 +593,11 @@ class Response(BaseResponse):
         """Get headers for ASGI compatibility."""
         return self.headers.to_asgi()
 
+    def is_streaming(self) -> bool:
+        """True when the body is a stream: ``content`` is then empty and
+        not the answer (a middleware must not hash, store or replay it)."""
+        return self._stream_spec is not None
+
     def __repr__(self) -> str:
         """String representation of Response."""
         status = self.get_status_code()

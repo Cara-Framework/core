@@ -120,13 +120,11 @@ def _hold_delivery_lease(
 ) -> LeaseHeartbeat:
     """Keep this worker's execution lease alive while it runs the delivery.
 
-    The claim takes a short heartbeat lease; this renews it every third of
-    it until the job body ends, so a live job of any length keeps its row
-    ``processing`` while a dead worker's row lapses within one lease and the
-    relay returns it to the outbox (it no longer holds its queue's broker
-    window for the job's whole timeout). Settlement then rides the lease's
-    remaining two thirds — the heartbeat is stopped BEFORE settling, so a
-    late renewal can never race a settled row.
+    The claim takes a short heartbeat lease, renewed every third of it until
+    the body ends: a live job keeps its row ``processing``, a dead worker's
+    row lapses within one lease and the relay returns it to the outbox. A
+    lost lease fences the run. Settlement rides the lease's remaining two
+    thirds; the heartbeat stops BEFORE settling, so no renewal races it.
 
     ``release`` is the forced-exit path (``LeaseHeartbeat.release_all``): a
     job that ignored shutdown cancellation hands its row back to ``pending``
@@ -535,12 +533,12 @@ def _process_message(
                         (),
                         job_timeout,
                         cancellation_registry=cancellation_registry,
+                        lease=delivery_heartbeat,
                     )
                 except TimeoutError as e:
                     raise TimeoutError(f"Job exceeded timeout of {job_timeout}s") from e
                 finally:
-                    # The run is over; every settlement below rides the
-                    # lease's remaining two thirds.
+                    # The run is over; settlement rides the remaining lease.
                     _stop_heartbeat(delivery_heartbeat)
             else:
                 raise QueueException(
@@ -578,6 +576,10 @@ def _process_message(
         raise
 
     except asyncio.CancelledError:
+        if delivery_heartbeat is not None and delivery_heartbeat.fenced:
+            JobProcessor._drop_fenced_delivery(channel, method_frame, _mx_job)
+            _mx_record("lease_lost")
+            return False
         # Worker shutdown is not a job failure. Leave the AMQP delivery
         # UNACKNOWLEDGED so closing this consumer's own channel requeues it
         # atomically. Release the exact durable execution lease first so

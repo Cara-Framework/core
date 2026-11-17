@@ -10,6 +10,7 @@ import pendulum
 
 from cara.exceptions import QueueException
 from cara.facades import Log
+from cara.queues.tracking.JobTracker import JobTracker
 
 from .DeliveryLeaseLost import DeliveryLeaseLost
 
@@ -402,15 +403,11 @@ def _delivery_recover_stale_executions(
                         "recovery lease."
                     )
                 tracker_affected = database.statement(
-                    "UPDATE job SET status = %s, started_at = NULL, "
-                    "completed_at = NULL, updated_at = %s WHERE id = %s "
-                    "AND status = ANY(%s)",
-                    [
-                        "pending",
-                        now,
+                    *JobTracker.reset_statement(
                         db_job_id,
-                        ["pending", "processing", "retrying"],
-                    ],
+                        now,
+                        only_from=("pending", "processing", "retrying"),
+                    )
                 )
                 if not self._affected(tracker_affected):
                     raise QueueException(
@@ -423,16 +420,9 @@ def _delivery_recover_stale_executions(
                 target_status = self.STATUS_DEAD_LETTERED
                 reason = "unsupported_tracker_status_after_worker_crash"
                 tracker_affected = database.statement(
-                    "UPDATE job SET status = %s, completed_at = COALESCE("
-                    "completed_at, %s), updated_at = %s WHERE id = %s "
-                    "AND status = %s",
-                    [
-                        "failed",
-                        now,
-                        now,
-                        db_job_id,
-                        tracker_status,
-                    ],
+                    *JobTracker.terminal_statement(
+                        db_job_id, "failed", now, only_from=(tracker_status,)
+                    )
                 )
                 if not self._affected(tracker_affected):
                     Log.error(

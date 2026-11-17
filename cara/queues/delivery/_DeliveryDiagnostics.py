@@ -10,6 +10,7 @@ from typing import Any
 import pendulum
 
 from cara.exceptions import QueueException
+from cara.queues.tracking.JobTracker import JobTracker
 from cara.support import redact_log_secrets
 
 QueueJobDeliveryStore: type
@@ -339,10 +340,7 @@ def _delivery_set_tracker_status(
     else:
         raise QueueException(f"Unsupported atomic tracker terminal status: {status}.")
     affected = database.statement(
-        "UPDATE job SET status = %s, completed_at = COALESCE("
-        "completed_at, %s), updated_at = %s WHERE id = %s "
-        "AND status = ANY(%s)",
-        [status, timestamp, timestamp, db_job_id, list(allowed)],
+        *JobTracker.terminal_statement(db_job_id, status, timestamp, only_from=allowed)
     )
     if QueueJobDeliveryStore._affected(affected):
         return

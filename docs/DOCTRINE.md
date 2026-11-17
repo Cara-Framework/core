@@ -467,7 +467,9 @@ write-ownership manifest, and a guard checks repository writes against it.
 
 Every job declares `idempotency_params`; state-machine jobs set
 `idempotency_cache_results = False` and re-enter through their durable lease.
-Every user-triggered server operation exposes **durable operation state**
+A run whose heartbeat lease is taken while it runs is fenced — cancelled at
+its next `await`, its result never cached (`LeaseHeartbeat.fence_current_task`);
+a lapsed lease is never re-taken. Every user-triggered server operation exposes **durable operation state**
 (`{queued, coalesced, op}`) — fire-and-forget is forbidden; a bare "queued"
 toast is a bug. Queue ownership is a single topology SSOT
 (`contracts`): API-owned queues are consumed by API-image workers, period.

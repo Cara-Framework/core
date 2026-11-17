@@ -33,10 +33,24 @@ run may already hold.
 :meth:`LeaseHeartbeat.release_all` calls it — the worker's last step before a
 forced exit, for runs that ignored cancellation — so a restart frees the
 lease at once instead of one lease later.
+
+A LOST LEASE FENCES ITS RUN (:meth:`LeaseHeartbeat.fence_current_task`).
+Once ``renew`` says the lease is another holder's, a second run of the same
+work may already be executing: the relay returned the delivery row to the
+outbox and another worker claimed it, or another dispatch took the
+``job_lock:`` key after it lapsed (a cache restart, a partition longer than
+the lease, a paused process). Before 2026-11-17 the heartbeat only stopped
+renewing, and the stale run went on writing beside the new one, then cached
+its result and settled. Now it cancels the task it fences at that task's next
+``await``; the holder turns the cancellation into its own outcome (``fenced``
+says the cancellation is the heartbeat's). Re-taking a lapsed lease with
+SETNX would not be safe either: a run that took it in the gap and finished
+leaves no trace, and the stale run would then commit over its newer state.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import threading
 from collections.abc import Callable
@@ -73,8 +87,11 @@ class LeaseHeartbeat:
         self._release = release
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
+        self._fence: tuple[asyncio.AbstractEventLoop, asyncio.Task] | None = None
         self.renewals = 0
         self.lost = False
+        #: True once this heartbeat cancelled the task it fences.
+        self.fenced = False
 
     def start(self) -> LeaseHeartbeat:
         with self._live_lock:
@@ -102,6 +119,39 @@ class LeaseHeartbeat:
     def stopped(self) -> bool:
         return self._stopped.is_set()
 
+    def fence_current_task(self) -> None:
+        """Cancel the calling asyncio task if this lease is lost while it runs.
+
+        Call it on the run's own event loop, inside the task that does the
+        leased work, and :meth:`unfence` (same loop, no ``await`` between it
+        and :meth:`stop`) when that work ends. The cancel is scheduled on the
+        task's loop and re-checks the binding there, so a loss noticed as the
+        run finishes never cancels whatever the task does next.
+        """
+        self._fence = (asyncio.get_running_loop(), asyncio.current_task())
+        if self.lost:
+            self._trip()
+
+    def unfence(self) -> None:
+        self._fence = None
+
+    def _trip(self) -> None:
+        fence = self._fence
+        if fence is None:
+            return
+        loop, task = fence
+
+        def _cancel() -> None:
+            if self._fence is fence and task is not None and not task.done():
+                self.fenced = True
+                task.cancel()
+
+        try:
+            loop.call_soon_threadsafe(_cancel)
+        except RuntimeError:
+            # The loop closed: the fenced run is over already.
+            return
+
     def _run(self) -> None:
         while not self._stopped.wait(self.interval_seconds):
             try:
@@ -123,10 +173,12 @@ class LeaseHeartbeat:
                 self.lost = True
                 self.stop()
                 Log.warning(
-                    "Lease %s is no longer held by this run; renewal stopped.",
+                    "Lease %s is no longer held by this run; renewal stopped%s.",
                     self.name,
+                    " and the run fenced" if self._fence is not None else "",
                     category="cara.queue.lease",
                 )
+                self._trip()
                 return
             self.renewals += 1
 
