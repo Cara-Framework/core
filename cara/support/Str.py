@@ -27,6 +27,18 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 # but preserve paragraph breaks (double newlines → newline).
 _MULTI_SPACE_RE = re.compile(r"[ \t]+")
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+# C1 controls (U+0080-U+009F) are as illegitimate in text as C0 ones.
+_C1_CONTROL_CHARS_RE = re.compile(r"[\x80-\x9f]")
+# Characters outside category Cf that still render as nothing: the Hangul
+# fillers and the braille blank, the usual padding of an "empty" name.
+_BLANK_LOOKALIKES = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+# ZWNJ / ZWJ: invisible on their own, but they shape Persian and Indic text
+# and glue emoji sequences (woman + ZWJ + laptop), so they survive between two visible
+# non-ASCII characters.
+_JOINERS = frozenset("\u200c\u200d")
+# A subdivision flag (🏴 + tag letters + cancel tag) is the one legitimate
+# use of the Cf tag block.
+_FLAG_BASE = "\U0001f3f4"
 
 _LOG_SECRET_NAME = (
     r"(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|"
@@ -343,6 +355,68 @@ def strip_tags(text: str) -> str:
     return out
 
 
+def _is_tag(ch: str) -> bool:
+    return 0xE0020 <= ord(ch) <= 0xE007F
+
+
+def _joinable(ch: str) -> bool:
+    return (
+        ord(ch) > 0x7F
+        and not ch.isspace()
+        and ch not in _BLANK_LOOKALIKES
+        and unicodedata.category(ch) not in ("Cf", "Cc")
+    )
+
+
+def strip_invisible(text: str) -> str:
+    """Drop the characters that render as nothing or reorder what is shown.
+
+    Every format character (Unicode ``Cf``: zero-width spaces, the BOM, soft
+    hyphens, and the bidi embeddings, overrides and isolates that make
+    ``"evil\u202etxt.exe"`` display backwards) and the blank look-alikes
+    (Hangul fillers, braille blank). Kept: ZWNJ / ZWJ between two visible
+    non-ASCII characters (script shaping, emoji sequences) and the tag
+    characters of a subdivision flag. Without this a name made of nothing
+    visible passes every length rule and spreads to every roster.
+    """
+    if not text:
+        return ""
+    out: list[str] = []
+    last = len(text) - 1
+    for index, ch in enumerate(text):
+        if ch in _BLANK_LOOKALIKES:
+            continue
+        if unicodedata.category(ch) != "Cf":
+            out.append(ch)
+        elif ch in _JOINERS:
+            if out and index < last and _joinable(out[-1]) and _joinable(text[index + 1]):
+                out.append(ch)
+        elif _is_tag(ch) and out and (out[-1] == _FLAG_BASE or _is_tag(out[-1])):
+            out.append(ch)
+    return "".join(out)
+
+
+def clean_line(text: Any, max_length: int = 0) -> str:
+    """A SINGLE-LINE field (a name, a label, an address line) as stored.
+
+    NFKC-normalized, invisible and control characters dropped
+    (``strip_invisible``), every line break (CR, LF, NEL, U+2028/2029) and
+    other whitespace run folded to one space, ends trimmed, truncated to
+    ``max_length`` (>0). A length rule run AFTER this judges what a reader
+    sees. Markup is not touched — escaping on output stays the guard.
+    """
+    if text is None:
+        return ""
+    s = unicodedata.normalize("NFKC", str(text))
+    s = strip_invisible(s)
+    s = _CONTROL_CHARS_RE.sub(" ", s)
+    s = _C1_CONTROL_CHARS_RE.sub(lambda match: " " if match.group() == "\x85" else "", s)
+    s = " ".join(s.split())
+    if max_length and len(s) > max_length:
+        s = s[:max_length].rstrip()
+    return s
+
+
 def sanitize_text(text: Any, max_length: int = 0) -> str:
     """Sanitize user-supplied free text for safe storage.
 
@@ -350,7 +424,8 @@ def sanitize_text(text: Any, max_length: int = 0) -> str:
       - No HTML tags (content of script/style blocks dropped too).
       - No HTML entities (already unescaped).
       - No control chars other than tab/newline/CR.
-      - Unicode NFKC-normalized (defeats look-alike/zero-width evasion).
+      - Unicode NFKC-normalized, invisible format characters dropped
+        (``strip_invisible``: zero-width, bidi controls, blank fillers).
       - Whitespace normalized: tabs → spaces, runs collapsed, 3+ blank
         lines clamped to 2, outer whitespace stripped.
       - Truncated to max_length (>0) if given.
@@ -365,7 +440,9 @@ def sanitize_text(text: Any, max_length: int = 0) -> str:
         return ""
     s = strip_tags(s)
     s = unicodedata.normalize("NFKC", s)
+    s = strip_invisible(s)
     s = _CONTROL_CHARS_RE.sub("", s)
+    s = _C1_CONTROL_CHARS_RE.sub("", s)
     s = _MULTI_SPACE_RE.sub(" ", s)
     s = _MULTI_NEWLINE_RE.sub("\n\n", s)
     s = s.strip()

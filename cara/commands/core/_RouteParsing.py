@@ -134,24 +134,24 @@ def _route_parse_enhanced_docstring(
                 line.startswith("@")
                 and current_section == "route_group"
                 and current_group
+                # A direct HTTP method (new syntax)
+                and self._is_http_method_line(line)
             ):
-                # Check if it's a direct HTTP method (new syntax)
-                if self._is_http_method_line(line):
-                    method_info = self._parse_http_method(line, line_num, file_path)
-                    if method_info:
-                        # Create a temporary route container for the method
-                        temp_route = {
-                            "name": "",
-                            "middleware": [],
-                            "methods": [method_info],
-                            "line_num": line_num,
-                        }
-                        current_group["routes"].append(temp_route)
-                        if self.option("verbose"):
-                            self.info(
-                                f"        Found HTTP method: {method_info['http_method']} -> {method_info['controller_method']}"
-                            )
-                    continue
+                method_info = self._parse_http_method(line, line_num, file_path)
+                if method_info:
+                    # Create a temporary route container for the method
+                    temp_route = {
+                        "name": "",
+                        "middleware": [],
+                        "methods": [method_info],
+                        "line_num": line_num,
+                    }
+                    current_group["routes"].append(temp_route)
+                    if self.option("verbose"):
+                        self.info(
+                            f"        Found HTTP method: {method_info['http_method']} -> {method_info['controller_method']}"
+                        )
+                continue
 
             # Parse compiler variables
             if current_section == "compiler" and ":" in line:

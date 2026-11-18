@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
 
 
@@ -27,9 +28,8 @@ class MaxRule(BaseRule):
         if "max" not in params:
             return False
 
-        try:
-            max_threshold = float(params.get("max"))
-        except TypeError, ValueError:
+        max_threshold = self.as_number(params.get("max"))
+        if max_threshold is None:
             return False
 
         if isinstance(value, bool):
@@ -57,27 +57,28 @@ class MaxRule(BaseRule):
             except ImportError, RuntimeError:
                 pass
 
-        # For numeric values (int, float), compare numerically
+        # Numbers compare as they are — exact, and no float() overflow.
         if isinstance(value, (int, float)):
-            return float(value) <= max_threshold
+            return value <= max_threshold
 
         # Strings: in numeric context compare as number; otherwise by length.
         if isinstance(value, str):
             if numeric_context:
-                try:
-                    return float(value) <= max_threshold
-                except ValueError:
-                    return False
+                number = self.as_number(value)
+                return number is not None and number <= max_threshold
             return len(value) <= max_threshold
 
         if isinstance(value, (list, tuple, dict)):
             return len(value) <= max_threshold
 
-        try:
-            return float(value) <= max_threshold
-        except TypeError, ValueError:
-            return False
+        number = self.as_number(value)
+        return number is not None and number <= max_threshold
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         max_val = params.get("max", "")
-        return f"'{field}' may not be greater than {max_val}."
+        attribute = MessageFormatter.format_attribute_name(field).lower()
+        chain = params.get("_rules") or ()
+        length = "integer" not in chain and "numeric" not in chain
+        if length and isinstance(params.get("_value"), str):
+            return f"The {attribute} may not be greater than {max_val} characters."
+        return f"The {attribute} may not be greater than {max_val}."

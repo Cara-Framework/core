@@ -9,10 +9,8 @@ from cara.validation.rules.BaseRule import BaseRule
 
 
 def _to_number(v):
-    try:
-        return float(v)
-    except TypeError, ValueError:
-        return None
+    # Exact, overflow-safe (``float(10**400)`` raises) — see BaseRule.as_number.
+    return BaseRule.as_number(v)
 
 
 class LtRule(BaseRule):

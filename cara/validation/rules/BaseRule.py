@@ -43,6 +43,29 @@ class BaseRule(Rule):
                 return False
         return True
 
+    @staticmethod
+    def as_number(raw: Any) -> int | float | None:
+        """``raw`` as an exactly comparable number, or ``None``.
+
+        Numbers pass through untouched: Python compares ``int`` with
+        ``float`` exactly, while ``float(10**400)`` raises
+        ``OverflowError`` and ``float(2**53 + 1)`` silently rounds. A
+        JSON body can carry either, so bound rules compare through this
+        instead of ``float()``. Strings parse as ``int`` first (exact),
+        then ``float`` (an oversized literal becomes ``inf``).
+        """
+        if isinstance(raw, (int, float)):
+            return raw
+        try:
+            if isinstance(raw, str):
+                try:
+                    return int(raw)
+                except ValueError:
+                    return float(raw)
+            return float(raw)
+        except TypeError, ValueError, OverflowError:
+            return None
+
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """
         Validate the field value against the rule.

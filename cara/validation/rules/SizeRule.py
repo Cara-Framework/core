@@ -24,18 +24,12 @@ class SizeRule(BaseRule):
         chain = params.get("_rules", ())
         # Numeric mode: exact equality.
         if "integer" in chain or "numeric" in chain:
-            try:
-                return float(value) == target
-            except TypeError, ValueError:
-                return False
+            return self.as_number(value) == target
         # Length-based for strings, lists, dicts.
         if hasattr(value, "__len__"):
             return len(value) == target
-        # Default to numeric comparison.
-        try:
-            return float(value) == target
-        except TypeError, ValueError:
-            return False
+        # Default to numeric comparison — exact, no float() overflow.
+        return self.as_number(value) == target
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)

@@ -91,12 +91,11 @@ def _pinned_first_reexports(package: Path, dotted: str) -> set[str]:
                 node.module == dotted or node.module.startswith(dotted + ".")
             ):
                 break
-        elif isinstance(node, ast.Import):
-            if any(
-                alias.name == dotted or alias.name.startswith(dotted + ".")
-                for alias in node.names
-            ):
-                break
+        elif isinstance(node, ast.Import) and any(
+            alias.name == dotted or alias.name.startswith(dotted + ".")
+            for alias in node.names
+        ):
+            break
         # Non-import statements (docstring, __all__, constants) are neutral.
     return pinned
 

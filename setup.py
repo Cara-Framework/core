@@ -80,9 +80,9 @@ setup(
             "bandit==1.9.4",
             "hypothesis==6.170.15",
             "pip-audit==2.10.1",
-            "pytest==9.1.1",
-            "pytest-asyncio==1.4.0",
-            "ruff==0.16.4",
+            "pytest==9.2.0",
+            "pytest-asyncio==1.5.0",
+            "ruff==0.17.5",
         ],
         # Everything: a full backend service (services/api) wants db + queue.
         "all": [

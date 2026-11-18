@@ -29,9 +29,8 @@ class MinRule(BaseRule):
         if "min" not in params:
             return False
 
-        try:
-            min_threshold = float(params.get("min"))
-        except TypeError, ValueError:
+        min_threshold = self.as_number(params.get("min"))
+        if min_threshold is None:
             return False
 
         if isinstance(value, bool):
@@ -40,17 +39,15 @@ class MinRule(BaseRule):
         chain = params.get("_rules") or ()
         numeric_context = "integer" in chain or "numeric" in chain
 
-        # For numeric values (int, float), compare numerically
+        # Numbers compare as they are — exact, and no float() overflow.
         if isinstance(value, (int, float)):
-            return float(value) >= min_threshold
+            return value >= min_threshold
 
         # Strings: in numeric context compare as number; otherwise by length.
         if isinstance(value, str):
             if numeric_context:
-                try:
-                    return float(value) >= min_threshold
-                except ValueError:
-                    return False
+                number = self.as_number(value)
+                return number is not None and number >= min_threshold
             return len(value) >= min_threshold
 
         # Lists/tuples/dicts compare by length.
@@ -58,10 +55,8 @@ class MinRule(BaseRule):
             return len(value) >= min_threshold
 
         # Last-ditch numeric conversion.
-        try:
-            return float(value) >= min_threshold
-        except TypeError, ValueError:
-            return False
+        number = self.as_number(value)
+        return number is not None and number >= min_threshold
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default minimum value message."""

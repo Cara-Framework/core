@@ -33,7 +33,8 @@ _CURRENCY_SYMBOLS = {
     "EUR": "€",
     "GBP": "£",
     "JPY": "¥",
-    "CNY": "¥",
+    # "CN¥", not "¥": the yen already owns the bare sign.
+    "CNY": "CN¥",
     "TRY": "₺",
     "INR": "₹",
     "BRL": "R$",
@@ -171,7 +172,11 @@ def format_money(
     # ``,`` groups thousands; ``.{decimals}f`` fixes the precision and
     # rounds at the display boundary using Decimal's context (ROUND_HALF_EVEN
     # by default), so the formatted string matches the stored value.
-    return f"{currency_symbol(code)}{value:,.{decimals}f}"
+    # The sign stands before the symbol — "-$28.98", as `Intl.NumberFormat`
+    # writes it on the dashboard — never "$-28.98".
+    rounded = f"{abs(value):,.{decimals}f}"
+    sign = "-" if value < 0 and rounded.strip("0.,") else ""
+    return f"{sign}{currency_symbol(code)}{rounded}"
 
 
 __all__ = [

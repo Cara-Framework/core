@@ -288,9 +288,12 @@ def _model_discovery_extract_field_definition_new_syntax(
                             foreign_key_info["on_delete_columns"] = self._foreign_key_arg(
                                 keyword.value
                             )
-                elif method_name == "on_update":
-                    if current.args and isinstance(current.args[0], ast.Constant):
-                        foreign_key_info["on_update"] = current.args[0].value
+                elif (
+                    method_name == "on_update"
+                    and current.args
+                    and isinstance(current.args[0], ast.Constant)
+                ):
+                    foreign_key_info["on_update"] = current.args[0].value
 
                 # Move to the object being called (chaining)
                 current = current.func.value
