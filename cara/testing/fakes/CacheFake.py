@@ -125,6 +125,11 @@ class CacheFake:
     def delete(self, key: str) -> bool:
         return self.forget(key)
 
+    def raw_key(self, key: str, driver_name: str | None = None) -> str:
+        """``Cache.raw_key``: the fake has no raw connection, hence no
+        physical namespace: ``key`` unchanged."""
+        return key
+
     def flush(self) -> None:
         self._store.clear()
         self._ttls.clear()

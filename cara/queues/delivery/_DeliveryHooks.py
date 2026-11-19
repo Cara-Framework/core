@@ -612,8 +612,13 @@ def _delivery_prune_terminal(self, batch_size: int = 5000) -> int:
         field="delivery_prune_batch",
     )
     cutoff = pendulum.now("UTC").subtract(days=self.audit_retention_days)
+    # The batch is chosen ONCE, in a CTE (a locking CTE is never inlined).
+    # As an ``IN (... LIMIT n FOR UPDATE SKIP LOCKED)`` subquery the planner
+    # may rescan it per outer row, and each rescan skips the rows this very
+    # DELETE already removed and takes the next n: one pass deleted the whole
+    # backlog, past its batch (gate 2026-11-19: ``prune_terminal(2)`` == 5).
     affected = self._db().statement(
-        f"DELETE FROM {self.table} AS source WHERE source.job_id IN ("
+        "WITH batch AS MATERIALIZED ("
         f"SELECT candidate.job_id FROM {self.table} AS candidate "
         "WHERE candidate.status = ANY(%s) "
         "AND candidate.completed_at IS NOT NULL "
@@ -623,7 +628,9 @@ def _delivery_prune_terminal(self, batch_size: int = 5000) -> int:
         f"AND NOT EXISTS (SELECT 1 FROM {self.table} AS replay "
         "WHERE replay.replay_of = candidate.job_id) "
         "ORDER BY candidate.completed_at LIMIT %s "
-        "FOR UPDATE SKIP LOCKED)",
+        "FOR UPDATE SKIP LOCKED) "
+        f"DELETE FROM {self.table} AS source USING batch "
+        "WHERE source.job_id = batch.job_id",
         [
             list(self.TERMINAL_STATUSES),
             cutoff,

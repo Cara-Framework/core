@@ -304,7 +304,25 @@ def _qb_set_global_scope(self, name="", callable=None, action="select") -> Self:
     return self
 
 
+def _refuse_tenant_scope_removal(names) -> None:
+    """Dropping a tenant scope (``TenantScope``'s ``_tenant_*`` entries) is
+    the escape hatch ``without_tenant()`` already guards: only inside an
+    explicit ``Tenancy.central()``. Unguarded here, a tenant-armed (or UNSET)
+    ``Model.without_global_scopes().get()`` read every workspace's rows."""
+    if not any(str(name).startswith("_tenant_") for name in names):
+        return
+    from cara.context import Tenancy  # local: cycle with cara.context
+
+    if not Tenancy.is_central():
+        raise RuntimeError(
+            "Removing the tenant scope requires an explicit Tenancy.central() scope."
+        )
+
+
 def _qb_without_global_scopes(self) -> Self:
+    _refuse_tenant_scope_removal(
+        name for scopes in self._global_scopes.values() for name in scopes
+    )
     self._global_scopes = {}
     return self
 
@@ -326,6 +344,7 @@ def _qb_remove_global_scope(self, scope, action=None) -> Self:
 
     scopes = self._global_scopes.get(action)
     if scopes and scope in scopes:
+        _refuse_tenant_scope_removal((scope,))
         del scopes[scope]
 
     return self

@@ -99,7 +99,27 @@ def test_a_soft_delete_never_reaches_another_tenants_rows():
 def test_an_or_raw_where_is_grouped_too():
     sql = _listing().where("status", "active").or_where_raw("price > 10").to_sql()
 
-    assert '("listing"."status" = \'active\' OR price > 10) AND' in sql
+    assert '("listing"."status" = \'active\' OR (price > 10)) AND' in sql
+
+
+def test_a_single_raw_where_with_an_or_cannot_escape_the_tenant_scope():
+    """``where_raw("a OR b")`` is ONE where, so the OR-joined grouping above
+    never fired: it compiled to ``a OR b AND tenant_id = ?``, every tenant's
+    rows matching ``a``. Every raw fragment is now its own group."""
+    sql = _listing().where_raw("status = 'active' OR price > 10").to_sql()
+
+    assert sql == (
+        "SELECT * FROM \"listing\" WHERE (status = 'active' OR price > 10) AND "
+        '"listing"."tenant_id" = \'5\' AND "listing"."deleted_at" IS NULL'
+    )
+
+
+def test_a_raw_or_fragment_after_a_where_stays_grouped():
+    sql = _listing(scoped=False).where("a", 1).where_raw("b = 2 OR c = 3").to_sql()
+
+    assert sql == (
+        'SELECT * FROM "listing" WHERE "listing"."a" = \'1\' AND (b = 2 OR c = 3)'
+    )
 
 
 def test_and_only_wheres_compile_unchanged():

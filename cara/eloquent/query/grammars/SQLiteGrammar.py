@@ -71,7 +71,8 @@ class SQLiteGrammar(BaseGrammar):
         return "({query})"
 
     def raw_query_string(self):
-        return "{keyword} {query}"
+        # Every raw where is its own group (see ``PostgresGrammar``).
+        return "{keyword} ({query})"
 
     def where_group_string(self):
         return "{keyword} {value}"

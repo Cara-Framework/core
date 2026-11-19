@@ -109,7 +109,6 @@ class ConcurrencyLimited:
 
     async def handle(self, job, next_fn: Callable):
         concurrency_key = self.key or job.__class__.__name__
-        redis_key = f"{self.REDIS_KEY_PREFIX}{concurrency_key}"
 
         cache = self._resolve_cache()
         if cache is None:
@@ -117,6 +116,7 @@ class ConcurrencyLimited:
                 "ConcurrencyLimited requires an application cache binding; "
                 f"cannot enforce the {concurrency_key!r} ceiling."
             )
+        redis_key = self._redis_key(cache, f"{self.REDIS_KEY_PREFIX}{concurrency_key}")
 
         slot_id = f"{id(job)}:{time.time()}"
         refusal = (
@@ -265,6 +265,14 @@ class ConcurrencyLimited:
             # an outage during release must remain observable.
             self._log_backend_fault(concurrency_key, exc)
             self._count_backend_fault(concurrency_key)
+
+    @staticmethod
+    def _redis_key(cache, key: str) -> str:
+        """``key`` under the cache's configured prefix (``Cache.raw_key``):
+        written raw, it was one name for every deployment sharing the Redis
+        database, so two of them shared one ceiling."""
+        namer = getattr(cache, "raw_key", None)
+        return namer(key) if callable(namer) else key
 
     @staticmethod
     def _connection(cache):

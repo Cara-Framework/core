@@ -41,6 +41,17 @@ class TenantScope(BaseScope):
             "_tenant_injector_bulk", self._inject_tenant_id_bulk, action="bulk_create"
         )
 
+        # upsert runs its own action too: without it an upsert wrote another
+        # tenant's tenant_id, and its ON CONFLICT DO UPDATE rewrote a
+        # conflicting row of ANY tenant.
+        builder.set_global_scope(
+            "_tenant_injector_upsert", self._inject_tenant_id_upsert, action="upsert"
+        )
+        # An update may never move a row to another tenant.
+        builder.set_global_scope(
+            "_tenant_update_guard", self._refuse_tenant_move, action="update"
+        )
+
     def on_remove(self, builder):
         """Remove tenant scoping."""
         builder.remove_global_scope("_tenant_filter", action="select")
@@ -48,6 +59,56 @@ class TenantScope(BaseScope):
         builder.remove_global_scope("_tenant_filter_delete", action="delete")
         builder.remove_global_scope("_tenant_injector", action="insert")
         builder.remove_global_scope("_tenant_injector_bulk", action="bulk_create")
+        builder.remove_global_scope("_tenant_injector_upsert", action="upsert")
+        builder.remove_global_scope("_tenant_update_guard", action="update")
+
+    def _inject_tenant_id_upsert(self, builder):
+        """:meth:`_inject_tenant_id_bulk` for ``upsert`` rows, plus the
+        conflict guard: unless the conflict key names the tenant column, the
+        ``DO UPDATE`` only rewrites a conflicting row of the SAME tenant
+        (``WHERE t.tenant_id = EXCLUDED.tenant_id``) — another tenant's row
+        is left as it is."""
+        from cara.context import Tenancy  # local: cycle with cara.context
+
+        state = Tenancy.state()
+        if state is Tenancy.UNSET:
+            raise RuntimeError("Cannot upsert tenant-scoped models with UNSET tenancy.")
+        rows = []
+        for row in builder._upsert_values:
+            if state is Tenancy.CENTRAL:
+                if self.tenant_column not in row:
+                    raise RuntimeError(
+                        "Central tenant-scoped upserts must explicitly include "
+                        f"{self.tenant_column} in every row."
+                    )
+            elif row.get(self.tenant_column) is None:
+                row = {**row, self.tenant_column: state}
+            elif row[self.tenant_column] != state:
+                raise RuntimeError("Tenant-scoped upsert attempted a cross-tenant write.")
+            rows.append(dict(sorted(row.items())))
+        builder._upsert_values = rows
+        if self.tenant_column not in (builder._upsert_unique_by or []):
+            builder._upsert_conflict_guard = self.tenant_column
+        return builder
+
+    def _refuse_tenant_move(self, builder):
+        """Refuse an UPDATE that sets the tenant column to another tenant
+        (the insert path refuses the same write; central work may move)."""
+        from cara.context import Tenancy  # local: cycle with cara.context
+
+        # CENTRAL may move a row; UNSET already matches no row (``1 = 0``).
+        if not Tenancy.is_tenant():
+            return builder
+        state = Tenancy.state()
+        for update in getattr(builder, "_updates", ()) or ():
+            values = getattr(update, "column", None)
+            if (
+                isinstance(values, dict)
+                and self.tenant_column in values
+                and str(values[self.tenant_column]) != str(state)
+            ):
+                raise RuntimeError("Tenant-scoped update attempted a cross-tenant move.")
+        return builder
 
     def _apply_tenant_filter(self, builder):
         """Apply tenant filtering based on current request context.

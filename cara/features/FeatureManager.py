@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -49,6 +50,10 @@ ABSENT = "__absent__"
 
 _DEFAULT_CACHE_PREFIX = "feature_flag:"
 _DEFAULT_CACHE_TTL = 120  # seconds — flush() is the fast path, TTL the backstop
+#: The flush generation's key, under the cache prefix (``_resolve_state``).
+_GENERATION_SUFFIX = "__generation__"
+#: The generation must outlive every snapshot written under it.
+_GENERATION_MIN_TTL = 86400
 _logger = logging.getLogger("cara.features")
 
 
@@ -216,13 +221,27 @@ class FeatureManager:
         Failing closed there turned a self-healing cache event into a paused
         kill switch: ``sync_push_enabled`` read off for one read and a
         marketplace stock push was refused for good (2026-11-12). A cache
-        that cannot answer at all still raises, so the flag fails closed."""
+        that cannot answer at all still raises, so the flag fails closed.
+
+        The snapshot is keyed by the flush GENERATION read before the
+        resolver runs. Keyed by the flag alone, a reader that resolved just
+        before an operator's halt committed wrote its pre-halt answer back
+        AFTER the halt's ``flush`` and served it for the whole TTL: a kill
+        switch read "running" for up to 120 s after it was pulled. Under a
+        generation that ``flush`` has since replaced, that late write lands
+        on a key no reader asks again."""
         from cara.exceptions import (  # local: cycle with cara.exceptions
             CacheConfigurationException,
         )
         from cara.facades import Cache  # local: cycle with cara.facades
 
-        cache_key = f"{self._cache_prefix}{key}"
+        try:
+            generation = Cache.get(self._generation_key(), None, strict=True)
+        except CacheConfigurationException:
+            # An unreadable stamp cannot say which snapshots are current:
+            # answer from the source and cache nothing.
+            return self._resolver(key)
+        cache_key = self._snapshot_key(key, generation)
 
         _missing = object()
         try:
@@ -233,25 +252,46 @@ class FeatureManager:
             return cached
 
         state = self._resolver(key)
-        Cache.put(cache_key, state, self._cache_ttl, strict=True)
+        try:
+            Cache.put(cache_key, state, self._cache_ttl, strict=True)
+        except Exception:
+            # The source answered; only the snapshot was not kept. Raising
+            # here read every flag as off: kill switches halted (a sale's
+            # stock decrease with them) and an operator's provider pause was
+            # lifted — the opposite of each flag's own safe side.
+            self._warn("feature flag snapshot not cached; answering from source", key)
         return state
 
     # ── invalidation ──────────────────────────────────────────────────
 
+    def _generation_key(self) -> str:
+        return f"{self._cache_prefix}{_GENERATION_SUFFIX}"
+
+    def _snapshot_key(self, key: str, generation: Any) -> str:
+        if not generation:
+            return f"{self._cache_prefix}{key}"
+        return f"{self._cache_prefix}{generation}:{key}"
+
     def flush(self, key: str | None = None) -> None:
         """Bust the cached resolution for ``key`` (or every flag).
 
-        Call after an admin edit so the new value is visible immediately;
-        the TTL is the backstop. A failed invalidation is surfaced because
-        silently serving a stale enabled flag would violate fail-closed state.
+        Call after an admin edit COMMITS so the new value is visible
+        immediately; the TTL is the backstop. A new generation retires every
+        snapshot at once, including one a reader is still about to write from
+        a read taken before the edit (``_resolve_state``); every flag is read
+        from its source once more, which a rare admin edit affords. A failed
+        invalidation is surfaced because silently serving a stale enabled flag
+        would violate fail-closed state. ``key`` names the edited flag for the
+        warning only.
         """
         from cara.facades import Cache  # local: cycle with cara.facades
 
         try:
-            if key is None:
-                Cache.forget_by_prefix(self._cache_prefix)
-            else:
-                Cache.forget(f"{self._cache_prefix}{key}")
+            Cache.put(
+                self._generation_key(),
+                uuid.uuid4().hex,
+                max(_GENERATION_MIN_TTL, 10 * self._cache_ttl),
+            )
         except Exception as exc:
             self._warn("feature flag cache flush failed", key)
             from cara.exceptions import (  # local: cycle with cara.exceptions

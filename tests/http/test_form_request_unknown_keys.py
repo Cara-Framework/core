@@ -87,3 +87,16 @@ def test_declared_nested_and_aliased_keys_and_path_params_pass():
         {"items": [{"sku": "A"}], "per_page": 3, "id": "PRD1"}, {"id": "PRD1"}
     )
     assert validated["limit"] == 3
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_a_body_key_that_contradicts_the_path_is_refused(strict_product, strict):
+    """The body wins the input merge, so ``DELETE /notifications/NTF_A`` with
+    a body naming ``NTF_B`` acted on B (framework seam sweep, 2026-11-19).
+    Refused whatever the product's unknown-key setting."""
+    if not strict:
+        strict_product.clear()
+    with pytest.raises(ValidationException) as refused:
+        _run({"id": "PRD2"}, {"id": "PRD1"})
+
+    assert "id" in refused.value.errors

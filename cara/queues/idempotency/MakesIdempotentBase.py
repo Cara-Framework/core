@@ -39,6 +39,7 @@ from typing import Any
 import pendulum
 
 from cara.cache import cache_backend_fault_types
+from cara.context import Tenancy
 from cara.exceptions import (
     IdempotencyGateFaultException,
     IdempotencyLeaseLostException,
@@ -273,10 +274,14 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
     # ── Key generation + parameter normalization ───────────────────
 
     def generate_idempotency_key(self) -> str:
-        """Generate unique idempotency key from class + parameters."""
+        """Idempotency key from class + parameters + the ARMED tenancy: one
+        job run for two workspaces is two units of work, never one shared
+        result cache and lease (it made jobs carry a second ``tenant_id``)."""
+        tenancy = "central" if Tenancy.is_central() else Tenancy.id()
         job_data = {
             "job_class": self.__class__.__name__,
             "parameters": self.get_job_parameters(),
+            "tenancy": None if tenancy is None else str(tenancy),
             "version": "1.0",
         }
         key_string = json.dumps(job_data, sort_keys=True)

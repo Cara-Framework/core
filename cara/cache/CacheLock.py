@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 import uuid
+
+_logger = logging.getLogger("cara.cache")
 
 
 class CacheLock:
@@ -48,6 +51,10 @@ class CacheLock:
                 request this through :meth:`Cache.exact_lock`; ordinary
                 :meth:`Cache.lock` names remain prefixed.
         """
+        # A lock's TTL must be a real expiry: ``0`` reaches the driver as
+        # "no expiry", so a holder that crashed held the key forever.
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
+            raise ValueError("CacheLock timeout must be a positive number of seconds")
         self.cache = cache
         self.key = key if exact_key else f"lock:{key}"
         self.timeout = timeout
@@ -135,9 +142,33 @@ class CacheLock:
             )
         return self
 
+    def _release_on_exit(self, body_failed: bool) -> None:
+        """Release at the end of a ``with`` block.
+
+        A release that raises while the body's own exception propagates is
+        logged, never raised: it REPLACED the body's error (a Paddle failure
+        read as a Redis ``forget_if`` error). After a body that succeeded it
+        still raises. A release that finds the lock gone (its TTL lapsed
+        mid-body, so the section ran unprotected for a while) is logged."""
+        try:
+            released = self.release()
+        except Exception:
+            if not body_failed:
+                raise
+            _logger.warning(
+                "lock %s not released while the body failed", self.key, exc_info=True
+            )
+            return
+        if not released:
+            _logger.warning(
+                "lock %s had lapsed before release; the section outran its TTL (%ss)",
+                self.key,
+                self.timeout,
+            )
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Sync context manager exit."""
-        self.release()
+        self._release_on_exit(exc_type is not None)
         return False
 
     async def __aenter__(self):
@@ -151,5 +182,5 @@ class CacheLock:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
-        self.release()
+        self._release_on_exit(exc_type is not None)
         return False

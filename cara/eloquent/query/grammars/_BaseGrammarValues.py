@@ -270,6 +270,14 @@ def _compile_upsert(self, qmark=False):
         for col in self._upsert_update
     )
     update_columns = ", ".join(f"{col} = EXCLUDED.{col}" for col in quoted_updates)
+    # The tenant scope's conflict guard: a conflicting row of another tenant
+    # is left untouched instead of rewritten (``TenantScope``).
+    guard = getattr(self, "_upsert_conflict_guard", None)
+    if guard and update_columns:
+        guarded = self.column_string().format(column=guard, separator="")
+        update_columns += (
+            f" WHERE {self.process_table(self.table)}.{guarded} = EXCLUDED.{guarded}"
+        )
 
     # An explicit empty update list is insert-if-missing: conflicting
     # rows are left untouched (DO NOTHING). ``DO UPDATE SET`` with an

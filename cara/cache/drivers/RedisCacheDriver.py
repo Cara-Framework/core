@@ -83,6 +83,9 @@ class RedisCacheDriver(CacheContract):
         self._prefix = f"{self._base_prefix}{separator}{self._codec.NAMESPACE}:"
         self._value_prefix = f"{self._prefix}v:"
         self._counter_prefix = f"{self._prefix}c:"
+        # Raw structures (semaphores, usage hashes) live beside the codec
+        # namespace, not inside it: a cache flush must not free a held slot.
+        self._raw_prefix = f"{self._base_prefix}{separator}raw:"
         self._default_ttl = self._resolve_ttl(None, default_ttl)
         self._large_value_bytes = large_value_bytes
         self._large_value_warned: set[str] = set()
@@ -152,6 +155,13 @@ class RedisCacheDriver(CacheContract):
         decode.
         """
         return self._client
+
+    def raw_key(self, key: str) -> str:
+        """The physical name of a key a caller writes through
+        :meth:`connection` (an EVAL'd sorted set, a hash): under this
+        driver's configured prefix like every other key, so two deployments
+        sharing one Redis database never meet on it."""
+        return f"{self._raw_prefix}{key}"
 
     @staticmethod
     def _resolve_signing_key(explicit: str | bytes | None) -> str | bytes:

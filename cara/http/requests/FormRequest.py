@@ -64,6 +64,7 @@ class FormRequest:
         )
 
         sent = set(data) if isinstance(data, dict) else set()
+        self._refuse_path_overrides(request, data)
 
         # Laravel parity: normalize the raw payload BEFORE validation so the
         # mutated shape is what the rules see (and what ``validated()`` returns).
@@ -88,6 +89,29 @@ class FormRequest:
     #: Per-request override of the product setting: ``True``/``False`` pins
     #: this door, ``None`` follows ``server.refuse_unknown_request_keys``.
     refuse_unknown_keys: bool | None = None
+
+    @staticmethod
+    def _refuse_path_overrides(request: Any, data: Any) -> None:
+        """Refuse a body or query key that names a route path parameter with
+        another value. The path value is the resource the route addresses
+        (``validate_path_param`` puts it in the input), but the body wins the
+        merge (``all()``): ``DELETE /notifications/NTF_A`` with a body naming
+        ``NTF_B`` acted on B."""
+        if not isinstance(data, dict):
+            return
+        params = getattr(request, "params", None) or {}
+        clashing = sorted(
+            str(name)
+            for name, value in params.items()
+            if name in data and str(data[name]) != str(value)
+        )
+        if clashing:
+            raise ValidationException(
+                message=f"Parameter {clashing[0]} contradicts the request path.",
+                errors={
+                    name: [f"{name} contradicts the request path."] for name in clashing
+                },
+            )
 
     def _refuses_unknown_keys(self) -> bool:
         if self.refuse_unknown_keys is not None:

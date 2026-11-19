@@ -88,7 +88,10 @@ class PostgresGrammar(BaseGrammar):
         return "({query})"
 
     def raw_query_string(self):
-        return "{keyword} {query}"
+        # Every raw where is its own group: ``where_raw("a OR b")`` beside a
+        # scope's ``AND tenant_id = ?`` compiled to ``a OR b AND tenant_id``,
+        # i.e. every tenant's rows matching ``a``.
+        return "{keyword} ({query})"
 
     def where_group_string(self):
         return "{keyword} {value}"

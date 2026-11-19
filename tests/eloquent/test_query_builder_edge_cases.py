@@ -170,13 +170,13 @@ def test_where_not_in_empty_list_emits_explicit_tautology():
     can see a WHERE clause exists."""
     qb = _qb().where_not_in("id", [])
     sql = qb.to_sql()
-    assert "WHERE 1 = 1" in sql, f"expected explicit 1=1, got: {sql}"
+    assert "WHERE (1 = 1)" in sql, f"expected explicit 1=1, got: {sql}"
 
 
 def test_where_not_in_all_none_emits_explicit_tautology():
     qb = _qb().where_not_in("id", [None, None])
     sql = qb.to_sql()
-    assert "WHERE 1 = 1" in sql, sql
+    assert "WHERE (1 = 1)" in sql, sql
     assert "NOT IN" not in sql, f"all-None NOT IN must not generate 'NOT IN', got: {sql}"
 
 
@@ -215,7 +215,7 @@ def test_update_with_where_not_in_empty_still_emits_safe_sql():
     audit logs."""
     qb = _qb().where_not_in("id", []).update({"status": "x"}, dry=True)
     sql = qb.to_qmark()
-    assert "WHERE 1 = 1" in sql, sql
+    assert "WHERE (1 = 1)" in sql, sql
 
 
 # ── limit / offset: 0, None, negative ────────────────────────────────

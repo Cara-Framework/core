@@ -140,6 +140,14 @@ class Cache:
         """
         return self.driver(driver_name).touch_if(key, expected_value, ttl)
 
+    def raw_key(self, key: str, driver_name: str | None = None) -> str:
+        """The physical name of ``key`` for a structure written through the
+        driver's raw ``connection()`` (a semaphore, a usage hash): under the
+        driver's configured prefix (``RedisCacheDriver.raw_key``). A driver
+        with no raw connection has no physical namespace: ``key`` unchanged."""
+        namer = getattr(self.driver(driver_name), "raw_key", None)
+        return namer(key) if callable(namer) else key
+
     def flush(self, driver_name: str | None = None) -> None:
         """Flush (clear) all entries from the given driver."""
         self.driver(driver_name).flush()

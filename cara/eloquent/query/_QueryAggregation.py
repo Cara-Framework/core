@@ -86,6 +86,9 @@ def _qb_get_grammar(self):
         grammar_instance._upsert_values = getattr(self, "_upsert_values", [])
         grammar_instance._upsert_unique_by = getattr(self, "_upsert_unique_by", [])
         grammar_instance._upsert_update = getattr(self, "_upsert_update", [])
+        grammar_instance._upsert_conflict_guard = getattr(
+            self, "_upsert_conflict_guard", None
+        )
 
     return grammar_instance
 
@@ -391,6 +394,19 @@ def _qb_unless(self, conditional, callback, otherwise=None) -> Self:
 
 
 def _qb_truncate(self, foreign_keys=False, dry=False):
+    # TRUNCATE takes no WHERE: on a tenant-scoped table it empties every
+    # workspace, so it runs only inside an explicit ``Tenancy.central()``.
+    if any(
+        str(name).startswith("_tenant_")
+        for scopes in self._global_scopes.values()
+        for name in scopes
+    ):
+        from cara.context import Tenancy  # local: cycle with cara.context
+
+        if not Tenancy.is_central():
+            raise RuntimeError(
+                "truncate() on a tenant-scoped table requires Tenancy.central()."
+            )
     sql = self.get_grammar().truncate_table(self.get_table_name(), foreign_keys)
 
     if dry or self.dry:
