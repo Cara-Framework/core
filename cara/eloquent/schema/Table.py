@@ -35,6 +35,10 @@ class Table:
         self.foreign_keys = {}
         self.primary_key = None
         self.comment = None
+        # ``HashPartitioning`` when the table is declared
+        # partitioned (``Blueprint.partition_by_hash``); compiled by the
+        # platform into ``PARTITION BY`` plus one table per partition.
+        self.partitioning = None
 
     def change(self) -> Self:
         """Re-classify the most recently added column as a MODIFICATION.

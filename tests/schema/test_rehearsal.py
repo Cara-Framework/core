@@ -38,7 +38,13 @@ def _operation(key="users.phone"):
 class _Plan:
     """The command with only its outside world replaced."""
 
-    def __init__(self, apply_exit=0, prepare_error=None, allow_destructive=False):
+    def __init__(
+        self,
+        apply_exit=0,
+        prepare_error=None,
+        allow_destructive=False,
+        missing_client=None,
+    ):
         from cara.commands.core.SchemaPlanCommand import SchemaPlanCommand
 
         self.command = SchemaPlanCommand.__new__(SchemaPlanCommand)
@@ -51,12 +57,19 @@ class _Plan:
 
         self.apply_exit = apply_exit
         self.prepare_error = prepare_error
+        self.missing_client = missing_client
         self.created: list[str] = []
         self.dropped: list[str] = []
         self.cloned: list[tuple] = []
         self.craft: list[list[str]] = []
 
     def install(self, monkeypatch):
+        def _client_binaries():
+            if self.missing_client:
+                raise ScratchDatabaseException(self.missing_client)
+            return "/usr/bin/pg_dump", "/usr/bin/psql"
+
+        monkeypatch.setattr(_PLAN_MODULE.Scratch, "client_binaries", _client_binaries)
         monkeypatch.setattr(
             _PLAN_MODULE.Scratch,
             "connection_params",
@@ -136,6 +149,20 @@ def test_a_scratch_that_cannot_be_prepared_is_reported_not_rehearsed(monkeypatch
     assert plan.craft == []
     assert "pg_dump is not on PATH" in plan.text
     assert plan.dropped == ["synkronus_rehearsal"]
+
+
+def test_missing_client_tools_refuse_before_any_scratch_exists(monkeypatch):
+    """An image or host without pg_dump learns that first, by name — not after
+    a scratch database was created on the server and dropped again."""
+    plan = _Plan(missing_client="needs 'pg_dump', not found on PATH").install(
+        monkeypatch
+    )
+
+    assert plan.rehearse() == 2
+    assert "cannot run here" in plan.text
+    assert "'pg_dump'" in plan.text
+    assert plan.created == []
+    assert plan.craft == []
 
 
 def test_destructive_permission_carries_into_the_rehearsal(monkeypatch):

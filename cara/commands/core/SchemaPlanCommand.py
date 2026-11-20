@@ -297,6 +297,12 @@ class SchemaPlanCommand(CommandBase):
             self.error(str(exc))
             return 2
 
+        try:
+            Scratch.client_binaries()
+        except ScratchDatabaseException as exc:
+            self.error(f"schema:plan --rehearse cannot run here: {exc}")
+            return 2
+
         source = params["database"]
         name = Scratch.derive_name(source, "rehearsal")
         try:

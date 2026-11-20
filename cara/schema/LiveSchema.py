@@ -15,6 +15,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 
 from cara.schema.DeclaredIndex import index_parts
+from cara.schema.LivePartitions import read_partitioning, without_partitions
 from cara.schema.Vocabulary import ADD_COLUMN_RE, PSEUDO_FIELD_EXPANSIONS
 
 
@@ -120,8 +121,11 @@ class LiveSchema:
         dict[str, dict[str, tuple[str, str | None, str | None, str | None]]] | None
     ) = None
 
+    partitioning: dict[str, dict] | None = None  # cara.schema.LivePartitions
+
     def __post_init__(self):
         for name, empty in (
+            ("partitioning", {}),
             ("constraints", {}),
             ("triggers", {}),
             ("functions", set()),
@@ -371,7 +375,7 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
             row["target"]
         )
 
-    return LiveSchema(
+    live = LiveSchema(
         tables=tables,
         checks=checks,
         indexes=indexes,
@@ -387,6 +391,7 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         invalid_indexes=invalid_indexes,
         column_statistics=column_statistics,
     )
+    return without_partitions(live, read_partitioning(run, sql_literal(target)))
 
 
 #: A constraint attached NOT VALID reads back with this suffix; it says how the

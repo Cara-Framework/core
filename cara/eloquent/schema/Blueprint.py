@@ -5,6 +5,7 @@ from typing import Self
 from .ColumnFactory import ColumnFactory
 from .ConstraintManager import ConstraintManager
 from .ForeignKeyBuilder import ForeignKeyBuilder
+from .HashPartitioning import HashPartitioning
 from .Table import Table
 
 
@@ -342,6 +343,16 @@ class Blueprint:
         columns = column or (self._last_column.name if self._last_column else None)
         if columns:
             self.constraint_manager.add_primary_key(columns, name)
+        return self
+
+    def partition_by_hash(self, column: str, partitions: int) -> Self:
+        """Declare the table ``PARTITION BY HASH (column)`` into ``partitions``.
+
+        Only valid on create. The platform builds every partition in the same
+        migration (``<table>_p<NN>``) and keys the table on ``(column, <serial
+        id>)``; see ``cara.eloquent.schema.HashPartitioning``.
+        """
+        self.table.partitioning = HashPartitioning(key=column, partitions=partitions)
         return self
 
     # === Foreign Keys - Delegation to ForeignKeyBuilder ===

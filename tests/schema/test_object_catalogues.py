@@ -146,6 +146,21 @@ def test_kind_qualification_keeps_namespaces_from_colliding():
     assert "column:search_vector" not in created
 
 
+def test_a_constraint_trigger_is_a_trigger_the_planner_can_name():
+    """A deferred CONSTRAINT TRIGGER (the event log's referee on a head
+    table) creates a trigger like any other: the plan must find it by name
+    instead of refusing the entry as unreadable."""
+    assert created_objects(
+        "CREATE CONSTRAINT TRIGGER sync_task_event_referee "
+        "AFTER INSERT OR UPDATE OR DELETE ON sync_task "
+        "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW "
+        "EXECUTE FUNCTION event_log_referee('push', 'tenant_id', 'status')"
+    ) == created_objects(
+        "CREATE TRIGGER sync_task_event_referee AFTER INSERT ON sync_task "
+        "FOR EACH ROW EXECUTE FUNCTION event_log_referee()"
+    )
+
+
 def test_an_entry_whose_sql_cannot_be_read_is_refused_not_replanned():
     """Guessing has two failure modes and both are silent: run-it-always is
     the phantom, skip-it-always drops a real object from the plan. Refusing

@@ -68,3 +68,29 @@ def test_an_unbooted_config_still_falls_back_to_path(monkeypatch):
     monkeypatch.setattr(_SCRATCH.shutil, "which", lambda name: "/usr/bin/psql")
 
     assert _SCRATCH._resolve_client_binary("psql", "database.psql_bin") == "/usr/bin/psql"
+
+
+def _binaries(monkeypatch, on_path: dict[str, str]):
+    monkeypatch.setattr(_SCRATCH, "config", lambda _key, default=None: default)
+    monkeypatch.setattr(_SCRATCH.shutil, "which", lambda name: on_path.get(name))
+    return _SCRATCH.client_binaries()
+
+
+def test_both_client_binaries_resolve(monkeypatch):
+    assert _binaries(
+        monkeypatch, {"pg_dump": "/usr/bin/pg_dump", "psql": "/usr/bin/psql"}
+    ) == ("/usr/bin/pg_dump", "/usr/bin/psql")
+
+
+def test_a_missing_client_binary_is_named_with_its_override(monkeypatch):
+    """The 2026-11-20 rehearsal ran from an image carrying only
+    ``libpq5``; the refusal must say WHICH binary is
+    absent and which setting points at it, not a generic install hint."""
+    with pytest.raises(ScratchDatabaseException) as raised:
+        _binaries(monkeypatch, {"psql": "/usr/bin/psql"})
+
+    message = str(raised.value)
+    assert "'pg_dump'" in message
+    assert "PG_DUMP_BIN" in message
+    assert "'psql'" not in message
+    assert "PSQL_BIN" not in message

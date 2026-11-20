@@ -39,6 +39,9 @@ class SchemaOperation(Model):
 
     __table__ = "schema_operation"
     __primary_key__ = "id"
+    # The runtime role reads this ledger and never writes it (the guard below
+    # is the trigger half; a product's grant reconciler reads this class).
+    __runtime_access__ = "owner_only"
 
     # The vocabulary is owned by ``cara.schema.Operation`` beside
     # ``LEDGER_TABLE``; the two schema commands write the ledger in raw SQL

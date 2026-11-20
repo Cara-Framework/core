@@ -12,9 +12,19 @@ _logger = logging.getLogger("cara.migrations.discoverer")
 
 
 def _model_discovery_topological_sort(
-    self, models: list[dict], dependency_graph: dict[str, list[str]]
+    self,
+    models: list[dict],
+    dependency_graph: dict[str, list[str]],
+    soft_dependencies: dict[str, set[str]] | None = None,
 ) -> list[dict]:
-    """Topological sort using a simple iterative approach."""
+    """Topological sort using a simple iterative approach.
+
+    ``soft_dependencies`` are the edges inferred from a column's name alone:
+    no DDL of the table needs the other table to exist. They are honoured
+    while they can be; when nothing is ready, the lowest table whose REAL
+    dependencies are met goes next, before any real cycle is broken.
+    """
+    soft_dependencies = soft_dependencies or {}
     model_lookup = {model["table"]: model for model in models}
     result = []
     remaining = list(models)
@@ -33,6 +43,22 @@ def _model_discovery_topological_sort(
                 for dep in dependencies
             ):
                 ready_models.append(model)
+
+        if not ready_models:
+            # Only name-inferred edges are in the way: they are not a cycle.
+            released = [
+                model
+                for model in remaining
+                if all(
+                    dep in processed_tables
+                    or dep == model["table"]
+                    or dep not in model_lookup
+                    or dep in soft_dependencies.get(model["table"], ())
+                    for dep in dependency_graph.get(model["table"], [])
+                )
+            ]
+            if released:
+                ready_models = [min(released, key=lambda m: m["table"])]
 
         if not ready_models:
             # No model is ready → a circular FK dependency. Break it

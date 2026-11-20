@@ -48,7 +48,7 @@ def attempt_rate_limit(limit: Limit, *, cost: int = 1) -> RateLimitDecision:
     except Exception as exc:
         _record_failure(exc)
         raise ServiceUnavailableException(
-            "Rate limiter temporarily unavailable",
+            "We're briefly unable to take requests. Try again in a few seconds.",
             retry_after=1,
         ) from exc
 

@@ -19,7 +19,9 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "FieldProxy": (".FieldProxy", "FieldProxy"),
     "ForeignKeyBuilder": (".ForeignKeyBuilder", "ForeignKeyBuilder"),
     "ForeignKeyConstraint": (".ForeignKeyConstraint", "ForeignKeyConstraint"),
+    "HashPartitioning": (".HashPartitioning", "HashPartitioning"),
     "Index": (".Index", "Index"),
+    "MAX_PARTITIONS": (".HashPartitioning", "MAX_PARTITIONS"),
     "Platform": (".platforms", "Platform"),
     "PostgresPlatform": (".platforms", "PostgresPlatform"),
     "SQLitePlatform": (".platforms", "SQLitePlatform"),
@@ -28,6 +30,9 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "SchemaQueryExecutor": (".SchemaQueryExecutor", "SchemaQueryExecutor"),
     "Table": (".Table", "Table"),
     "TableDiff": (".TableDiff", "TableDiff"),
+    "migration_partition_drift": (".HashPartitioning", "migration_partition_drift"),
+    "partitioning_from_declaration": (".HashPartitioning", "partitioning_from_declaration"),
+    "validate_model_partitioning": (".HashPartitioning", "validate_model_partitioning"),
 }
 
 __all__ = [
@@ -47,7 +52,9 @@ __all__ = [
     "FieldProxy",
     "ForeignKeyBuilder",
     "ForeignKeyConstraint",
+    "HashPartitioning",
     "Index",
+    "MAX_PARTITIONS",
     "Platform",
     "PostgresPlatform",
     "SQLitePlatform",
@@ -56,6 +63,9 @@ __all__ = [
     "SchemaQueryExecutor",
     "Table",
     "TableDiff",
+    "migration_partition_drift",
+    "partitioning_from_declaration",
+    "validate_model_partitioning",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

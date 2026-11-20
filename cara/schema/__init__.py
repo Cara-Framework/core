@@ -23,6 +23,8 @@ Four modules, in dependency order:
 * ``ConstraintDrift`` / ``IndexDrift`` — what a name comparison cannot see: a
   CHECK or an index the database has BY NAME and not as declared, compared as
   the server spells both sides.
+* ``LivePartitions`` / ``PartitionDrift`` — partitions hidden behind their
+  parent, and the parent's storage compared with ``__partition__``.
 * ``Planner`` — the difference between the two, as ordered operations.
 * ``Scratch`` — a disposable database beside a real one, for proving both
   the acceptance invariant and a plan before it runs.
@@ -66,9 +68,14 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "changed_routines": (".NamedDdlBodies", "changed_routines"),
     "declared_routines": (".NamedDdlBodies", "declared_routines"),
     "disabled_triggers": (".NamedDdlBodies", "disabled_triggers"),
+    "is_partitioned": (".PartitionDrift", "is_partitioned"),
     "is_validation": (".Operation", "is_validation"),
+    "partition_drift": (".PartitionDrift", "partition_drift"),
+    "partition_refusals": (".PartitionDrift", "partition_refusals"),
     "probe_reshapes": (".ConstraintDrift", "probe_reshapes"),
     "read_named_ddl": (".NamedDdlBodies", "read_named_ddl"),
+    "read_partitioning": (".LivePartitions", "read_partitioning"),
+    "refuses_concurrent_build": (".PartitionDrift", "refuses_concurrent_build"),
     "reverse_preflight": (".Operation", "reverse_preflight"),
     "trigger_shape": (".NamedDdlBodies", "trigger_shape"),
     "live_type_sql": (".LiveColumnType", "live_type_sql"),
@@ -120,6 +127,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "sort_operations": (".Operation", "sort_operations"),
     "sql_literal": (".LiveSchema", "sql_literal"),
     "validate_name": (".Scratch", "validate_name"),
+    "without_partitions": (".LivePartitions", "without_partitions"),
 }
 
 __all__ = [
@@ -180,6 +188,7 @@ __all__ = [
     "index_parts",
     "index_shape",
     "introspect",
+    "is_partitioned",
     "is_validation",
     "live_default_sql",
     "live_type_sql",
@@ -193,6 +202,8 @@ __all__ = [
     "orphaned_indexes",
     "orphaned_tables",
     "orphaned_unique_constraints",
+    "partition_drift",
+    "partition_refusals",
     "plan",
     "plan_id",
     "postgres_type",
@@ -201,9 +212,11 @@ __all__ = [
     "raw_foreign_keys",
     "raw_sql_columns",
     "read_named_ddl",
+    "read_partitioning",
     "readd_column_sql",
     "recreate",
     "refuse_partial_fill",
+    "refuses_concurrent_build",
     "reshape_index_name",
     "reshape_scaffolding",
     "reverse_preflight",
@@ -212,6 +225,7 @@ __all__ = [
     "sql_literal",
     "trigger_shape",
     "validate_name",
+    "without_partitions",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

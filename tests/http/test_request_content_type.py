@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from cara.exceptions import UnsupportedMediaTypeException
 from cara.http import Request
+
+body_parsing = importlib.import_module("cara.http.request.mixins.MakesBodyParsing")
+limits_module = importlib.import_module("cara.http.BodyLimits")
+
+
+@pytest.fixture(autouse=True)
+def _default_body_limits(monkeypatch):
+    """The body limits come from an unconfigured application's defaults.
+
+    Without this the file passed only after some earlier test in the same
+    process had installed a configuration (alone, or on an xdist worker,
+    ``config()`` raised "Configuration is unavailable")."""
+    monkeypatch.setattr(limits_module, "config", lambda _key, default=None: default)
+    body_parsing._body_limits.cache_clear()
+    yield
+    body_parsing._body_limits.cache_clear()
 
 
 def _request(raw: bytes, content_type: str | None) -> Request:

@@ -12,7 +12,7 @@ class FieldDiff:
     """One typed schema change. ``kind`` is the discriminator the generator
     branches on."""
 
-    kind: str  # "added" | "removed" | "altered" | "renamed"
+    kind: str  # "added" | "removed" | "altered" | "renamed" | "partition"
     name: str
     column: MigrationColumn | None = None  # added / removed / altered(new) / renamed(new)
     old: MigrationColumn | None = None  # altered(previous) / renamed(previous)
@@ -26,6 +26,8 @@ class FieldDiff:
             return f"- DROP column {self.name} (DESTRUCTIVE)"
         if self.kind == "altered":
             return f"~ alter column {self.name}: {', '.join(self.changed_attrs)}"
+        if self.kind == "partition":
+            return f"~ partitioning: {', '.join(self.changed_attrs)}"
         if self.kind == "renamed":
             return f"> rename column {self.old_name} -> {self.name}"
         return f"{self.kind} {self.name}"

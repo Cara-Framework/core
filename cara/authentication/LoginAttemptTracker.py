@@ -157,7 +157,7 @@ class LoginAttemptTracker:
             exc_info=exc,
         )
         return ServiceUnavailableException(
-            "Login security state is temporarily unavailable",
+            "Sign-in isn't working right now. Try again in a minute.",
             retry_after=5,
         )
 

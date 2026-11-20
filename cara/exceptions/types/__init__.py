@@ -150,6 +150,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
         "MultipleRecordsFoundException",
     ),
     "ORMException": (".ORMException", "ORMException"),
+    "PartitionDeclarationError": (
+        ".PartitionDeclarationError",
+        "PartitionDeclarationError",
+    ),
     "PayloadTooLargeException": (
         ".PayloadTooLargeException",
         "PayloadTooLargeException",
@@ -283,6 +287,7 @@ __all__ = [
     "ModelNotFoundException",
     "MultipleRecordsFoundException",
     "ORMException",
+    "PartitionDeclarationError",
     "PayloadTooLargeException",
     "QueryException",
     "QueueConfigurationException",

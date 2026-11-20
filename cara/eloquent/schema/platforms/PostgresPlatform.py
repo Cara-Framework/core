@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ...schema import Schema
+from ..HashPartitioning import PartitionDeclarationError
 from ..Table import Table
 from .Platform import Platform
 
@@ -90,10 +91,18 @@ class PostgresPlatform(Platform):
         table_create_format = (
             self.create_if_not_exists_format() if if_not_exists else self.create_format()
         )
+        partitioning = getattr(table, "partitioning", None)
+        if partitioning is not None:
+            self._prepare_partitioned(table, partitioning)
         sql.append(
             table_create_format.format(
                 table=self.wrap_table(table.name),
-                columns=", ".join(self.columnize(table.get_added_columns())).strip(),
+                columns=", ".join(
+                    self.columnize(
+                        table.get_added_columns(),
+                        partitioned=partitioning is not None,
+                    )
+                ).strip(),
                 # Join FIRST, prefix only when non-empty: a table whose only
                 # constraints are where-carrying partial uniques (emitted as
                 # standalone CREATE UNIQUE INDEX statements, skipped by
@@ -124,7 +133,12 @@ class PostgresPlatform(Platform):
                     else ""
                 ),
             )
+            + (f" {partitioning.clause()}" if partitioning is not None else "")
         )
+        if partitioning is not None:
+            # Every partition in the same migration: hash partitioning is
+            # total, so the table is complete the moment it exists.
+            sql.extend(partitioning.child_statements(table.name))
 
         if table.added_indexes:
             for _name, index in table.added_indexes.items():
@@ -159,7 +173,49 @@ class PostgresPlatform(Platform):
 
         return sql
 
-    def columnize(self, columns):
+    def _prepare_partitioned(self, table, partitioning):
+        """Key a partitioned table on ``(partition key, serial id)``.
+
+        Postgres refuses a PRIMARY KEY or UNIQUE on a partitioned table that
+        omits the partition key, so the serial column cannot carry its usual
+        column-level ``PRIMARY KEY`` / ``UNIQUE`` here (``columnize`` drops
+        them) and the table's key is the pair instead. Every other UNIQUE is
+        checked, so a declaration Postgres would refuse fails with the reason.
+        """
+        columns = table.get_added_columns()
+        key_column = columns.get(partitioning.key)
+        if key_column is None:
+            raise PartitionDeclarationError(
+                f"{table.name}: partition key '{partitioning.key}' is not a column"
+            )
+        if key_column.is_null:
+            raise PartitionDeclarationError(
+                f"{table.name}: partition key '{partitioning.key}' must be NOT NULL"
+            )
+        constraints = table.get_added_constraints()
+        has_primary = any(
+            c.constraint_type == "primary_key" for c in constraints.values()
+        )
+        serial = [
+            name
+            for name, column in columns.items()
+            if column.primary and name != partitioning.key
+        ]
+        if serial and not has_primary:
+            table.add_constraint(
+                f"{table.name}_pkey",
+                "primary_key",
+                columns=[partitioning.key, *serial],
+            )
+        for name, constraint in table.get_added_constraints().items():
+            if constraint.constraint_type in ("primary_key", "unique"):
+                partitioning.require_key_in(
+                    constraint.constraint_type.replace("_", " ").upper(),
+                    name,
+                    constraint.columns,
+                )
+
+    def columnize(self, columns, partitioned=False):
         sql = []
         for _name, column in columns.items():
             if column.length:
@@ -185,7 +241,7 @@ class PostgresPlatform(Platform):
 
             constraint = ""
             column_constraint = ""
-            if column.primary:
+            if column.primary and not partitioned:
                 constraint = "PRIMARY KEY"
 
             if column.column_type == "enum":
@@ -196,7 +252,11 @@ class PostgresPlatform(Platform):
                 self.columnize_string()
                 .format(
                     name=self.wrap_column(column.name),
-                    data_type=self.type_map.get(column.column_type, ""),
+                    data_type=(
+                        self.type_map.get(column.column_type, "").removesuffix(" UNIQUE")
+                        if partitioned
+                        else self.type_map.get(column.column_type, "")
+                    ),
                     column_constraint=column_constraint,
                     length=length,
                     constraint=constraint,

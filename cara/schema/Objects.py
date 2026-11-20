@@ -34,7 +34,7 @@ from cara.schema.Operation import ADDITIVE, DESTRUCTIVE, LOCKING, Operation
 _CREATES_RE = re.compile(
     r"(?:CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
     r"|ADD\s+CONSTRAINT\s+"
-    r"|CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+"
+    r"|CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+"
     r"|CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+)"
     r"\"?(?P<name>\w+)\"?",
     re.IGNORECASE,

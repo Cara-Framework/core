@@ -199,6 +199,16 @@ def _model_discovery_parse_model_attribute(
             elif target.id == "__indexes__" and isinstance(assign_node.value, ast.List):
                 model_info["indexes"] = self._parse_indexes_attribute(assign_node.value)
 
+            # Parse __partition__ = {"by": "hash", "key": ..., "partitions": n}
+            # (``cara.eloquent.schema.HashPartitioning``). A literal by contract:
+            # anything else is kept as-is and refused by the renderer, never
+            # silently dropped into an unpartitioned table.
+            elif target.id == "__partition__":
+                try:
+                    model_info["partition"] = ast.literal_eval(assign_node.value)
+                except ValueError:
+                    model_info["partition"] = ast.unparse(assign_node.value)
+
             # Parse __renamed_from__ = {"new_name": "old_name"}
             elif target.id == "__renamed_from__" and isinstance(
                 assign_node.value, ast.Dict

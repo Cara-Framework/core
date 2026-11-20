@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from cara.eloquent.schema.HashPartitioning import validate_model_partitioning
+
 
 def _migration_generate_blueprint_create_migration(self, model_info: dict) -> str:
     """Generate blueprint-style CREATE TABLE migration."""
@@ -95,8 +97,15 @@ def _migration_generate_blueprint_create_migration(self, model_info: dict) -> st
         name_arg = f", name={name!r}" if name else ""
         composite_lines.append(f"            table.check({expression}{name_arg})")
 
-    # Combine: regular fields → foreign keys → composite constraints
-    all_lines = fields_code + foreign_keys + composite_lines
+    # ``__partition__``: one Blueprint verb, validated against the model's
+    # own declarations first so a key Postgres would refuse fails here.
+    partitioning = validate_model_partitioning(model_info)
+    partition_lines = (
+        [f"            {partitioning.blueprint_line()}"] if partitioning else []
+    )
+
+    # Combine: regular fields → foreign keys → composite constraints → partitioning
+    all_lines = fields_code + foreign_keys + composite_lines + partition_lines
 
     replacements = {
         "{{ class }}": class_name,

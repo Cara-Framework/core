@@ -562,3 +562,58 @@ def test_composite_index_mixes_literal_and_class_constant_columns(discoverer, tm
 
     assert "tenant_id" in info["fields"]
     assert {"columns": ["tenant_id", "status"], "name": None} in info["composite_indexes"]
+
+
+def test_a_trigger_is_ordered_after_the_model_that_owns_its_function(discoverer):
+    # ``ledger`` names product_id / tenant_id without constraining them: the
+    # name-inferred edges would put it AFTER both tables, whose triggers run
+    # a function ledger's model declares. The function edge is real DDL, the
+    # inferred ones are not, so they give way instead of forming a cycle.
+    def tagged(name):
+        return {"type": "unsigned_big_integer", "params": {}}
+
+    def guarded(table, fields=None):
+        return {
+            "table": table,
+            "name": table.title(),
+            "fields": fields or {},
+            "indexes": [
+                {
+                    "name": f"{table}_referee",
+                    "up": (
+                        f"CREATE CONSTRAINT TRIGGER {table}_referee AFTER UPDATE ON "
+                        f"{table} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW "
+                        "EXECUTE FUNCTION ledger_referee('x')"
+                    ),
+                }
+            ],
+        }
+
+    ledger = {
+        "table": "ledger",
+        "name": "Ledger",
+        "fields": {"tenant_id": tagged("tenant"), "product_id": tagged("product")},
+        "indexes": [
+            {"name": "ledger_referee", "up": "CREATE FUNCTION ledger_referee() ..."},
+            {
+                "name": "ledger_stamp_trigger",
+                "up": "CREATE TRIGGER t ON ledger EXECUTE FUNCTION ledger_referee()",
+            },
+        ],
+    }
+    tenant = guarded("tenant")
+    product = guarded(
+        "product",
+        {
+            "tenant_id": {
+                "type": "unsigned_big_integer",
+                "params": {},
+                "foreign_key": {"on": "tenant", "references": "id"},
+            }
+        },
+    )
+    plain = {"table": "note", "name": "Note", "fields": {"product_id": tagged("product")}}
+
+    for models in ([product, plain, tenant, ledger], [ledger, tenant, plain, product]):
+        order = [m["table"] for m in discoverer.resolve_dependency_order(models)]
+        assert order == ["ledger", "tenant", "product", "note"]

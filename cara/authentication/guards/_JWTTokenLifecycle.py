@@ -34,7 +34,7 @@ def _security_state_unavailable(operation: str, exc: Exception) -> Exception:
         exc_info=True,
     )
     return ServiceUnavailableException(
-        "Authentication security state temporarily unavailable",
+        "Sign-in isn't working right now. Try again in a minute.",
         retry_after=5,
     )
 

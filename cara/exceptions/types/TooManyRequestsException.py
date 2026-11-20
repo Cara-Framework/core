@@ -23,7 +23,7 @@ class TooManyRequestsException(CaraException):
 
     def __init__(
         self,
-        message: str = "Too Many Requests",
+        message: str = "Too many requests at once. Wait a few seconds, then try again.",
         *,
         retry_after: int,
         response_headers: dict[str, str] | None = None,

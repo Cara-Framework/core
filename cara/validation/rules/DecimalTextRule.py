@@ -41,11 +41,11 @@ class DecimalTextRule(BaseRule):
         attribute = MessageFormatter.format_attribute_name(field).lower()
         shape = self._shape(params)
         if shape is None:
-            return f"The {attribute} field has an invalid decimal_text rule."
+            return f"Enter the {attribute} as a number."
         precision, scale = shape
         return (
-            f"The {attribute} field must be non-negative decimal text with at most "
-            f"{precision} digits and {scale} fractional digits."
+            f"Enter the {attribute} as a number of 0 or more, with up to "
+            f"{precision - scale} digits before the decimal point and {scale} after it."
         )
 
 

@@ -124,7 +124,7 @@ def test_a_refused_request_raises_the_typed_429_without_reaching_the_route(
     assert refusal.status_code == 429
     assert refusal.retry_after == 3
     assert refusal.to_dict() == {
-        "error": "Too Many Requests",
+        "error": "Too many requests at once. Wait a few seconds, then try again.",
         "type": "rate_limit_exceeded",
         "retry_after": 3,
     }

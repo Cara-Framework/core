@@ -11,6 +11,7 @@ without touching the consumer's real migrations.
 
 from __future__ import annotations
 
+import importlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,6 +19,20 @@ import pytest
 from cara.commands.core.MakeMigrationCommand import MakeMigrationCommand
 from cara.environment import PathManager
 from tests.commands._fixtures import make_command
+
+
+@pytest.fixture(autouse=True)
+def _local_environment(monkeypatch):
+    """``app.env`` is "local" for the production refusal every run makes.
+
+    Without this the file passed only after an earlier test in the same
+    process had installed a configuration (alone, or on an xdist worker,
+    ``config()`` raised "Configuration is unavailable")."""
+    monkeypatch.setattr(
+        importlib.import_module("cara.commands.core.MakeMigrationCommand"),
+        "config",
+        lambda key, default=None: "local" if key == "app.env" else default,
+    )
 
 
 @pytest.fixture()

@@ -74,6 +74,7 @@ from cara.schema import (
     normalize_declared_indexes,
     orphaned_indexes,
     orphaned_unique_constraints,
+    partition_drift,
     read_named_ddl,
 )
 
@@ -212,6 +213,7 @@ class SchemaCheckCommand(CommandBase):
             try:
                 drift = self._diff_table(table, declared, live_cols)
                 drift.extend(self._diff_objects(model, table, live))
+                drift.extend(partition_drift(model, table, live))
             except Exception as exc:
                 self.error(f"Comparing {table} crashed: {exc!r}. This is not drift.")
                 return 2

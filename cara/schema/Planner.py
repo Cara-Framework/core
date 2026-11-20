@@ -62,6 +62,7 @@ from cara.schema.Operation import (
     Operation,
     sort_operations,
 )
+from cara.schema.PartitionDrift import partition_refusals
 from cara.schema.Vocabulary import (
     DB_INT_RANK,
     DB_TYPE_CATEGORY,
@@ -87,19 +88,16 @@ def plan(
     schema, where NULL is a legal state and the column already exists, so an
     apply stopped between the two would otherwise lose the fill for good.
 
-    Returns ``(operations, refusals, notices)``, three deliberately different
-    things:
-
+    Returns ``(operations, refusals, notices)``, three different things:
     * **operations** — what apply will run.
     * **refusals** — a difference with no derivable statement. A non-empty
       list means the plan is INCOMPLETE, and apply must not run it as if it
       were the whole story, which is why these are returned rather than logged.
-    * **notices** — something a human should see that is NOT an operation.
-      An orphaned TABLE is the case that forced this category: the planner
-      cannot tell an abandoned table from a partition child, an extension's
-      table or the migration tracker itself, so emitting a DROP would be
-      guessing at exactly the scale where guessing is unforgivable. It says
-      what it found and stops.
+    * **notices** — something a human should see that is NOT an operation:
+      an orphaned TABLE may be an extension's or the tracker's, and a DROP
+      derived from a guess is unforgivable at that scale. Partitions of a
+      partitioned parent are hidden by ``LiveSchema`` and refused against
+      ``__partition__`` (``PartitionDrift.partition_refusals``).
     """
     operations: list[Operation] = []
     refusals: list[str] = []
@@ -149,6 +147,7 @@ def plan(
                 )
             )
             continue
+
 
         renames = _declared_renames(model)
         for new_name, old_name in sorted(renames.items()):
@@ -258,6 +257,7 @@ def plan(
         operations.extend(missing_foreign_keys(model, table, live))
 
     notices.extend(orphaned_tables({m["table"] for m in planned}, live))
+    operations = partition_refusals(planned, live, operations, refusals)
 
     return sort_operations(operations, _references(planned)), refusals, notices
 

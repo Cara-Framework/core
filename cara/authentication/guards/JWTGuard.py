@@ -234,7 +234,7 @@ class JWTGuard(Guard):
                 exc_info=True,
             )
             raise ServiceUnavailableException(
-                "Authentication temporarily unavailable",
+                "Sign-in isn't working right now. Try again in a minute.",
                 retry_after=5,
             ) from exc
 
@@ -300,7 +300,7 @@ class JWTGuard(Guard):
                 exc_info=True,
             )
             raise ServiceUnavailableException(
-                "Authentication temporarily unavailable",
+                "Sign-in isn't working right now. Try again in a minute.",
                 retry_after=5,
             ) from exc
 
@@ -326,7 +326,7 @@ class JWTGuard(Guard):
                 exc_info=True,
             )
             raise ServiceUnavailableException(
-                "Authentication temporarily unavailable",
+                "Sign-in isn't working right now. Try again in a minute.",
                 retry_after=5,
             ) from exc
 
@@ -359,7 +359,7 @@ class JWTGuard(Guard):
         except Exception as exc:
             _logger.warning("Refresh token claim failed unexpectedly", exc_info=True)
             raise ServiceUnavailableException(
-                "Authentication temporarily unavailable",
+                "Sign-in isn't working right now. Try again in a minute.",
                 retry_after=5,
             ) from exc
 
@@ -540,7 +540,7 @@ class JWTGuard(Guard):
                 exc_info=True,
             )
             raise ServiceUnavailableException(
-                "Authentication request state temporarily unavailable",
+                "Sign-in isn't working right now. Try again in a minute.",
                 retry_after=5,
             ) from exc
 
@@ -582,7 +582,7 @@ class JWTGuard(Guard):
                 exc_info=True,
             )
             raise ServiceUnavailableException(
-                "Authentication temporarily unavailable",
+                "Sign-in isn't working right now. Try again in a minute.",
                 retry_after=5,
             ) from exc
 
@@ -613,7 +613,7 @@ class JWTGuard(Guard):
                 exc_info=True,
             )
             raise ServiceUnavailableException(
-                "Identity store temporarily unavailable",
+                "Sign-in isn't working right now. Try again in a minute.",
                 retry_after=5,
             ) from exc
 

@@ -31,6 +31,7 @@ import logging
 import re
 from pathlib import Path
 
+from cara.eloquent.schema.HashPartitioning import migration_partition_drift
 from cara.support import paths
 
 from .FieldDiff import FieldDiff
@@ -141,7 +142,16 @@ class ModelMigrationComparator:
         if not table_exists:
             return [FieldDiff("added", name, column=c) for name, c in model_cols.items()]
 
-        return self._diff(model_cols, migration_cols)
+        return self._diff(model_cols, migration_cols) + self._partition_diff(model_info)
+
+    def _partition_diff(self, model_info: dict) -> list[FieldDiff]:
+        """Storage drift (``__partition__``) of the table's generated file."""
+        table = model_info["table"]
+        for path in sorted(self.migrations_dir.glob(f"*_create_{table}_table.py")):
+            drift = migration_partition_drift(path.read_text("utf-8"), model_info)
+            if drift:
+                return [FieldDiff("partition", "__partition__", changed_attrs=[drift])]
+        return []
 
     def table_exists_in_migrations(self, table_name: str) -> bool:
         _, exists = self._migration_columns(table_name)
@@ -365,6 +375,9 @@ class ModelMigrationComparator:
                 "drop_unique",
                 "drop_primary",
                 "drop_foreign",
+                # Table storage, not a column: ``migrations:check`` compares it
+                # with ``__partition__`` (``partition-drift``).
+                "partition_by_hash",
             ):
                 continue
             out.append(line)

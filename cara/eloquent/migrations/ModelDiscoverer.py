@@ -27,6 +27,14 @@ _logger = logging.getLogger("cara.migrations.discoverer")
 # Sentinel: a ``self.CONSTANT`` default that has no resolvable class-level
 # literal (distinct from a legitimate ``None`` default value).
 
+# ``CREATE TRIGGER ... EXECUTE FUNCTION fn(...)``: the trigger cannot be created
+# before ``fn`` exists, and ``fn`` is a named ``__indexes__`` entry of exactly
+# one model.
+_RAW_TRIGGER_FUNCTION_RE = re.compile(
+    r'\bEXECUTE\s+(?:FUNCTION|PROCEDURE)\s+"?(?P<function>[A-Za-z_][A-Za-z0-9_]*)"?\s*\(',
+    re.IGNORECASE,
+)
+
 _RAW_REFERENCES_RE = re.compile(
     r'\bREFERENCES\s+(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?'
     r'"?(?P<table>[A-Za-z_][A-Za-z0-9_]*)"?',
@@ -220,12 +228,26 @@ class ModelDiscoverer:
             if model.get("needs_sql_dependency_resolution"):
                 self._extract_raw_sql_dependencies(model, all_table_names)
 
+        # Which table's model owns each named ``__indexes__`` entry: a trigger
+        # declared on one model may run a function another model owns.
+        ddl_owner = {
+            index.get("name"): model["table"]
+            for model in models
+            for index in model.get("indexes", [])
+            if index.get("name")
+        }
+
         # Second pass: Build dependency graph
         dependency_graph = {}
+        # Edges that come only from a column's NAME (``product_id`` on a table
+        # with no constraint to ``product``). They order what they can, but no
+        # DDL needs them, so they never hold a cycle together.
+        soft_dependencies: dict[str, set[str]] = {}
 
         for model in models:
             table_name = model["table"]
             dependencies = []
+            inferred = []
             foreign_keys = []  # Track foreign keys for this model
 
             # Check for foreign key fields
@@ -254,7 +276,7 @@ class ModelDiscoverer:
                         field_name, field_info, all_table_names
                     )
                     if referenced_table:
-                        dependencies.append(referenced_table)
+                        inferred.append(referenced_table)
                         foreign_keys.append(
                             {
                                 "field": field_name,
@@ -292,12 +314,21 @@ class ModelDiscoverer:
                     referenced_table = match.group("table")
                     if referenced_table in all_table_names:
                         dependencies.append(referenced_table)
+                # A trigger runs a function; the model that declares the
+                # function must be migrated first.
+                for match in _RAW_TRIGGER_FUNCTION_RE.finditer(index.get("up", "")):
+                    owner = ddl_owner.get(match.group("function"))
+                    if owner and owner != table_name:
+                        dependencies.append(owner)
 
-            dependency_graph[table_name] = dependencies
+            soft_dependencies[table_name] = set(inferred) - set(dependencies)
+            dependency_graph[table_name] = dependencies + inferred
             model["foreign_keys"] = foreign_keys
 
         # Perform topological sort
-        sorted_models = self._topological_sort(models, dependency_graph)
+        sorted_models = self._topological_sort(
+            models, dependency_graph, soft_dependencies
+        )
 
         return sorted_models
 

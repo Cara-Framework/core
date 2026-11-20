@@ -37,6 +37,8 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from cara.configuration import config
 from cara.exceptions import ScratchDatabaseException
@@ -88,6 +90,70 @@ def validate_name(scratch: str, configured: str) -> None:
 
 def admin_sql(params: dict, statements: list[str]) -> None:
     """Run maintenance DDL over an autocommit maintenance connection."""
+    connection = admin_connection(params)
+    try:
+        with connection.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
+    finally:
+        connection.close()
+
+
+def admin_rows(params: dict, query: str, arguments: tuple = ()) -> list[tuple]:
+    """Read the server catalog (``pg_database``, ``pg_stat_activity``) over the
+    same maintenance connection the DDL uses."""
+    connection = admin_connection(params)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(query, arguments)
+            return list(cursor.fetchall())
+    finally:
+        connection.close()
+
+
+def migrations_fingerprint(directory: str | os.PathLike) -> str:
+    """What a database migrated from zero out of ``directory`` is a function
+    of: the directory's files and the executor and schema builder that run
+    them. Equal fingerprints mean byte-identical inputs, so a database built
+    from one stands in for a fresh migration from the other. Stdlib only and
+    cheap (no boot, no model import), so a test process can check a template
+    before cloning it."""
+    import hashlib
+    from pathlib import Path
+
+    digest = hashlib.sha256()
+    eloquent = Path(__file__).resolve().parents[1] / "eloquent"
+    roots = [
+        (Path(directory), (".py", ".sql")),
+        (eloquent / "migrations", (".py",)),
+        (eloquent / "schema", (".py",)),
+    ]
+    for root, suffixes in roots:
+        for path in sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in suffixes):
+            if "__pycache__" in path.parts:
+                continue
+            digest.update(str(path.relative_to(root)).encode() + b"\0")
+            digest.update(path.read_bytes() + b"\0")
+    return digest.hexdigest()[:24]
+
+
+@contextmanager
+def advisory_lock(params: dict, key: int) -> Iterator[None]:
+    """Hold the server-wide ``pg_advisory_lock(key)`` for the block, so two
+    processes building the same scratch state build it once."""
+    connection = admin_connection(params)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_lock(%s)", (key,))
+        yield
+    finally:
+        connection.close()  # a session-level lock ends with its session
+
+
+def admin_connection(params: dict):
+    """An autocommit connection to the server's ``postgres`` maintenance
+    database with the application's own credentials. The caller closes it;
+    a session-level advisory lock taken on it lives exactly as long."""
     import psycopg2  # local: heavy optional dep
 
     options = params.get("options") or {}
@@ -102,13 +168,8 @@ def admin_sql(params: dict, statements: list[str]) -> None:
         connect_kwargs["sslmode"] = options["sslmode"]
 
     connection = psycopg2.connect(**connect_kwargs)
-    try:
-        connection.autocommit = True
-        with connection.cursor() as cursor:
-            for statement in statements:
-                cursor.execute(statement)
-    finally:
-        connection.close()
+    connection.autocommit = True
+    return connection
 
 
 def recreate(params: dict, scratch: str) -> None:
@@ -159,6 +220,31 @@ def _resolve_client_binary(name: str, config_key: str) -> str | None:
     return shutil.which(name)
 
 
+def client_binaries() -> tuple[str, str]:
+    """``(pg_dump, psql)`` for a structure clone, or a refusal naming what is missing.
+
+    Checked BEFORE a rehearsal creates its scratch, so a host or image without
+    the client tools is told which binary it lacks and where to point the
+    override, instead of a scratch database being created and dropped for a
+    clone that could never run.
+    """
+    found: dict[str, str | None] = {
+        "pg_dump": _resolve_client_binary("pg_dump", "database.pg_dump_bin"),
+        "psql": _resolve_client_binary("psql", "database.psql_bin"),
+    }
+    missing = [name for name, path in found.items() if not path]
+    if missing:
+        knobs = " / ".join(f"{name.upper()}_BIN" for name in missing)
+        raise ScratchDatabaseException(
+            f"A structure clone needs {' and '.join(repr(m) for m in missing)}, "
+            "not found on PATH; they are how Postgres describes its own schema. "
+            "Install the PostgreSQL client tools of the server's major version, "
+            f"set {knobs} to their absolute paths, or run the plan without "
+            "--rehearse."
+        )
+    return str(found["pg_dump"]), str(found["psql"])
+
+
 def clone_structure(params: dict, source: str, scratch: str) -> None:
     """Copy ``source``'s SHAPE into ``scratch`` — no rows, ever.
 
@@ -176,15 +262,7 @@ def clone_structure(params: dict, source: str, scratch: str) -> None:
     production data to answer it would be a far larger promise — and a copy of
     production in a scratch database nobody is watching.
     """
-    pg_dump = _resolve_client_binary("pg_dump", "database.pg_dump_bin")
-    psql = _resolve_client_binary("psql", "database.psql_bin")
-    if not pg_dump or not psql:
-        raise ScratchDatabaseException(
-            "A structure clone needs the 'pg_dump' and 'psql' binaries on "
-            "PATH; they are how Postgres describes its own schema. Install the "
-            "PostgreSQL client tools, set PG_DUMP_BIN / PSQL_BIN to their "
-            "absolute paths, or run the plan without --rehearse."
-        )
+    pg_dump, psql = client_binaries()
 
     env = {**os.environ}
     if params.get("password"):
@@ -242,11 +320,15 @@ def clone_structure(params: dict, source: str, scratch: str) -> None:
 
 __all__ = [
     "SAFE_DB_NAME",
+    "admin_connection",
+    "admin_rows",
     "admin_sql",
+    "advisory_lock",
     "clone_structure",
     "connection_params",
     "derive_name",
     "drop",
+    "migrations_fingerprint",
     "recreate",
     "run_craft",
     "validate_name",
