@@ -147,6 +147,20 @@ def test_gate_persistence_lock_ladder_is_an_atomic_invariant(tmp_path):
     assert KernelMembership.scan(manifest) == []
 
 
+def test_gate_persistence_locked_sql_read_is_an_atomic_invariant(tmp_path):
+    """``SELECT … FOR NO KEY UPDATE`` is the SQL spelling of the lock ladder."""
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "commons" / "gates" / "persistence" / "DueRepository.py",
+        "class DueRepository:\n"
+        "    def lock_due(self, row_id):\n"
+        "        return DB.select_one(\"SELECT * FROM tenant WHERE id = %s \"\n"
+        '            "FOR NO KEY UPDATE", [row_id])\n',
+    )
+
+    assert KernelMembership.scan(manifest) == []
+
+
 def test_single_consumer_shared_module_is_a_finding(tmp_path):
     consumer_a = tmp_path / "deployable_a" / "app"
     consumer_b = tmp_path / "deployable_b" / "app"

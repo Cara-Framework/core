@@ -38,6 +38,22 @@ def test_the_whole_chain_counts_not_just_its_head(tmp_path: Path) -> None:
     assert any("Widget.first(...)" in message for message in _messages(tmp_path))
 
 
+def test_a_constant_of_a_model_home_is_not_a_model(tmp_path: Path) -> None:
+    """A model module's vocabulary (an UPPER_CASE constant) answers ``.get``
+    as a dict; the class beside it is still policed."""
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "from app.models import RETENTION_CLASSES, Widget\n\n\n"
+        "def run(kind):\n"
+        "    RETENTION_CLASSES.get(kind)\n"
+        "    return Widget.where('kind', kind).get()\n",
+    )
+
+    messages = _messages(tmp_path)
+    assert not any("RETENTION_CLASSES" in message for message in messages)
+    assert any("Widget.where(...)" in message for message in messages)
+
+
 def test_a_receiver_that_is_not_an_imported_model_is_left_alone(tmp_path: Path) -> None:
     write(
         tmp_path / "app" / "services" / "Report.py",

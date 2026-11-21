@@ -32,6 +32,7 @@ scratch exercises the exact wiring production boot uses.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -39,6 +40,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from cara.configuration import config
 from cara.exceptions import ScratchDatabaseException
@@ -118,9 +120,6 @@ def migrations_fingerprint(directory: str | os.PathLike) -> str:
     from one stands in for a fresh migration from the other. Stdlib only and
     cheap (no boot, no model import), so a test process can check a template
     before cloning it."""
-    import hashlib
-    from pathlib import Path
-
     digest = hashlib.sha256()
     eloquent = Path(__file__).resolve().parents[1] / "eloquent"
     roots = [

@@ -42,6 +42,7 @@ import-time + module-load tests.
 
 from __future__ import annotations
 
+import importlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -120,11 +121,11 @@ class TestUploadedFileNullByte:
     )
     def test_null_byte_in_filename_raises(self, bad_filename, tmp_path, monkeypatch):
         # ``cara.support`` re-exports ``paths`` as a function name,
-        # shadowing the submodule, so we go through ``sys.modules``
-        # to grab the actual submodule for the monkeypatch.
-        import sys
+        # shadowing the submodule, so ``importlib.import_module`` fetches
+        # the actual submodule for the monkeypatch (and imports it when no
+        # earlier test did: ``sys.modules`` alone made the file order-bound).
 
-        paths_module = sys.modules["cara.support.Paths"]
+        paths_module = importlib.import_module("cara.support.Paths")
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
         with pytest.raises(BadRequestException, match="null byte"):
@@ -140,11 +141,11 @@ class TestUploadedFileNullByte:
     )
     def test_null_byte_in_directory_raises(self, bad_dir, tmp_path, monkeypatch):
         # ``cara.support`` re-exports ``paths`` as a function name,
-        # shadowing the submodule, so we go through ``sys.modules``
-        # to grab the actual submodule for the monkeypatch.
-        import sys
+        # shadowing the submodule, so ``importlib.import_module`` fetches
+        # the actual submodule for the monkeypatch (and imports it when no
+        # earlier test did: ``sys.modules`` alone made the file order-bound).
 
-        paths_module = sys.modules["cara.support.Paths"]
+        paths_module = importlib.import_module("cara.support.Paths")
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
         with pytest.raises(BadRequestException, match="null byte"):
@@ -152,11 +153,11 @@ class TestUploadedFileNullByte:
 
     def test_clean_filename_writes_normally(self, tmp_path, monkeypatch):
         # ``cara.support`` re-exports ``paths`` as a function name,
-        # shadowing the submodule, so we go through ``sys.modules``
-        # to grab the actual submodule for the monkeypatch.
-        import sys
+        # shadowing the submodule, so ``importlib.import_module`` fetches
+        # the actual submodule for the monkeypatch (and imports it when no
+        # earlier test did: ``sys.modules`` alone made the file order-bound).
 
-        paths_module = sys.modules["cara.support.Paths"]
+        paths_module = importlib.import_module("cara.support.Paths")
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
         result = self._file()._store_file("uploads", "receipt.pdf")

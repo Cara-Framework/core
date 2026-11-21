@@ -194,6 +194,11 @@ class InputBag:
         """Clear all input data."""
         self._data.clear()
 
+    def forget(self, *names: str) -> None:
+        """Remove top-level inputs by name (absent names are ignored)."""
+        for name in names:
+            self._data.pop(name, None)
+
     def __len__(self) -> int:
         """Return number of inputs."""
         return len(self._data)

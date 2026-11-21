@@ -14,9 +14,16 @@ and the tolerance for envelopes that predate — or corrupt — the counter.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from cara.commands.core import _JobExecution
+
+# Importing the processor module binds the facade ``_JobExecution`` reads
+# (``_bind_job_processor``); without it the file passed only after another
+# test had imported the processor (alone, or on an xdist worker, it was None).
+importlib.import_module("cara.commands.core.JobProcessor")
 
 
 class _Job:

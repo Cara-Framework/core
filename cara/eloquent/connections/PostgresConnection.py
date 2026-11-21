@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 import time
+from functools import partial
 from typing import Self
 
 from cara.exceptions import (
@@ -15,9 +16,11 @@ from cara.exceptions import (
 )
 
 from ..query.grammars import PostgresGrammar
+from ..ReadScope import current_read_scope, read_only_statement
 from ..query.processors import PostgresPostProcessor
 from ..schema.platforms import PostgresPlatform
 from .BaseConnection import BaseConnection
+from .PostgresReadSnapshot import begin_in_snapshot, open_session
 
 _SAVEPOINT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -88,6 +91,11 @@ class PostgresConnection(BaseConnection):
         self.transaction_level = 0
         self.open = 0
         self.schema = None
+        # Inside ``read_snapshot()``: the block whose thread session this
+        # wrapper borrows (never pooled by it), and whether its own
+        # transaction was opened in that snapshot.
+        self._read_session = None
+        self._snapshot_transaction = False
         if name:
             self.name = name
 
@@ -97,6 +105,10 @@ class PostgresConnection(BaseConnection):
             return self.get_global_connection()
 
         self._connection = self.create_connection()
+        if self._read_session is not None:
+            # The block's session, set up when it was opened.
+            self.open = 1
+            return self
 
         # Post-acquire setup. Pre-fix any failure here (an
         # ``enable_disable_foreign_keys`` SQL roundtrip that hits a
@@ -234,6 +246,16 @@ class PostgresConnection(BaseConnection):
             self._pool_slot_acquired = False
 
     def create_connection(self):
+        """Inside ``read_snapshot()`` the thread's session in the block's
+        snapshot (``ReadSnapshot``); otherwise a pooled connection."""
+        snapshot = _scope_snapshot()
+        if snapshot is not None:
+            connection = snapshot.session(partial(open_session, self))
+            self._read_session = snapshot
+            return connection
+        return self.pooled_connection()
+
+    def pooled_connection(self):
         try:
             import psycopg2  # local: heavy optional dep
         except ModuleNotFoundError as exc:
@@ -367,6 +389,11 @@ class PostgresConnection(BaseConnection):
         self.make_connection()
 
     def close_connection(self):
+        if self._read_session is not None:
+            # A borrowed session: the block ends it, not this wrapper.
+            self._connection = None
+            self._read_session = None
+            return
         if self._connection is None:
             self._release_pool_slot()
             return
@@ -447,6 +474,7 @@ class PostgresConnection(BaseConnection):
                 self._connection.autocommit = True
             finally:
                 self.transaction_level -= 1
+                self._snapshot_transaction = False
 
     def begin(self) -> Self:
         """Postgres Transaction with savepoint support for nesting."""
@@ -454,10 +482,33 @@ class PostgresConnection(BaseConnection):
             # Nested transaction — use savepoint
             self.savepoint(f"sp_{self.transaction_level}")
             return self
+        snapshot = _scope_snapshot()
+        if snapshot is not None:
+            return self._begin_in_snapshot(snapshot)
         # The outer BEGIN may be a builder connection's first use.
         if not self._connection or self._connection.closed:
             self.make_connection()
         self._connection.autocommit = False
+        self.transaction_level += 1
+        return self
+
+    def _begin_in_snapshot(self, snapshot) -> Self:
+        """A transaction inside ``read_snapshot()``: its own pooled
+        connection (the thread's session stays the plain reads'), opened
+        read-only in the block's snapshot — nesting and savepoints as ever."""
+        exported = snapshot.snapshot_id(partial(open_session, self))
+        if self._read_session is not None:
+            self._connection = None
+            self._read_session = None
+        if not self._connection or self._connection.closed:
+            self._connection = self.pooled_connection()
+        try:
+            begin_in_snapshot(self._connection, exported)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                self.close_connection()
+            raise
+        self._snapshot_transaction = True
         self.transaction_level += 1
         return self
 
@@ -491,6 +542,7 @@ class PostgresConnection(BaseConnection):
                 self._unwind_dead_session()
             return
         if self.transaction_level == 1:
+            self._snapshot_transaction = False
             try:
                 self._connection.rollback()
                 self._connection.autocommit = True
@@ -512,6 +564,7 @@ class PostgresConnection(BaseConnection):
         if self.transaction_level > 0:
             # The enclosing transaction's own rollback drops the handle.
             return
+        self._snapshot_transaction = False
         dead, self._connection = self._connection, None
         if dead is not None:
             with contextlib.suppress(Exception):
@@ -527,6 +580,33 @@ class PostgresConnection(BaseConnection):
 
         self._cursor = self._connection.cursor(cursor_factory=RealDictCursor)
         return self._cursor
+
+    def statement(self, query, bindings=()):
+        """Every statement of this connection passes here (``DB.select`` and
+        ``DB.statement`` call it directly, the query builder through
+        ``query``). Inside a read scope (``cara.eloquent.ReadScope``) it runs
+        read-only at the database, over the scope's relations; its result is
+        already buffered on the cursor when the read-only transaction ends.
+
+        Inside ``read_snapshot()`` the statement runs as it is, in one round
+        trip: the thread's session (or this wrapper's transaction) is already
+        a read-only transaction in the block's snapshot. A failure aborts
+        that session only; the thread's next statement imports afresh."""
+        scope = current_read_scope()
+        if scope is None:
+            return super().statement(query, bindings)
+        sql = scope.statement(query)
+        snapshot = scope.snapshot
+        if snapshot is not None and self._snapshot_transaction:
+            return super().statement(sql, bindings)
+        if snapshot is not None and self._read_session is snapshot:
+            try:
+                return super().statement(sql, bindings)
+            except BaseException:
+                snapshot.failed(self._connection)
+                raise
+        with read_only_statement(self._connection):
+            return super().statement(sql, bindings)
 
     def query(self, query, bindings=(), results="*"):
         """
@@ -610,3 +690,9 @@ class PostgresConnection(BaseConnection):
             if self.get_transaction_level() <= 0:
                 self.open = 0
                 self.close_connection()
+
+
+def _scope_snapshot():
+    """The ``read_snapshot()`` block this context reads in, or None."""
+    scope = current_read_scope()
+    return scope.snapshot if scope is not None else None

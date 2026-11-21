@@ -232,8 +232,10 @@ def test_a_moment_after_utc_midnight_belongs_to_the_zones_previous_day():
 
 def test_last_days_opens_at_the_zones_local_midnight_n_minus_1_days_back():
     sql, params = _compile([{"f": "updated", "o": "last_days", "v": ["7"]}])
+    # The read's clock: now, or a read scope's instant (``READ_CLOCK_SQL``).
     assert sql == (
-        "(updated_at >= ((date_trunc('day', NOW() AT TIME ZONE %s)"
+        "(updated_at >= ((date_trunc('day', COALESCE(NULLIF(current_setting("
+        "'cara.read_clock', true), '')::timestamptz, now()) AT TIME ZONE %s)"
         " - (%s * INTERVAL '1 day')) AT TIME ZONE %s))"
     )
     assert params == ["America/Los_Angeles", 6, "America/Los_Angeles"]

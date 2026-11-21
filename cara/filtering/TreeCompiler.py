@@ -34,6 +34,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from cara.eloquent.ReadScope import CLOCK_SQL as READ_CLOCK_SQL
 from cara.exceptions import FilterTreeCompileError
 from cara.support import like_contains
 
@@ -250,13 +251,16 @@ def _render_operator(
         if operator == OP_LAST_DAYS:
             # Calendar-aligned like every period selector: today plus the
             # N - 1 days before it, opening at that day's local midnight.
-            # NOW() stays SQL-side so the window is evaluated per
+            # The clock stays SQL-side so the window is evaluated per
             # execution; the canonical tree (and so the cursor scope) pins
-            # the N, not the wall-clock moment. The subtraction runs on the
-            # zone's wall clock (a naive timestamp), so a DST change inside
-            # the window cannot shift the opening midnight by an hour.
+            # the N, not the wall-clock moment. It is the READ's clock
+            # (``READ_CLOCK_SQL``): now, or a read scope's instant — "the
+            # last 30 days" of a read at T are the 30 days before T. The
+            # subtraction runs on the zone's wall clock (a naive timestamp),
+            # so a DST change inside the window cannot shift the opening
+            # midnight by an hour.
             return (
-                f"{column} >= ((date_trunc('day', NOW() AT TIME ZONE %s)"
+                f"{column} >= ((date_trunc('day', {READ_CLOCK_SQL} AT TIME ZONE %s)"
                 f" - (%s * INTERVAL '1 day')) AT TIME ZONE %s)",
                 [zone.key, int(str(values[0])) - 1, zone.key],
             )

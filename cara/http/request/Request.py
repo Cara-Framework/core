@@ -305,6 +305,16 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
         """
         self._input.set(name, value)
 
+    def consume_input(self, *names: str) -> None:
+        """Take keys a route middleware has handled out of the handler's input.
+
+        Such a key addresses the read (``as_of`` names the instant the route
+        middleware runs the handler at), like a path parameter; it is not the
+        handler's input, so its ``FormRequest`` neither validates nor refuses
+        it as unknown. The raw query string (``query_params``) is unchanged.
+        """
+        self._input.forget(*names)
+
     # -----------------------
     # Route and Auth Helpers
     # -----------------------

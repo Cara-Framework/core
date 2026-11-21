@@ -59,7 +59,12 @@ _MUTATION_METHODS = frozenset(
     }
 )
 _ATOMIC_INVARIANT_METHODS = frozenset({"lock_for_update"})
-_MUTATING_SQL = re.compile(r"\b(?:INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b")
+#: A row-locking read is the SQL form of ``lock_for_update``: it holds rows
+#: for the caller's decision, an atomic invariant like any compare-and-set.
+_MUTATING_SQL = re.compile(
+    r"\b(?:INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM"
+    r"|FOR\s+(?:NO\s+KEY\s+)?UPDATE|FOR\s+(?:KEY\s+)?SHARE)\b"
+)
 
 
 def _direction_violations(

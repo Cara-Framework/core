@@ -485,6 +485,85 @@ def test_indexes_entry_with_unresolvable_sql_raises(discoverer, tmp_path):
         discoverer._parse_model_file(model_path)
 
 
+def test_indexes_entry_resolves_a_constant_imported_from_a_sibling(discoverer, tmp_path):
+    """A model's DDL split by responsibility keeps every entry.
+
+    The body lives in a sibling module and is imported by name; the sibling
+    is parsed (never imported) exactly like the model. A name the sibling
+    does not assign a literal stays unresolved, so its entry still raises.
+    """
+    write_model(
+        tmp_path,
+        "SubRoutines.py",
+        """
+        _SUB_FUNCTION = "CREATE OR REPLACE FUNCTION sub_fn() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql"
+        _COMPUTED = "".join(["x"])
+        """,
+    )
+    src = """
+        from cara.schema import Schema
+
+        from .SubRoutines import _COMPUTED
+        from .SubRoutines import _SUB_FUNCTION as _BODY
+
+
+        class Sub(Model):
+            __table__ = "sub"
+
+            __indexes__ = [
+                {"name": "sub_fn", "up": f"{_BODY}", "down": "DROP FUNCTION IF EXISTS sub_fn()"},
+            ]
+
+            @property
+            def fields(self):
+                return Schema.build(lambda field: (field.big_increments("id"),))
+    """
+    info = discoverer._parse_model_file(write_model(tmp_path, "Sub.py", src))
+
+    assert [index["name"] for index in info["indexes"]] == ["sub_fn"]
+    assert info["indexes"][0]["up"].startswith("CREATE OR REPLACE FUNCTION sub_fn()")
+
+    broken = src.replace('f"{_BODY}"', 'f"{_COMPUTED}"')
+    with pytest.raises(RuntimeError, match="sub_fn"):
+        discoverer._parse_model_file(write_model(tmp_path, "Sub.py", broken))
+
+
+def test_indexes_element_that_is_not_a_dict_literal_raises(discoverer, tmp_path):
+    """A helper call spliced into ``__indexes__`` (``*ledger(...)``) is valid
+    Python and builds the right list at import — but the generator parses the
+    model, so the entries it returns used to be dropped SILENTLY: a database
+    migrated from zero lacked the functions while the dev database, where the
+    DDL was applied by hand, had them."""
+    src = """
+        from cara.schema import Schema
+
+
+        def ledger(name):
+            return [{"name": name, "up": f"CREATE FUNCTION {name}() ..."}]
+
+
+        class Sub(Model):
+            __table__ = "sub"
+
+            __indexes__ = [
+                {"name": "sub_idx", "up": "CREATE INDEX IF NOT EXISTS sub_idx ON sub (id)"},
+                *ledger("sub_ledger"),
+            ]
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.big_increments("id"),
+                    )
+                )
+    """
+    model_path = write_model(tmp_path, "Sub.py", src)
+
+    with pytest.raises(RuntimeError, match=r"ledger\('sub_ledger'\).*not a dict literal"):
+        discoverer._parse_model_file(model_path)
+
+
 # --------------------------------------------------------------------------
 # A column named through the model's OWN class constant must stay visible
 # --------------------------------------------------------------------------

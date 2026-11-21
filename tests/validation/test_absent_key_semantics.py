@@ -23,12 +23,26 @@ route actually calls.
 from __future__ import annotations
 
 import asyncio
+import importlib
 
 import pytest
 
 from cara.exceptions import ValidationException
 from cara.http.requests import FormRequest
 from cara.validation import Validation
+
+
+@pytest.fixture(autouse=True)
+def _unconfigured_form_requests(monkeypatch):
+    """``FormRequest`` reads its unknown-key policy from configuration; here
+    it is an unconfigured application's default. Without this the file passed
+    only after an earlier test in the same process had installed a
+    configuration (alone, or on an xdist worker, ``config()`` raised)."""
+    monkeypatch.setattr(
+        importlib.import_module("cara.http.requests.FormRequest"),
+        "config",
+        lambda _key, default=None: default,
+    )
 
 
 class _FakeRequest:

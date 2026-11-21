@@ -9,6 +9,39 @@ from pathlib import Path
 _UNRESOLVED = object()
 
 
+def _literal_constants(tree: ast.Module) -> dict[str, object]:
+    """Module-level ``NAME = <literal>`` assignments of one parsed module."""
+    return {
+        target.id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+
+
+def _sibling_constants(tree: ast.Module, file_path: Path) -> dict[str, object]:
+    """Literal constants a model imports by name from a sibling module.
+
+    Only ``from .<Module> import NAME [as ALIAS]`` — one relative level, a
+    module file next to the model — and only names that module assigns a
+    literal at its top level. Anything else stays unresolved, so an entry
+    that needs it still RAISES rather than vanishing.
+    """
+    constants: dict[str, object] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or node.level != 1 or not node.module:
+            continue
+        sibling = file_path.parent / f"{node.module}.py"
+        if "." in node.module or not sibling.is_file():
+            continue
+        values = _literal_constants(ast.parse(sibling.read_text(encoding="utf-8")))
+        for alias in node.names:
+            if alias.name in values:
+                constants[alias.asname or alias.name] = values[alias.name]
+    return constants
+
+
 def _model_discovery_parse_model_file(self, file_path: Path) -> dict | None:
     """Parse model file and extract Field.* structure."""
     with open(file_path, "r", encoding="utf-8") as f:
@@ -19,13 +52,14 @@ def _model_discovery_parse_model_file(self, file_path: Path) -> dict | None:
     # Module-level literal constants, so an ``__indexes__`` entry written as
     # an f-string (``f"WHERE status IN ({_STATUS_SQL})"``) resolves to real
     # SQL instead of being skipped. The model file is parsed, never
-    # imported, so nothing else can supply these values.
+    # imported, so nothing else can supply these values. A constant may also
+    # live in a SIBLING module of the same package and be imported by name
+    # (``from .EventLogRoutines import _REFEREE_FUNCTION``): a model whose DDL
+    # outgrows one file splits it by responsibility without the generator
+    # losing an entry. The sibling is parsed the same way, never imported.
     self._module_constants = {
-        target.id: node.value.value
-        for node in tree.body
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
-        for target in node.targets
-        if isinstance(target, ast.Name)
+        **_sibling_constants(tree, file_path),
+        **_literal_constants(tree),
     }
 
     for node in ast.walk(tree):
@@ -303,8 +337,18 @@ def _model_discovery_parse_indexes_attribute(self, list_node: ast.List) -> list:
     """
     indexes = []
     for elt in list_node.elts:
+        # Only a dict LITERAL can be read without importing the model. Any
+        # other element (``*helper(...)``, a name, a call) would otherwise
+        # vanish: no DDL generated, nothing for schema:check to compare, and
+        # every gate green over a database that lacks the object.
         if not isinstance(elt, ast.Dict):
-            continue
+            raise RuntimeError(
+                f"__indexes__ element `{ast.unparse(elt)[:80]}` (line "
+                f"{getattr(elt, 'lineno', '?')}) is not a dict literal. The "
+                "model is parsed, never imported: write each entry as "
+                '{"name": ..., "up": ..., "down": ...}, interpolating only '
+                "module- or class-level string constants."
+            )
         entry: dict[str, str] = {}
         for key, value in zip(elt.keys, elt.values, strict=False):
             if not isinstance(key, ast.Constant):

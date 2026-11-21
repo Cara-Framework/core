@@ -97,6 +97,13 @@ ROW_LOCK_METHOD = "lock_for_update"
 
 
 def _imported_model_names(tree: ast.Module, roots: tuple[str, ...]) -> set[str]:
+    """Names bound from a model home that can be a model CLASS.
+
+    A model home also exports its vocabulary — ``EVENT_RETENTION_CLASSES``,
+    ``CAUSE_KINDS`` — and a constant's ``dict.get`` is no query. A model
+    class is named for its file (``SourceShape``), never in UPPER_CASE, so a
+    constant name is never a model; every class-cased name still is.
+    """
     names: set[str] = set()
     for node in ast.walk(tree):
         if (
@@ -104,7 +111,11 @@ def _imported_model_names(tree: ast.Module, roots: tuple[str, ...]) -> set[str]:
             and node.module
             and any(node.module == r or node.module.startswith(r + ".") for r in roots)
         ):
-            names.update(alias.asname or alias.name for alias in node.names)
+            names.update(
+                bound
+                for alias in node.names
+                if not (bound := alias.asname or alias.name).isupper()
+            )
     return names
 
 
