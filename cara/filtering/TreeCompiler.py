@@ -34,7 +34,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from cara.eloquent.ReadScope import CLOCK_SQL as READ_CLOCK_SQL
+from cara.eloquent import READ_CLOCK_SQL
 from cara.exceptions import FilterTreeCompileError
 from cara.support import like_contains
 

@@ -38,22 +38,32 @@ literals (the form psycopg2 sends a bind in anyway); the rendered text holds
 no ``%``, so it composes with a statement whether or not that statement has
 bindings.
 
+**Built relations.** A relation given as a ``BuiltRelation`` costs real work
+to derive, and is derived ONCE: inside ``read_snapshot()`` the first
+statement that names it builds it in its session (a temporary table that
+lives and dies with that session's transaction), and from then on a
+statement carries ``WITH product AS NOT MATERIALIZED (SELECT * FROM <the
+built rows>)`` — the same scoping rule over rows already derived. Outside
+``read_snapshot()`` it is read inline, like any relation.
+
 **One instant.** ``read_snapshot()`` makes the whole block ONE database
 snapshot (``cara.eloquent.ReadSnapshot``): every statement of every thread of
 the block, in a ``REPEATABLE READ, READ ONLY`` transaction that imports the
 same exported snapshot. A ``read_scope`` inside it keeps the snapshot. Without
-it each statement is its own read-only transaction, as above.
+it each statement is its own read-only transaction, as above. Because the
+block is one instant, what a reader derives from it by several statements
+can be kept for the block: :func:`read_once`.
 
 **The scope's clock.** A scope may fix what "now" means for its reads
 (``clock=<aware datetime>``). Application code reads it with
 :func:`current_read_clock`; SQL reads it through ONE expression,
-:data:`CLOCK_SQL` — the scope binds its instant as the transaction-local
+:data:`READ_CLOCK_SQL` — the scope binds its instant as the transaction-local
 setting ``cara.read_clock`` in front of every read statement that names it
 (``SET LOCAL``, same round trip, gone with the statement's transaction), and
 outside a clocked scope the expression is the database clock. So a predicate
-written once (``ship_by < {CLOCK_SQL}``) answers at the scope's instant inside
+written once (``ship_by < {READ_CLOCK_SQL}``) answers at the scope's instant inside
 it and at now everywhere else, with no parameter threaded through its callers.
-The same setting read as an upper bound, :data:`CLOCK_BOUND_SQL`, holds rows
+The same setting read as an upper bound, :data:`READ_CLOCK_BOUND_SQL`, holds rows
 the relations do not bound (a function over a log) to the scope's instant, and
 bounds nothing outside a clocked scope. Python reads the clock through
 :func:`read_now` (the instant, or the aware wall clock).
@@ -75,12 +85,16 @@ import contextlib
 import dataclasses
 import functools
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+import pendulum
+
+from .BuiltRelation import BuiltRelation
+from .ReadScopeRefused import ReadScopeRefused
 from .ReadSnapshot import ReadSnapshot
 
 _SAVEPOINT = "cara_read_scope"
@@ -123,27 +137,22 @@ def render_literals(sql: str, params: Sequence[Any]) -> str:
     return rendered
 
 
-class ReadScopeRefused(RuntimeError):
-    """A read statement the scope cannot answer truthfully: it reads the
-    database clock under a fixed clock, or a relation the scope refuses."""
-
-
 #: The transaction-local setting a clocked scope binds its instant to.
-CLOCK_SETTING = "cara.read_clock"
+READ_CLOCK_SETTING = "cara.read_clock"
 #: The request clock in SQL: the scope's instant inside a clocked scope, the
 #: database clock (transaction start) everywhere else. The one sanctioned
 #: ``now()`` of a read: the guard below reads past it.
-CLOCK_SQL = (
-    f"COALESCE(NULLIF(current_setting('{CLOCK_SETTING}', true), '')::timestamptz, now())"
+READ_CLOCK_SQL = (
+    f"COALESCE(NULLIF(current_setting('{READ_CLOCK_SETTING}', true), '')::timestamptz, now())"
 )
 #: The request clock as an UPPER BOUND on what a read sees — for rows the
 #: scope's relations do not bound (a function over an append-only log):
-#: ``recorded_at <= {CLOCK_BOUND_SQL}`` is the rows recorded by the scope's
+#: ``recorded_at <= {READ_CLOCK_BOUND_SQL}`` is the rows recorded by the scope's
 #: instant inside a clocked scope, and NO bound everywhere else
 #: (``'infinity'``) — never the transaction's start, which would hide a row
-#: the same transaction wrote a moment ago. Bound like :data:`CLOCK_SQL`.
-CLOCK_BOUND_SQL = (
-    f"COALESCE(NULLIF(current_setting('{CLOCK_SETTING}', true), '')::timestamptz, "
+#: the same transaction wrote a moment ago. Bound like :data:`READ_CLOCK_SQL`.
+READ_CLOCK_BOUND_SQL = (
+    f"COALESCE(NULLIF(current_setting('{READ_CLOCK_SETTING}', true), '')::timestamptz, "
     "'infinity'::timestamptz)"
 )
 
@@ -160,11 +169,11 @@ _INERT = re.compile(r"'(?:[^']|'')*'|--[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
 def _reads_clock(sql: str) -> bool:
-    """Does ``sql`` read the database clock other than through CLOCK_SQL?"""
+    """Does ``sql`` read the database clock other than through READ_CLOCK_SQL?"""
     lowered = sql.lower()
     if not any(word in lowered for word in _CLOCK_WORDS):
         return False
-    return _CLOCK.search(_INERT.sub(" ", sql.replace(CLOCK_SQL, " "))) is not None
+    return _CLOCK.search(_INERT.sub(" ", sql.replace(READ_CLOCK_SQL, " "))) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,13 +185,19 @@ class ReadScope:
     clock: datetime | None = None
     refused: tuple[str, ...] = ()
     snapshot: ReadSnapshot | None = None
+    #: The relations to build once per session (``BuiltRelation``): name →
+    #: the columns every row holds one value in.
+    built: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def names(self) -> tuple[str, ...]:
         return tuple(name for name, _ in self.relations)
 
-    def statement(self, sql: str) -> str:
+    def statement(self, sql: str, tables: Mapping[str, str] | None = None) -> str:
         """``sql`` with the scope's relations it mentions in front of it, and
-        the scope's clock bound when it reads :data:`CLOCK_SQL`.
+        the scope's clock bound when it reads :data:`READ_CLOCK_SQL`.
+        ``tables`` names, per relation, the rows already built for the
+        session that runs the statement (what to read ``FROM``): such a
+        relation is read from them instead of derived inline.
         Raises :class:`ReadScopeRefused` for a read the scope cannot answer."""
         if not isinstance(sql, str):
             return sql
@@ -191,32 +206,56 @@ class ReadScope:
         if not _READ_STATEMENT.match(body):
             return sql
         self._refuse(body)
-        scoped = self._with_relations(sql, body)
-        if CLOCK_SETTING not in body:
+        scoped = self._with_relations(sql, body, tables or {})
+        if READ_CLOCK_SETTING not in body:
             return scoped
         # Every scope binds it (a scope without a clock binds '' = the
         # database clock), so a session reused within one transaction never
         # reads an instant another statement set.
         instant = self.clock.isoformat() if self.clock is not None else ""
-        return f"SET LOCAL {CLOCK_SETTING} = '{instant}'; {scoped}"
+        return f"SET LOCAL {READ_CLOCK_SETTING} = '{instant}'; {scoped}"
 
-    def _with_relations(self, sql: str, body: str) -> str:
+    def built_in(self, sql: str) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+        """The relations ``sql`` reads that are built once per session:
+        ``(name, relation sql, bound columns)`` each. Empty for a statement
+        that is no read, or names none."""
+        if not self.built or not isinstance(sql, str):
+            return ()
+        noise = _LEADING_NOISE.match(sql)
+        body = sql[noise.end() if noise else 0 :]
+        if not _READ_STATEMENT.match(body):
+            return ()
+        bound = dict(self.built)
+        return tuple(
+            (name, relation, bound[name])
+            for name, relation in self._wanted(body)
+            if name in bound
+        )
+
+    def _wanted(self, body: str) -> list[tuple[str, str]]:
+        """The scope's relations ``body`` reads and does not define itself."""
         if not self.relations:
-            return sql
-        head = _WITH_HEAD.match(body)
+            return []
         mentioned = _mentioned(body, self.names())
         if not mentioned:
-            return sql
-        wanted = [
+            return []
+        head = _WITH_HEAD.match(body)
+        return [
             (name, relation)
             for name, relation in self.relations
             if name in mentioned and not (head and _defines(body, name))
         ]
+
+    def _with_relations(self, sql: str, body: str, tables: Mapping[str, str]) -> str:
+        wanted = self._wanted(body)
         if not wanted:
             return sql
         ctes = ", ".join(
-            f'"{name}" AS NOT MATERIALIZED ({relation})' for name, relation in wanted
+            f'"{name}" AS NOT MATERIALIZED '
+            f"({f'SELECT * FROM {tables[name]}' if name in tables else relation})"
+            for name, relation in wanted
         )
+        head = _WITH_HEAD.match(body)
         if head is None:
             return f"WITH {ctes} {body}"
         recursive = head.group(1) or ""
@@ -286,12 +325,33 @@ def current_read_clock() -> datetime | None:
 
 
 def read_now() -> datetime:
-    """THE READ'S NOW: the scope's clock inside a clocked scope, the wall
-    clock (aware, UTC) everywhere else — the Python twin of
-    :data:`CLOCK_SQL`. Every relative-time computation of a read ("the last
-    30 days", an age, a deadline) takes its now here, so a read at T measures
-    from T in Python as its SQL does."""
-    return current_read_clock() or datetime.now(UTC)
+    """THE READ'S NOW: the scope's clock inside a clocked scope, the
+    framework's clock (``pendulum.now("UTC")``, aware) everywhere else — the
+    Python twin of :data:`READ_CLOCK_SQL`. Every relative-time computation of a
+    read ("the last 30 days", an age, a deadline) takes its now here, so a read
+    at T measures from T in Python as its SQL does. It is the clock every
+    writer stamps with (model timestamps, ``DateManager.now``): a deadline
+    stamped by ``pendulum.now`` and judged by another clock disagreed wherever
+    that clock is moved (a frozen test clock, a simulation's virtual one)."""
+    return current_read_clock() or pendulum.now("UTC")
+
+
+def read_once(key: Any, compute: Callable[[], Any]) -> Any:
+    """``compute()``'s value, computed ONCE for the ``read_snapshot()`` block
+    this context reads in — for what a read derives from the database by
+    several statements and more than one of its readers needs (a page's
+    figures recomputed at the scope's instant). The value is kept under
+    ``key`` and the scope it was computed in (its relations and its clock):
+    another scope of the same block computes its own. Readers on other
+    threads of the block wait for the first instead of computing again.
+    Outside a block there is nothing to keep it in: ``compute()`` runs.
+
+    ``compute`` must be a pure function of the database as the scope shows
+    it, and its value must not be mutated by the readers that share it."""
+    scope = _SCOPE.get()
+    if scope is None or scope.snapshot is None:
+        return compute()
+    return scope.snapshot.once((key, scope.clock, scope.relations), compute)
 
 
 _PLAIN_NAME = re.compile(r"[a-z_][a-z0-9_]*")
@@ -299,7 +359,7 @@ _PLAIN_NAME = re.compile(r"[a-z_][a-z0-9_]*")
 
 @contextlib.contextmanager
 def read_scope(
-    relations: Mapping[str, tuple[str, Sequence[Any]]] | None = None,
+    relations: Mapping[str, tuple[str, Sequence[Any]] | BuiltRelation] | None = None,
     *,
     clock: datetime | None = None,
     refuse: Sequence[str] = (),
@@ -307,7 +367,9 @@ def read_scope(
     """Run the block read-only at the database, over ``relations``.
 
     ``relations`` maps an unqualified relation name to ``(sql, params)``: a
-    SELECT whose columns are the named table's, with ``%s`` binds. ``clock``
+    SELECT whose columns are the named table's, with ``%s`` binds — or to a
+    ``BuiltRelation`` of the same, derived once per session of the block's
+    snapshot instead of by every statement (module docstring). ``clock``
     (aware) fixes what "now" means: read statements may not read the
     database clock. ``refuse`` names relations no read statement may name.
     Nesting keeps the outer scope's relations (the inner add or replace),
@@ -318,9 +380,20 @@ def read_scope(
         raise ValueError("read_scope: the clock must be an aware datetime")
     outer = _SCOPE.get()
     named = dict(outer.relations) if outer else {}
-    for name, (sql, params) in (relations or {}).items():
+    built = dict(outer.built) if outer else {}
+    for name, relation in (relations or {}).items():
         if not _PLAIN_NAME.fullmatch(name):
             raise ValueError(f"read_scope: {name!r} is not a plain relation name")
+        # The inner scope's word replaces the outer's, its form included.
+        built.pop(name, None)
+        if isinstance(relation, BuiltRelation):
+            for column in relation.bound:
+                if not _PLAIN_NAME.fullmatch(column):
+                    raise ValueError(f"read_scope: {column!r} is not a plain column name")
+            built[name] = tuple(relation.bound)
+            sql, params = relation.sql, relation.params
+        else:
+            sql, params = relation
         named[name] = render_literals(sql, params)
     for name in refuse:
         if not _PLAIN_NAME.fullmatch(name):
@@ -331,6 +404,7 @@ def read_scope(
         clock=clock if clock is not None else (outer.clock if outer else None),
         refused=refused,
         snapshot=outer.snapshot if outer else None,
+        built=tuple(sorted(built.items())),
     )
     token = _SCOPE.set(scope)
     try:
@@ -394,14 +468,14 @@ def read_only_statement(connection: Any) -> Iterator[None]:
 
 
 __all__ = [
-    "CLOCK_BOUND_SQL",
-    "CLOCK_SETTING",
-    "CLOCK_SQL",
+    "READ_CLOCK_BOUND_SQL",
+    "READ_CLOCK_SETTING",
+    "READ_CLOCK_SQL",
     "ReadScope",
-    "ReadScopeRefused",
     "current_read_clock",
     "current_read_scope",
     "read_now",
+    "read_once",
     "read_only_statement",
     "read_scope",
     "read_snapshot",

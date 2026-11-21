@@ -8,9 +8,15 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "ConnectionFactory": (".ConnectionFactory", "ConnectionFactory"),
     "ConnectionResolver": (".ConnectionResolver", "ConnectionResolver"),
     "PostgresConnection": (".PostgresConnection", "PostgresConnection"),
+    "PostgresScopedReads": (".PostgresScopedReads", "PostgresScopedReads"),
     "SQLiteConnection": (".SQLiteConnection", "SQLiteConnection"),
+    "begin_in_snapshot": (".PostgresReadSnapshot", "begin_in_snapshot"),
+    "build_relations": (".PostgresReadSnapshot", "build_relations"),
+    "lookup_keys": (".PostgresReadSnapshot", "lookup_keys"),
+    "open_session": (".PostgresReadSnapshot", "open_session"),
     "regexp": (".SQLiteConnection", "regexp"),
     "reset_registry": (".ConnectionResolver", "reset_registry"),
+    "scope_snapshot": (".PostgresScopedReads", "scope_snapshot"),
 }
 
 __all__ = [
@@ -19,9 +25,15 @@ __all__ = [
     "ConnectionFactory",
     "ConnectionResolver",
     "PostgresConnection",
+    "PostgresScopedReads",
     "SQLiteConnection",
+    "begin_in_snapshot",
+    "build_relations",
+    "lookup_keys",
+    "open_session",
     "regexp",
     "reset_registry",
+    "scope_snapshot",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

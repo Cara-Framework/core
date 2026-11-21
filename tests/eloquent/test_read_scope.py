@@ -12,10 +12,12 @@ import pytest
 
 from cara.eloquent import (
     READ_CLOCK_BOUND_SQL,
+    BuiltRelation,
     ReadScopeRefused,
     current_read_clock,
     current_read_scope,
     read_now,
+    read_once,
     read_scope,
     read_snapshot,
 )
@@ -28,6 +30,63 @@ RELATION = ("SELECT h.* FROM public.product h WHERE h.tenant_id = %s AND h.at <=
 def _scoped(sql: str) -> str:
     with read_scope({"product": RELATION}) as scope:
         return scope.statement(sql)
+
+
+def test_a_built_relation_is_named_to_the_session_and_read_from_what_it_built():
+    built = BuiltRelation(*RELATION, bound=("tenant_id",))
+    rendered = render_literals(*RELATION)
+    with read_scope({"product": built, "listing": ("SELECT 1 AS id", [])}) as scope:
+        sql = "SELECT 1 FROM product p JOIN listing l ON l.id = p.id"
+        # What a session must have built before it runs the statement: the
+        # built relations the statement reads, never an inline one.
+        assert scope.built_in(sql) == (("product", rendered, ("tenant_id",)),)
+        assert scope.built_in("SELECT 1 FROM listing") == ()
+        assert scope.built_in("UPDATE product SET x = 1") == ()
+        assert scope.built_in("WITH product AS (SELECT 1) SELECT * FROM product") == ()
+        # Read from the built rows where the session has them, inline elsewhere.
+        assert scope.statement(sql, {"product": 'pg_temp."built"'}) == (
+            'WITH "listing" AS NOT MATERIALIZED (SELECT 1 AS id), '
+            '"product" AS NOT MATERIALIZED (SELECT * FROM pg_temp."built") ' + sql
+        )
+        assert f'"product" AS NOT MATERIALIZED ({rendered})' in scope.statement(sql)
+        # An inner scope's word replaces the outer's, its form included.
+        with read_scope({"product": RELATION}) as inner:
+            assert inner.built_in(sql) == ()
+        with read_scope({"listing": BuiltRelation("SELECT 2 AS id")}) as inner:
+            assert [name for name, _sql, _bound in inner.built_in(sql)] == [
+                "listing",
+                "product",
+            ]
+    with (
+        pytest.raises(ValueError, match="plain column name"),
+        read_scope({"product": BuiltRelation("SELECT 1", (), bound=("a b",))}),
+    ):
+        pass
+
+
+def test_read_once_keeps_a_value_for_the_block_and_the_scope_it_was_derived_in():
+    calls: list[int] = []
+
+    def compute() -> int:
+        calls.append(1)
+        return len(calls)
+
+    # No block to keep it in: computed by every call.
+    assert (read_once("k", compute), read_once("k", compute)) == (1, 2)
+    with read_scope({"product": RELATION}):
+        assert (read_once("k", compute), read_once("k", compute)) == (3, 4)
+    with read_snapshot():
+        with read_scope({"product": RELATION}):
+            assert (read_once("k", compute), read_once("k", compute)) == (5, 5)
+            assert read_once("another key", compute) == 6
+        # Another scope of the block (its own clock) derives its own…
+        with read_scope({"product": RELATION}, clock=AT):
+            assert (read_once("k", compute), read_once("k", compute)) == (7, 7)
+        # …and the first scope, met again, still has its value.
+        with read_scope({"product": RELATION}):
+            assert read_once("k", compute) == 5
+    with read_snapshot(), read_scope({"product": RELATION}):
+        assert read_once("k", compute) == 8  # another block
 
 
 def test_a_mentioned_name_reads_the_relation_and_nothing_else_changes():

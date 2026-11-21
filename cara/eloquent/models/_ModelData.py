@@ -392,6 +392,11 @@ def _cast_get(self, attribute, value):
     cast_instance = enhanced_registry.get_cast_instance(self.__casts__[attribute])
     if not cast_instance:
         return value
+    # The row is built only for a column the model seals: every other cast
+    # read (an integer, a date) used to copy the model's whole attribute map
+    # first — one dict of every column per attribute read.
+    if not (getattr(type(self), "__seal_context__", None) or {}).get(attribute):
+        return cast_instance.get(value)
     context = _model_seal_context(type(self), attribute, _model_seal_row(self))
     if context is not None:
         return cast_instance.get(value, context)

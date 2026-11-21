@@ -8,6 +8,12 @@ _logger = logging.getLogger("cara.eloquent.observers")
 
 
 class ObservesEvents:
+    #: Off unless an instance turns its events off. Declared on the class so
+    #: the four lifecycle checks of every hydrated row are a plain attribute
+    #: read — without it each one fell through to the model's ``__getattr__``
+    #: and its raised ``AttributeError``.
+    _events_disabled: bool = False
+
     def observe_events(self, model, event):
         if getattr(model, "_events_disabled", False):
             return

@@ -55,6 +55,7 @@ from cara.architecture._ast_utils import (
 from cara.architecture.Manifest import Manifest
 
 from .BarrelPlan import BarrelPlan
+from .BridgeBarrel import BridgeBarrel
 
 # Width EVERY emitted import is rendered against. The generator and
 # ``ruff format`` have to be fixed points of each other: whatever the
@@ -641,4 +642,7 @@ class BarrelGenerator:
                 plan,
             )
 
+        # Bridges LAST: each is a pure function of a kernel ``__all__`` the
+        # loop above may just have rewritten.
+        BridgeBarrel.regenerate(manifest, write, plan)
         return plan

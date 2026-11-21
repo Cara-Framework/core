@@ -91,6 +91,10 @@ class Manifest:
     # supersets; every other kernel package ships verbatim and keeps its
     # sub-paths. Mirrors VendorCommonsCommand's models-specific handling.
     vendor_flattened_packages: frozenset[str] = frozenset({"models"})
+    # Kernel subpackages application code must never reach (``<pkg>.<child>``):
+    # §2 makes gate persistence kernel-internal. The generated ``app/<pkg>``
+    # bridge neither re-exports nor mirrors them (``BridgeBarrel``).
+    kernel_internal_subpackages: frozenset[str] = frozenset({"gates.persistence"})
     seam_allowlists: dict[str, dict[str, int]] = field(default_factory=dict)
     inline_import_exemptions: frozenset[tuple[str, str]] = frozenset()
     pure_modules: frozenset[str] = frozenset()
