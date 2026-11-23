@@ -28,8 +28,11 @@ class CategoryFilter:
     - Unknown category (or one without settings): allowed at DEBUG and up.
     - ``level``: records below it are dropped.
     - ``enabled: False`` (or a category set to ``None``) silences records
-      BELOW ERROR only. ERROR and CRITICAL always pass: a category switch is a
-      noise control, and it must never hide an error.
+      BELOW WARNING only. WARNING, ERROR and CRITICAL always pass: a category
+      switch is a noise control for chatter, and it must never hide a warning
+      ("max connections reached", a missed scheduler fire) or an error. To
+      raise a category's floor above WARNING, leave it enabled and say so with
+      ``level``.
     """
 
     @staticmethod
@@ -65,7 +68,7 @@ class CategoryFilter:
         elif not isinstance(settings, dict):
             settings = {}
 
-        if not settings.get("enabled", True) and levelno < pylogging.ERROR:
+        if not settings.get("enabled", True) and levelno < pylogging.WARNING:
             return False
 
         cat_level = settings.get("level") or "DEBUG"

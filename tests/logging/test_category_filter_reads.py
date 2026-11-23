@@ -5,7 +5,7 @@ under ``logging.categories``). The filter read
 ``logging.categories.<category>``, which the configuration layer splits on
 dots, so a dotted category was never found: every category ran enabled at
 DEBUG and every ``LOG_*`` switch was dead. A disabled category silences
-records below ERROR; errors always pass.
+chatter (below WARNING); warnings and errors always pass.
 """
 
 from __future__ import annotations
@@ -61,12 +61,14 @@ def test_one_configuration_read_per_call(configuration, monkeypatch):
         ("WARNING", "cara.queue.jobs", True),
         ("INFO", "audit", False),
         ("WARNING", "audit", True),
-        # Disabled drops below ERROR, never errors.
+        # Disabled drops chatter, never a warning or an error.
         ("DEBUG", "database", False),
-        ("WARNING", "database", False),
+        ("INFO", "database", False),
+        ("WARNING", "database", True),
         ("ERROR", "database", True),
         ("CRITICAL", "cara.http.requests", True),
-        ("WARNING", "nulled", False),  # a category set to None reads as disabled
+        ("INFO", "nulled", False),  # a category set to None reads as disabled
+        ("WARNING", "nulled", True),
         ("ERROR", "nulled", True),
         # Unknown / settings-less categories keep the default: on at DEBUG.
         ("DEBUG", "plain", True),
