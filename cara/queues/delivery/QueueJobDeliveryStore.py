@@ -11,6 +11,7 @@ from cara.queues.serializers import SignedJsonJobSerializer
 from . import (
     _DeliveryClaim,
     _DeliveryConfiguration,
+    _DeliveryCrashLoop,
     _DeliveryDiagnostics,
     _DeliveryExecution,
     _DeliveryHooks,
@@ -488,7 +489,7 @@ class QueueJobDeliveryStore:
 
     def abandon_execution(
         self, job_id: str, lease_token: str, *, refund_attempt: bool = True
-    ) -> None:
+    ) -> bool:
         """Release an interrupted lease and hand its claim back.
 
         Graceful release is not a crash, so it must not spend the row's
@@ -496,7 +497,11 @@ class QueueJobDeliveryStore:
         exit of a run already past its own timeout: the timeout could not
         stop it, so it is a hang, and refunding it let a job that hangs
         deterministically dodge the ceiling whenever its hang met a worker
-        stop. Everything else about the release is the same.
+        stop. A kept attempt that reaches the ceiling settles the row as a
+        crash loop on the spot (dead-lettered, ``failed()`` due) instead of
+        handing it back, since the ceiling is otherwise only checked when a
+        lease lapses. Returns ``True`` when it did, so the caller does not
+        reset the tracker it just failed.
         """
         database = self._db()
         with database.transaction():
@@ -509,7 +514,10 @@ class QueueJobDeliveryStore:
                     "AND attempts > 0",
                     [job_id, self.STATUS_PROCESSING, lease_token],
                 )
+            elif self._abandon_at_crash_ceiling(database, job_id, lease_token):
+                return True
             _DeliverySettlement._delivery_abandon_execution(self, job_id, lease_token)
+        return False
 
     @staticmethod
     def _tracker_is_open(database: Any, db_job_id: int) -> bool:
@@ -547,6 +555,8 @@ class QueueJobDeliveryStore:
     complete = _DeliveryExecution._delivery_complete
     complete_with_tracker = _DeliveryExecution._delivery_complete_with_tracker
     dead_letter = _DeliveryExecution._delivery_dead_letter
+    _settle_crash_loop = _DeliveryCrashLoop._delivery_settle_crash_loop
+    _abandon_at_crash_ceiling = _DeliveryCrashLoop._delivery_abandon_at_crash_ceiling
 
     dead_letter_with_tracker = _DeliverySettlement._delivery_dead_letter_with_tracker
     _settle_execution_with_tracker = (

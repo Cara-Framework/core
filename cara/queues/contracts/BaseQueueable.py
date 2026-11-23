@@ -8,8 +8,10 @@ and other queueable classes by providing common functionality.
 from __future__ import annotations
 
 import contextlib
+import inspect
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 
 from .Queueable import Queueable
@@ -43,7 +45,6 @@ class BaseQueueable(Queueable, ShouldQueue):
         """Initialize queueable-specific properties."""
         self.queue_name = self.default_queue
         self._delay = self.default_delay
-        self._retry_attempts = self.default_retry_attempts
 
     def _initialize_data(self, *args, **kwargs):
         """Override this in subclasses for custom initialization."""
@@ -66,21 +67,60 @@ class BaseQueueable(Queueable, ShouldQueue):
         self._queue_name = name
         self.queue = name
 
+    @classmethod
+    def _declared_max_attempts(cls) -> int:
+        """The retry budget this class declares: the only one a worker sees.
+
+        A class attribute ``max_attempts = n`` shadows the property below and
+        wins; otherwise ``default_retry_attempts``.
+        """
+        declared = inspect.getattr_static(cls, "max_attempts")
+        if isinstance(declared, property):
+            return cls.default_retry_attempts
+        return declared
+
     @property
     def max_attempts(self) -> int:
         """The delivery budget the worker reads (``JobProcessor``).
 
-        ``default_retry_attempts`` and :meth:`attempts` wrote
-        ``_retry_attempts``, which nothing read: the worker asks for
-        ``max_attempts``, so ``SendMailableJob``'s declared 5 ran as the
-        default 3. A subclass declaring ``max_attempts = n`` still wins (a
-        plain class attribute shadows this property).
+        Read from the class, never from instance state: the worker rebuilds
+        the job from its signed constructor parameters and the envelope
+        carries no per-dispatch budget, so an instance value could not reach
+        it. (``default_retry_attempts`` used to be written to an attribute
+        nothing read, so ``SendMailableJob``'s declared 5 ran as 3.)
         """
-        return getattr(self, "_retry_attempts", self.default_retry_attempts)
+        return type(self)._declared_max_attempts()
 
     @max_attempts.setter
     def max_attempts(self, count: int) -> None:
-        self._retry_attempts = count
+        self._refuse_instance_attempts(count)
+
+    def attempts(self, count: int) -> BaseQueueable:
+        """Confirm the class's retry budget; any other value is refused.
+
+        A per-instance budget never crosses the broker (see
+        :attr:`max_attempts`), and carrying one would need a new signed
+        envelope field that workers of the previous release would refuse
+        during a rolling deploy. So the budget is declared on the class, and
+        a value that differs from it raises here instead of being dropped
+        silently on the worker.
+        """
+        self._refuse_instance_attempts(count)
+        self._chained = True
+        return self
+
+    def _refuse_instance_attempts(self, count: int) -> None:
+        declared = type(self)._declared_max_attempts()
+        if count == declared and not isinstance(count, bool):
+            return
+        name = type(self).__name__
+        raise InvalidArgumentException(
+            f"{name}: a per-dispatch attempts({count!r}) cannot take effect — "
+            "the worker rebuilds the job from its constructor arguments and "
+            f"reads the class's budget ({declared}). Declare "
+            f"`max_attempts = {count!r}` (or `default_retry_attempts`) on "
+            f"{name} instead."
+        )
 
     def delay(self, seconds: int) -> BaseQueueable:
         """Delay the job execution by specified seconds.
@@ -89,18 +129,6 @@ class BaseQueueable(Queueable, ShouldQueue):
         ``default_delay``); an explicit ``PendingDispatch.delay()`` wins.
         """
         self._delay = seconds
-        self._chained = True
-        return self
-
-    def attempts(self, count: int) -> BaseQueueable:
-        """Set the number of delivery attempts (read as :attr:`max_attempts`).
-
-        The class-level ``default_retry_attempts`` (or ``max_attempts``) is
-        what a worker sees: the worker rebuilds the job from its constructor
-        parameters, so a value set on one instance at dispatch does not
-        cross the broker.
-        """
-        self._retry_attempts = count
         self._chained = True
         return self
 
@@ -143,7 +171,7 @@ class BaseQueueable(Queueable, ShouldQueue):
         """Get queue configuration options."""
         options = {
             "queue": self.queue_name,
-            "attempts": self._retry_attempts,
+            "attempts": self.max_attempts,
         }
 
         if self._delay is not None:

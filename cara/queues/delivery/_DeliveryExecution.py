@@ -149,20 +149,8 @@ def _delivery_claim_execution(
         expires_at = self._as_datetime(self._row_value(row, "expires_at"))
         if expires_at is None:
             return DeliveryClaim("mismatch")
-        refused: tuple[str, str] | None = None
         if expires_at <= now:
-            refused = (self.STATUS_EXPIRED, "envelope_expired_before_execution")
-        elif (
-            reclaimed
-            and int(self._row_value(row, "attempts") or 0) >= self.CRASH_RECLAIM_CEILING
-            and self._tracker_is_open(database, int(payload["db_job_id"]))
-        ):
-            # A surviving broker copy reached the row before the relay's
-            # recovery did: the same ceiling, on the other way back in. A
-            # finished tracker is not refused; the worker reconciles it.
-            refused = (self.STATUS_DEAD_LETTERED, self.CRASH_LOOP_REASON)
-        if refused is not None:
-            refused_status, refused_reason = refused
+            refused_reason = "envelope_expired_before_execution"
             affected = database.statement(
                 f"UPDATE {self.table} SET status = %s, completed_at = %s, "
                 "terminal_reason = %s, lease_token = NULL, "
@@ -170,7 +158,7 @@ def _delivery_claim_execution(
                 "publish_lease_expires_at = NULL, updated_at = %s "
                 "WHERE job_id = %s AND status IN (%s, %s)",
                 [
-                    refused_status,
+                    self.STATUS_EXPIRED,
                     now,
                     refused_reason,
                     now,
@@ -193,7 +181,28 @@ def _delivery_claim_execution(
                 refused_reason,
                 category="cara.queue.delivery",
             )
-            return DeliveryClaim(refused_status, terminal_reason=refused_reason)
+            return DeliveryClaim(self.STATUS_EXPIRED, terminal_reason=refused_reason)
+        if (
+            reclaimed
+            and int(self._row_value(row, "attempts") or 0) >= self.CRASH_RECLAIM_CEILING
+            and self._tracker_is_open(database, int(payload["db_job_id"]))
+        ):
+            # A surviving broker copy reached the row before the relay's
+            # recovery did: the same ceiling, on the other way back in. A
+            # finished tracker is not refused; the worker reconciles it. The
+            # row is locked and its lease was read as lapsed (or absent).
+            if not self._settle_crash_loop(
+                database,
+                job_id,
+                int(payload["db_job_id"]),
+                now,
+                holds="(lease_expires_at IS NULL OR lease_expires_at <= %s)",
+                holds_params=[now],
+            ):
+                raise QueueException("Queue delivery crash-loop settlement was lost.")
+            return DeliveryClaim(
+                self.STATUS_DEAD_LETTERED, terminal_reason=self.CRASH_LOOP_REASON
+            )
 
         token = uuid.uuid4().hex
         affected = database.statement(

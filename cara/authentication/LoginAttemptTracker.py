@@ -29,6 +29,32 @@ across workers without sticky sessions. The cache is the authority for this
 security gate: when it cannot answer, authentication stops with a retryable
 service-unavailable response instead of silently removing account protection.
 
+An admitted attempt holds a reservation (in-flight accounting)
+---------------------------------------------------------------
+``assert_unlocked`` used to be check-then-act: attempts between the check and
+their recorded outcome were counted nowhere, so a burst from many sources
+all passed the check before the first failure landed (800 admitted against a
+50-failure account lock). Now an admitted attempt RESERVES a slot against the
+account limit with an atomic counter: it is admitted only while recorded
+failures plus attempts in flight (itself included) stay within
+``login_account_lock_failures``. ``record_failure`` turns the reservation into
+a counted failure (the failure is counted before the slot is released, so
+the attempt is never counted nowhere); ``record_success`` releases it. An
+attempt that never records an outcome (a crashed or cancelled request, the
+password step of a 2FA sign-in) is released by expiry: the counters are
+windowed by ``login_attempt_reservation_seconds`` and a window is counted for
+two windows, so a lost slot frees itself within twice that time.
+
+The release pairs with the reservation THIS request made (held on the
+request object, or on the calling context outside a request), never with a
+counter guessed from the clock: a release into the wrong window would
+refund a slot another attempt still holds.
+
+Only the account limit is reserved. One source's burst is bounded by the
+per-IP ``throttle:login`` the login routes carry; a per-source reservation
+would hold a slot across the 2FA step (the password step records no outcome)
+and refuse the owner's second factor after four typos.
+
 All thresholds are env-overridable via ``config("security.*")``.
 """
 
@@ -38,6 +64,11 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
+import time
+import weakref
+from contextvars import ContextVar
+from typing import Any
 
 from cara.configuration import config
 from cara.exceptions import (
@@ -45,6 +76,7 @@ from cara.exceptions import (
     ServiceUnavailableException,
 )
 from cara.facades import Cache, Log
+from cara.http import current_request
 from cara.support import email_mask, mask_ip
 
 from .LoginLocked import LoginLocked
@@ -57,6 +89,19 @@ _IP_SET_CAP = 10
 # One past it stays locked until its own TTL ends, which is the safe direction.
 _LOCKED_SOURCES_CAP = 64
 _logger = logging.getLogger("cara.authentication.login_attempts")
+# The reservation's own clock, a module attribute so a test moves time
+# without sleeping. Windows only need to agree to well under a window across
+# hosts, which NTP-synchronised hosts do.
+_clock = time.time
+# Reservations this request holds, keyed weakly on the request object: the
+# tracker runs in a worker thread per call (``run_in_thread`` copies the
+# context, so a ContextVar set there is lost), while the request object is
+# the one thing the check and the outcome share.
+_HELD_LOCK = threading.Lock()
+_HELD_BY_REQUEST: weakref.WeakKeyDictionary[Any, list[str]] = weakref.WeakKeyDictionary()
+_HELD_OUTSIDE_REQUEST: ContextVar[list[str] | None] = ContextVar(
+    "cara_login_reservations", default=None
+)
 
 
 class LoginAttemptTracker:
@@ -106,6 +151,16 @@ class LoginAttemptTracker:
         )
 
     @staticmethod
+    def _reservation_seconds() -> int:
+        """Window of the in-flight counters. A slot whose attempt never
+        records an outcome frees itself within twice this; it must outlast
+        a slow sign-in (password hashing plus a database round trip)."""
+        return LoginAttemptTracker._positive_setting(
+            "security.login_attempt_reservation_seconds",
+            30,
+        )
+
+    @staticmethod
     def _positive_setting(key: str, default: int) -> int:
         value = config(key, default)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
@@ -121,6 +176,10 @@ class LoginAttemptTracker:
     @staticmethod
     def _lock_key(email: str) -> str:
         return f"login_locked:{LoginAttemptTracker._digest(email)}"
+
+    @staticmethod
+    def _in_flight_prefix(email: str) -> str:
+        return f"login_inflight:{LoginAttemptTracker._digest(email)}:"
 
     @staticmethod
     def _source_lock_key(email: str, ip_digest: str) -> str:
@@ -169,6 +228,13 @@ class LoginAttemptTracker:
         Empty / missing email is a no-op — let validation surface the
         missing-field error from the request layer instead of masking it
         with a 429 here.
+
+        With a source ``ip`` the check is the attempt's admission: it reserves
+        a slot against the account limit, released by ``record_failure`` /
+        ``record_success`` or by expiry (see the module docstring), and
+        refuses with ``LoginLocked`` while the slots are all held. Without
+        one it only reads the locks (``AccountLock`` asks that way after a
+        failure); nothing is reserved because no outcome will follow.
         """
         if not email:
             return
@@ -185,6 +251,93 @@ class LoginAttemptTracker:
             # explicitly so a recovered cache instance with a fresh key still
             # emits the right retry hint.
             raise LoginLocked(cls._lock_duration_seconds())
+        if isinstance(ip, str) and ip.strip():
+            cls._reserve(email)
+
+    @classmethod
+    def _reserve(cls, email: str) -> None:
+        """Take one in-flight slot against the account limit, or refuse.
+
+        Order matters: the slot is taken (atomic INCR) BEFORE the earlier
+        window and the failure count are read, and ``record_failure`` counts
+        the failure BEFORE it releases its slot. Any attempt is therefore in
+        the in-flight sum, the failure count, or both at every instant, so
+        concurrent admissions cannot all see room that only one of them has.
+        """
+        window = cls._reservation_seconds()
+        index = int(_clock() // window)
+        prefix = cls._in_flight_prefix(email)
+        key = f"{prefix}{index}"
+        # A window's counter is read during its own window and the next.
+        ttl = 2 * window + 1
+        try:
+            in_flight = Cache.increment(key, 1, ttl)
+            # INCRBY 0 is the counter namespace's read (``get`` reads values,
+            # not counters); it may create an empty counter, which is harmless.
+            in_flight += Cache.increment(f"{prefix}{index - 1}", 0, ttl)
+            failures = Cache.increment(
+                cls._failure_key(email), 0, cls._failure_window_seconds()
+            )
+        except Exception as exc:
+            raise cls._cache_unavailable("reservation", email, exc) from exc
+        if int(failures) + int(in_flight) > cls._account_lock_failures():
+            cls._refund(email, key)
+            # No lock was written: the slots free themselves as the attempts
+            # in flight finish, so the hint is the reservation window, not
+            # the lock duration.
+            raise LoginLocked(window)
+        held = cls._held()
+        with _HELD_LOCK:
+            held.append(key)
+
+    @staticmethod
+    def _held() -> list[str]:
+        """The reservations the current request (or, outside a request, the
+        calling context) holds."""
+        request = current_request.get(None)
+        if request is None:
+            held = _HELD_OUTSIDE_REQUEST.get()
+            if held is None:
+                held = []
+                _HELD_OUTSIDE_REQUEST.set(held)
+            return held
+        with _HELD_LOCK:
+            held = _HELD_BY_REQUEST.get(request)
+            if held is None:
+                held = _HELD_BY_REQUEST[request] = []
+            return held
+
+    @classmethod
+    def _release(cls, email: str) -> None:
+        """Release the newest slot this request holds for ``email``. An
+        attempt whose slot is not held here (it expired with its window, or
+        the check ran in another request) releases nothing: refunding a
+        counter this request did not raise would free another attempt's slot.
+        """
+        prefix = cls._in_flight_prefix(email)
+        held = cls._held()
+        with _HELD_LOCK:
+            position = next(
+                (i for i in range(len(held) - 1, -1, -1) if held[i].startswith(prefix)),
+                None,
+            )
+            if position is None:
+                return
+            # Popped before the refund, so a retried outcome cannot refund twice.
+            key = held.pop(position)
+        cls._refund(email, key)
+
+    @classmethod
+    def _refund(cls, email: str, key: str) -> None:
+        ttl = 2 * cls._reservation_seconds() + 1
+        try:
+            if Cache.increment(key, -1, ttl) < 0:
+                # The window's counter expired under the attempt and the
+                # refund re-created it below zero; undo, or the negative
+                # would hand a later attempt a slot nobody released.
+                Cache.increment(key, 1, ttl)
+        except Exception as exc:
+            raise cls._cache_unavailable("reservation release", email, exc) from exc
 
     @classmethod
     def _read_ip_set(cls, email: str) -> list[str]:
@@ -285,6 +438,9 @@ class LoginAttemptTracker:
             cls._lock_source(email, ip, ip_digest)
         if count >= cls._account_lock_failures():
             cls._lock_account(email, count)
+        # Last: the failure is counted above, so freeing the slot now never
+        # leaves the attempt counted nowhere.
+        cls._release(email)
         return count
 
     @classmethod
@@ -360,6 +516,7 @@ class LoginAttemptTracker:
             Cache.forget(cls._ip_set_key(email))
         except Exception as exc:
             raise cls._cache_unavailable("IP-set clear", email, exc) from exc
+        cls._release(email)
 
     @classmethod
     def clear_lockout(cls, email: str | None) -> None:

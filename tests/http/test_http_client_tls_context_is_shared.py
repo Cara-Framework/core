@@ -22,20 +22,27 @@ pending_module = importlib.import_module("cara.http.client.PendingRequest")
 URL = "https://api.example.com/items"
 
 
-def _record_clients(monkeypatch) -> list[dict]:
+def _record_clients(monkeypatch, sent: list[dict] | None = None) -> list[dict]:
     built: list[dict] = []
 
     def client(*args, **kwargs):
         built.append(kwargs)
 
         class _Client:
+            is_closed = False
+
             async def __aenter__(self):
                 return self
 
             async def __aexit__(self, *exc):
                 return False
 
+            async def aclose(self):
+                self.is_closed = True
+
             async def request(self, method, url, **kw):
+                if sent is not None:
+                    sent.append(kw)
                 return httpx.Response(200, request=httpx.Request(method, url))
 
         return _Client()
@@ -88,8 +95,23 @@ def test_shared_context_verifies_certificates_and_hostnames():
 def test_per_request_settings_still_reach_the_client(monkeypatch):
     built = _record_clients(monkeypatch)
 
-    asyncio.run(Http.timeout(7).with_token("t0k").get(URL))
+    asyncio.run(Http.timeout(7).with_token("t0k").post(URL))
 
     assert built[0]["timeout"] == 7
     assert built[0]["headers"] == {"Authorization": "Bearer t0k"}
     assert built[0]["http2"] is True
+
+
+def test_per_request_settings_ride_the_pooled_request_not_the_shared_client(
+    monkeypatch,
+):
+    # A GET shares the loop's client, so its settings travel with the request.
+    sent: list[dict] = []
+    built = _record_clients(monkeypatch, sent)
+
+    asyncio.run(Http.timeout(7).with_token("t0k").get(URL))
+
+    assert "timeout" not in built[0] and "headers" not in built[0]
+    assert built[0]["http2"] is True
+    assert sent[0]["timeout"] == 7
+    assert sent[0]["headers"]["Authorization"] == "Bearer t0k"

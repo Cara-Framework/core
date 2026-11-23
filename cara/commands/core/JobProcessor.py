@@ -18,7 +18,7 @@ from cara.queues import (
     DEFAULT_MAX_THROTTLE_ATTEMPTS as _RETRY_DEFAULT_MAX_THROTTLE_ATTEMPTS,
 )
 from cara.queues import DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS
-from cara.queues import MAX_AMQP_JOB_PAYLOAD_BYTES, LeaseHeartbeat
+from cara.queues import MAX_AMQP_JOB_PAYLOAD_BYTES, Bus, LeaseHeartbeat
 
 from . import _JobExecution
 from .ActiveJobCancellationRegistry import ActiveJobCancellationRegistry
@@ -295,6 +295,21 @@ class JobProcessor:
         return attempts_done + 1 < max_attempts
 
     @staticmethod
+    def _retry_job(instance, msg):
+        """The job a retry dispatches: the signed work, plus declared progress.
+
+        Always rebuilt from the signed ``init_kwargs`` this run was built
+        from — never the instance as the failed run left it, which could be
+        different work under the original's identity. Only the attributes
+        the class names in ``retry_carries`` keep the failed run's value
+        (``ShouldQueue.retry_carries``). ``init_kwargs`` is the same value
+        ``_JobExecution`` instantiated the run from, ``{}`` included.
+        """
+        carries = getattr(type(instance), "retry_carries", ())
+        signed = msg.get("init_kwargs") or {}
+        return Bus.with_dispatch_params(instance, signed, keep=tuple(carries))
+
+    @staticmethod
     def _requeue_with_delay(
         channel,
         method_frame,
@@ -433,12 +448,13 @@ class JobProcessor:
             # ``later`` is the Laravel-compatible delay entry point. The AMQP
             # driver commits a signed row to PostgreSQL; only then may this
             # worker acknowledge the failed source delivery.
+            retry_job = JobProcessor._retry_job(instance, msg)
             if msg.get("_tenant_mode") == "central":
                 with Tenancy.central():
-                    _Queue.later(delay_seconds, instance, **retry_options)
+                    _Queue.later(delay_seconds, retry_job, **retry_options)
             else:
                 with Tenancy.as_tenant(msg.get("_tenant")):
-                    _Queue.later(delay_seconds, instance, **retry_options)
+                    _Queue.later(delay_seconds, retry_job, **retry_options)
             Log.info(
                 "↻ Durable retry scheduled for %s "
                 "(attempt %s, throttle %s, +%ss, reason=%s)",

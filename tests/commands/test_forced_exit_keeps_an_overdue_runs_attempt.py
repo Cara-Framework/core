@@ -133,6 +133,13 @@ class _DB:
         self.statements.append(query)
         return 1
 
+    def select_one(self, query: str, _bindings=()):
+        # The kept-attempt abandon first looks for its row at the crash
+        # ceiling; none here, so the ordinary release follows (that path is
+        # covered by tests/queues/test_abandon_at_the_crash_ceiling_...).
+        self.statements.append(query)
+        return None
+
 
 def _store() -> tuple[QueueJobDeliveryStore, _DB]:
     database = _DB()

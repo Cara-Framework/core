@@ -12,6 +12,7 @@ import httpx
 from cara.support import retry_after_seconds
 
 from . import HttpFake
+from ._SharedClients import _shared_client
 
 
 class PendingRequest:
@@ -110,6 +111,7 @@ class PendingRequest:
     async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         full_url = f"{self._base_url}/{url.lstrip('/')}" if self._base_url else url
         replay_safe = self._replay_safe(method, kwargs)
+        poolable = self._poolable(method, kwargs)
         # Delay before the next attempt: the server's Retry-After when it named
         # one (it replaces backoff, it is not added to it), else exponential
         # backoff. Faked retries never sleep so retry-ladder tests stay instant.
@@ -135,13 +137,10 @@ class PendingRequest:
                 return response
 
             try:
-                async with httpx.AsyncClient(
-                    timeout=self._timeout_seconds,
-                    headers=self._headers,
-                    http2=True,
-                    verify=_tls_context(),
-                ) as client:
-                    response = await client.request(method, full_url, **kwargs)
+                if poolable:
+                    response = await self._send_pooled(method, full_url, kwargs)
+                else:
+                    response = await self._send_fresh(method, full_url, kwargs)
             except _NEVER_SENT_ERRORS as exc:
                 # The request never reached the server: safe to resend any method.
                 if attempt >= self._retries:
@@ -163,6 +162,73 @@ class PendingRequest:
             return response
 
         raise AssertionError("unreachable: the final attempt always returns or raises")
+
+    @staticmethod
+    def _poolable(method: str, kwargs: dict[str, Any]) -> bool:
+        """Whether this request may ride a kept-alive pooled connection.
+
+        Only methods this client already treats as replay-safe by themselves
+        (an idempotency key does not count: POST and PATCH keep a fresh
+        connection per call, exactly as before), and only with options the
+        shared client carries per request and a body it can send twice. A
+        redirect-following request stays fresh: its hops share cookies through
+        the client's jar, which the shared client never fills.
+        """
+        if method.upper() not in _POOLED_METHODS:
+            return False
+        if not set(kwargs) <= _POOLED_KWARGS:
+            return False
+        content = kwargs.get("content")
+        return content is None or isinstance(content, (bytes, str))
+
+    async def _send_fresh(
+        self, method: str, url: str, kwargs: dict[str, Any]
+    ) -> httpx.Response:
+        """One request on its own client and connection (the pre-pool path)."""
+        async with httpx.AsyncClient(
+            timeout=self._timeout_seconds,
+            headers=self._headers,
+            http2=True,
+            verify=_tls_context(),
+        ) as client:
+            return await client.request(method, url, **kwargs)
+
+    async def _send_pooled(
+        self, method: str, url: str, kwargs: dict[str, Any]
+    ) -> httpx.Response:
+        """One request on the loop's shared client.
+
+        The builder's headers and timeout go with the request, never onto the
+        shared client: merged in the order a per-call client merged them
+        (builder headers, then the call's own), so the wire is unchanged.
+
+        A kept-alive connection the server closed between requests fails as
+        "disconnected without a response", a read error or a write error.
+        When the request went out on a REUSED connection (no TCP connect was
+        traced for it), that failure is the stale connection, not the
+        server's answer: it is retried once on a fresh connection, whose
+        outcome (success or error) is exactly what the pre-pool path gives.
+        """
+        client = await _shared_client(_tls_context())
+        options = dict(kwargs)
+        headers = httpx.Headers(self._headers)
+        headers.update(httpx.Headers(kwargs.get("headers") or {}))
+        options["headers"] = headers
+        options.setdefault("timeout", self._timeout_seconds)
+        opened: list[bool] = []
+
+        async def trace(event: str, _info: dict[str, Any]) -> None:
+            # "connection." on a direct or HTTP-proxy route, "socks." via SOCKS.
+            if event.endswith(".connect_tcp.started"):
+                opened.append(True)
+
+        options["extensions"] = {"trace": trace}
+        try:
+            return await client.request(method, url, **options)
+        except _STALE_CONNECTION_ERRORS:
+            if opened:
+                raise
+        return await self._send_fresh(method, url, kwargs)
 
 
 _shared_tls_context: ssl.SSLContext | None = None
@@ -187,6 +253,19 @@ def _tls_context() -> ssl.SSLContext:
 
 _IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE"})
 _IDEMPOTENCY_KEY_HEADERS = frozenset({"idempotency-key", "x-idempotency-key"})
+_POOLED_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+# Per-request arguments the shared client applies to this request alone.
+# Anything else (``extensions``, ``follow_redirects``, ``files``, or an option
+# httpx only takes on a client) keeps the per-call client and its behaviour.
+_POOLED_KWARGS = frozenset(
+    {"params", "headers", "cookies", "auth", "timeout", "content", "data", "json"}
+)
+# What a server closing a kept-alive connection under a request looks like.
+_STALE_CONNECTION_ERRORS = (
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
 # ConnectTimeout/PoolTimeout subclass TimeoutException, so this tuple is
 # matched first: a connect or pool wait failure means nothing was sent.
 _NEVER_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)

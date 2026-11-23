@@ -1,8 +1,8 @@
 """A job's declared attempts and delay are the values that take effect.
 
-``SendMailableJob.default_retry_attempts = 5`` and ``BaseQueueable.attempts()``
-wrote ``_retry_attempts``, which nothing read — the worker reads
-``max_attempts`` — so queued mail got the default 3 tries. Likewise
+``SendMailableJob.default_retry_attempts = 5`` was written to
+``_retry_attempts``, which nothing read — the worker reads ``max_attempts`` —
+so queued mail got the default 3 tries. Likewise
 ``default_delay`` / ``job.delay(n)`` wrote ``_delay``, which
 ``PendingDispatch`` never read: it started at None and pushed the job at once.
 """
@@ -69,8 +69,9 @@ def test_a_class_level_max_attempts_still_wins():
     assert _SingleShotJob().max_attempts == 1
 
 
-def test_attempts_sets_what_the_worker_reads():
-    assert _PlainJob().attempts(7).max_attempts == 7
+def test_attempts_confirming_the_class_budget_is_accepted():
+    # A different value is refused: test_per_dispatch_attempts_is_refused.
+    assert _PlainJob().attempts(3).max_attempts == 3
 
 
 def test_a_declared_default_delay_reaches_queue_later(queue):

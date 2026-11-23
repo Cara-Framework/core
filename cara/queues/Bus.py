@@ -474,3 +474,44 @@ class Bus:
                     params[name] = value
 
         return params
+
+    @staticmethod
+    def with_dispatch_params(
+        job: Queueable, params: dict, *, keep: tuple[str, ...] = ()
+    ) -> Queueable:
+        """A copy of ``job`` whose constructor-owned state is ``params``.
+
+        ``params`` is a signed dispatch's ``init_kwargs`` (what
+        :meth:`get_dispatch_params` produced at dispatch); ``keep`` names the
+        constructor parameters (or stored ``**kwargs`` entries) whose CURRENT
+        value on ``job`` survives. Everything else a run did to those
+        attributes is undone, so serialising the copy yields the original
+        work. Built without ``copy.copy``: ``SerializesModels`` hooks
+        ``__getstate__``/``__setstate__``, which may re-read models. The
+        class's own ``__new__`` (not ``object.__new__``, which refuses a type
+        that overrides it) allocates without running the constructor.
+        """
+        names, accepts_stored_kwargs = Bus._constructor_parameters(job.__class__)
+        rebuilt = job.__class__.__new__(job.__class__)
+        current = vars(job)
+        state = vars(rebuilt)
+        state.update(current)
+        for name in names:
+            if name in keep:
+                continue
+            if name in params:
+                state[name] = params[name]
+            else:
+                # Absent at dispatch means absent from the original envelope;
+                # a value the run created must not appear on the retry.
+                state.pop(name, None)
+        stored_kwargs = current.get("kwargs")
+        if accepts_stored_kwargs and isinstance(stored_kwargs, dict):
+            # A fresh dict: the live bag may be shared by reference with the
+            # caller's services, and the run's own writes must not leak in.
+            bag = {key: value for key, value in params.items() if key not in names}
+            for key in keep:
+                if key not in names and key in stored_kwargs:
+                    bag[key] = stored_kwargs[key]
+            state["kwargs"] = bag
+        return rebuilt

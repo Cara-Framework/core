@@ -364,18 +364,20 @@ def _delivery_recover_stale_executions(
                 and int(self._row_value(row, "attempts") or 0)
                 >= self.CRASH_RECLAIM_CEILING
             ):
-                # The worker died in every execution this row has had. Going
-                # back to the outbox would re-run a body that takes its worker
-                # with it until the envelope expires, days from now.
-                target_status = self.STATUS_DEAD_LETTERED
-                reason = self.CRASH_LOOP_REASON
-                self._mark_tracker_failed(database, db_job_id, now)
-                Log.error(
-                    "Queue delivery %s dead-lettered: %s",
+                # The worker died in every execution this row has had.
+                if not self._settle_crash_loop(
+                    database,
                     job_id,
-                    reason,
-                    category="cara.queue.delivery",
-                )
+                    db_job_id,
+                    now,
+                    holds="lease_token = %s AND lease_expires_at <= %s",
+                    holds_params=[lease_token, now],
+                ):
+                    raise DeliveryLeaseLost(
+                        f"Queue delivery {job_id} lost its terminal crash recovery lease."
+                    )
+                result["reconciled"] += 1
+                continue
             elif tracker_status in {"pending", "processing", "retrying"}:
                 affected = database.statement(
                     f"UPDATE {self.table} SET status = %s, "

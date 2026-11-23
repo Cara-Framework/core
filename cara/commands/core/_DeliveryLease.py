@@ -62,7 +62,9 @@ def _hold_delivery_lease(
     job that ignored shutdown cancellation hands its row back to ``pending``
     exactly as the cancellation path does, and the broker redelivers its
     unacknowledged copy once this process's connection closes. A run that
-    outlived its budget keeps its attempt (:class:`_RunBudget`).
+    outlived its budget keeps its attempt (:class:`_RunBudget`), and one
+    whose kept attempt reaches the crash ceiling is dead-lettered by the
+    store instead of handed back.
     """
     lease_token = claim.lease_token
     deadline = claim.lease_deadline
@@ -74,9 +76,16 @@ def _hold_delivery_lease(
 
     def _release() -> None:
         if budget.outlived():
-            delivery_store.abandon_execution(job_id, lease_token, refund_attempt=False)
+            settled = delivery_store.abandon_execution(
+                job_id, lease_token, refund_attempt=False
+            )
         else:
-            delivery_store.abandon_execution(job_id, lease_token)
+            settled = delivery_store.abandon_execution(job_id, lease_token)
+        # A kept attempt at the crash ceiling was dead-lettered and its
+        # tracker failed in the store's transaction; resetting it to
+        # ``pending`` here would show a dead job as waiting.
+        if settled is True:
+            return
         if tracker is not None and db_job_id is not None:
             tracker.update_job_status_strict(db_job_id, "pending")
 
