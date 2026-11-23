@@ -12,8 +12,6 @@ from typing import Any
 
 import pendulum
 
-from cara.configuration import config
-
 
 class DateManager:
     """
@@ -378,22 +376,24 @@ class DateManager:
 
     @classmethod
     def to_user_timezone(
-        cls, date_value: Any, user_timezone: str | None = None
+        cls, date_value: Any, user_timezone: str
     ) -> pendulum.DateTime | None:
         """
-        Convert UTC date to user timezone for display.
+        Present a stored UTC instant in an EXPLICIT zone (the presentation edge).
+
+        The zone is required: it once defaulted to ``app.timezone``, a process
+        setting that is nobody's calendar (DOCTRINE §7). The caller names the
+        zone it presents in — a workspace's, a viewer's.
 
         Args:
             date_value: UTC date from database
-            user_timezone: User's timezone (from config/request)
+            user_timezone: The zone to present in
 
         Returns:
-            Date converted to user timezone
+            Date converted to that zone
         """
         if date_value is None:
             return None
-
-        user_timezone = user_timezone or config("app.timezone", "UTC")
 
         parsed_date = cls.parse(date_value, "UTC")
         if not parsed_date:
@@ -404,22 +404,23 @@ class DateManager:
 
     @classmethod
     def to_utc_for_database(
-        cls, date_value: Any, user_timezone: str | None = None
+        cls, date_value: Any, user_timezone: str
     ) -> pendulum.DateTime | None:
         """
-        Convert user timezone date to UTC for database storage.
+        The UTC instant of a wall clock read in an EXPLICIT zone.
+
+        The zone is required: a naive value means nothing until its zone is
+        named, and the default used to be ``app.timezone`` (DOCTRINE §7).
 
         Args:
-            date_value: Date in user timezone
-            user_timezone: User's timezone (from config/request)
+            date_value: Wall clock (a naive value is localized in the zone)
+            user_timezone: The zone the wall clock is in
 
         Returns:
             Date converted to UTC
         """
         if date_value is None:
             return None
-
-        user_timezone = user_timezone or config("app.timezone", "UTC")
 
         parsed_date = cls.parse(date_value, user_timezone)
         if not parsed_date:
@@ -432,11 +433,11 @@ class DateManager:
     def format_for_api(
         cls,
         date_value: Any,
-        user_timezone: str | None = None,
+        user_timezone: str,
         format_str: str | None = None,
     ) -> str | None:
         """
-        Format date for API response in user timezone.
+        Format date for API response in an explicit zone.
 
         Args:
             date_value: UTC date from database

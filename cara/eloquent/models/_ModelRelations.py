@@ -1,12 +1,10 @@
-"""Timezone, relationship and guarded bulk-write operations composed into ``Model``."""
+"""Relationship and guarded bulk-write operations composed into ``Model``."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any, Self
 
-from cara.configuration import config
-from cara.eloquent.utils.DateManager import DateManager
 from cara.exceptions import InvalidArgumentException
 
 _logger = logging.getLogger("cara.eloquent.models")
@@ -16,26 +14,6 @@ Model: type
 def _bind_model(model_type: type) -> None:
     global Model
     Model = model_type
-
-
-def _model_convert_date_to_utc_for_database(self, value):
-    """
-    Convert date value to UTC for database storage.
-
-    Args:
-        value: Date value in user timezone
-
-    Returns:
-        Date value converted to UTC
-    """
-    user_timezone = self._get_user_timezone()
-    converted_date = DateManager.to_utc_for_database(value, user_timezone)
-    return converted_date.to_datetime_string() if converted_date else value
-
-
-def _model_get_user_timezone(self) -> str:
-    """Get user timezone from config or request context."""
-    return config("app.timezone", "UTC")
 
 
 def _model_set_appends(self, appends) -> Self:

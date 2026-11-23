@@ -422,14 +422,11 @@ class Model(
     _cast_attribute = _ModelData._model_cast_attribute
     __getitem__ = _ModelData._model_getitem
     get_dates = _ModelData._model_get_dates
+    date_columns = classmethod(_ModelData._model_date_columns)
     get_new_date = _ModelData._model_get_new_date
     get_new_datetime_string = _ModelData._model_get_new_datetime_string
     get_new_serialized_date = _ModelData._model_get_new_serialized_date
 
-    _convert_date_to_utc_for_database = (
-        _ModelRelations._model_convert_date_to_utc_for_database
-    )
-    _get_user_timezone = _ModelRelations._model_get_user_timezone
     set_appends = _ModelRelations._model_set_appends
     save_many = _ModelRelations._model_save_many
     detach_many = _ModelRelations._model_detach_many

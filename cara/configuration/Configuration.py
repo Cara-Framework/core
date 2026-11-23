@@ -85,8 +85,8 @@ class Configuration:
         Never ``self._config[path]``: ``Dotty.__getitem__`` is an
         ``lru_cache`` method and ``Dotty.__hash__`` is ``hash(str(self))``, so
         that spelling renders the whole configuration tree on every read, hit
-        or miss. The ORM reads ``app.timezone`` per datetime attribute, and a
-        30-day sales export spent 29 s on it (187,534 reads, 156 us each).
+        or miss. The ORM once read ``app.timezone`` per datetime attribute, and
+        a 30-day sales export spent 29 s on it (187,534 reads, 156 us each).
         """
         try:
             return _READ_PATH(self._config, path)

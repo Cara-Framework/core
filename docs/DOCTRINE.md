@@ -323,7 +323,13 @@ framework facades.
 
 Money is `Decimal` end-to-end. Unknown is `NULL`, never 0 or "" *(a fake zero
 is a lie that averages into reports)*. Every timestamp is `TIMESTAMPTZ` in
-UTC. Multi-tenant tables carry `tenant_id` with a fail-closed scope; raw SQL
+UTC, and storage and the wire carry **aware instants only**: an ORM read
+returns an aware UTC instant, and a write given a naive date-time (or an
+offset-less string) is **refused** (`NaiveDateTimeException`, naming the
+attribute) — never interpreted in `app.timezone`; the ORM reads no
+configuration to handle time. A wall clock exists only at the presentation
+edge, converted with an explicit zone the caller names (a workspace's
+calendar zone, a viewer's). Multi-tenant tables carry `tenant_id` with a fail-closed scope; raw SQL
 binds `tenant_id` explicitly, every time. **Migrations are generated from
 models** — one file per table, no incremental `add_/alter_/fix_` files; the
 flow is model → dev-DB ALTER → regenerate → check. **Both halves of that check

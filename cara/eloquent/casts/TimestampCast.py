@@ -34,13 +34,20 @@ class TimestampCast(BaseCast):
             return None
 
     def set(self, value):
-        """Set from timestamp or datetime."""
+        """The UTC wall string of an epoch number or an AWARE date-time.
+
+        An epoch number is an instant by definition. Anything else goes
+        through ``DateTimeCast.instant`` — the one write rule — so a naive
+        value is refused (``NaiveDateTimeException``) instead of being
+        read as UTC, and every input lands as the same ``timestamptz``
+        literal (it used to return the epoch INTEGER for a datetime).
+        """
         if value is None:
             return None
 
         try:
             if isinstance(value, (int, float)):
                 return DateTimeCast.sql_instant(pendulum.from_timestamp(value))
-            return self.get(value)
+            return DateTimeCast.sql_instant(DateTimeCast.instant(value))
         except ValueError, TypeError, OverflowError:
             return None

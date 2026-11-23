@@ -33,13 +33,17 @@ def test_constructor_refuses_to_invent_an_application(monkeypatch) -> None:
         Configuration(None)
 
 
-def test_temporal_conversion_does_not_invent_utc_before_boot(monkeypatch) -> None:
+def test_temporal_presentation_names_its_zone_and_reads_no_configuration(
+    monkeypatch,
+) -> None:
+    """No ``app.timezone`` fallback: the presentation edge names the zone."""
     monkeypatch.setattr(Configuration, "_instance", None)
 
-    with pytest.raises(InvalidConfigurationSetupException):
+    with pytest.raises(TypeError):
         DateManager.to_user_timezone("2026-08-13T12:00:00Z")
-    with pytest.raises(InvalidConfigurationSetupException):
-        object.__new__(Model)._get_user_timezone()
+    presented = DateManager.to_user_timezone("2026-08-13T12:00:00Z", "Europe/Istanbul")
+    assert presented.hour == 15
+    assert not hasattr(Model, "_get_user_timezone")
 
 
 def test_preboot_exception_policy_trusts_no_external_proxy(monkeypatch) -> None:

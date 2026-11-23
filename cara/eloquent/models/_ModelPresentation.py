@@ -11,11 +11,16 @@ from datetime import time as datetimetime
 from typing import Any, Self
 
 from cara.eloquent.Integrity import is_unique_violation
-from cara.exceptions import LazyLoadingViolation, ModelNotFoundException
+from cara.exceptions import (
+    LazyLoadingViolation,
+    ModelNotFoundException,
+    NaiveDateTimeException,
+)
 from cara.facades import DB
 from cara.support import Collection, json_dumps
 
 from ..casts import cast_registry as enhanced_registry
+from ..casts.DateTimeCast import DateTimeCast
 from ..query import QueryBuilder
 
 _logger = logging.getLogger("cara.eloquent.models")
@@ -175,8 +180,10 @@ def _model_cast_value(cls, attribute: str, value: Any, row: Any = None):
     """
     Given an attribute name and a value, casts the value using the model's registered caster.
 
-    If no registered caster exists, returns the unmodified value. A column
-    in ``__seal_context__`` is sealed to ``row`` (the raw values of the row
+    An uncast date column (``__dates__``, created_at/updated_at) takes the
+    one date-time write rule (``DateTimeCast.instant``), so every write door
+    stores its UTC instant and refuses a naive one; any other uncast value is
+    returned unmodified. A column in ``__seal_context__`` is sealed to ``row`` (the raw values of the row
     it is written to) and refuses without one.
 
     Supports parametrized casts like:
@@ -185,20 +192,27 @@ def _model_cast_value(cls, attribute: str, value: Any, row: Any = None):
     - "hash:bcrypt"
     """
     cast_definition = cls.__casts__.get(attribute)
-    if not cast_definition:
-        return value
-
     if value is None:
         return None
+    if not cast_definition:
+        if attribute not in cls.date_columns():
+            return value
+        try:
+            return DateTimeCast.sql_instant(DateTimeCast.instant(value))
+        except NaiveDateTimeException as refused:
+            raise refused.on(f"{cls.__name__}.{attribute}") from None
 
     # Use new cast registry system
 
     cast_instance = enhanced_registry.get_cast_instance(cast_definition)
     if cast_instance:
         context = cls.seal_context(attribute, row)
-        if context is not None:
-            return cast_instance.set(value, context)
-        return cast_instance.set(value)
+        try:
+            if context is not None:
+                return cast_instance.set(value, context)
+            return cast_instance.set(value)
+        except NaiveDateTimeException as refused:
+            raise refused.on(f"{cls.__name__}.{attribute}") from None
 
     return value
 

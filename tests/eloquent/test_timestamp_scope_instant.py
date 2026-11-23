@@ -129,3 +129,17 @@ def test_uncast_columns_carry_their_offset_onto_the_wire(madrid_app_timezone):
     assert created.endswith("Z") or "+00:00" in created
     assert pendulum.parse(created) == _NOW
     assert updated == created
+
+
+def test_insert_scope_keeps_a_birth_its_writer_states(madrid_app_timezone):
+    """A store that keeps its own clock states when the row was born; the
+    single insert keeps it, as the bulk insert always did — only an absent
+    column is stamped now."""
+    model = _StampedModel({})
+    builder = _Builder(model)
+    builder._creates = {"created_at": "2026-07-01T09:00:00+00:00"}
+
+    TimeStampsScope().set_timestamp_create(builder)
+
+    assert builder._creates["created_at"] == "2026-07-01T09:00:00+00:00"
+    assert builder._creates["updated_at"] == _NOW.to_iso8601_string()

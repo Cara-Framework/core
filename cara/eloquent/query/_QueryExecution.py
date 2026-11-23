@@ -168,18 +168,11 @@ def _qb_update(
                 return self
             return model if loaded else 0
 
-        # Cast date fields
-        date_fields = model.get_dates()
         # A sealed column binds to the row it lands on: the loaded row's
         # identity under the new values; a model query has only the patch.
         seal_row = {**(model._seal_row() if loaded else {}), **updates}
         for key, value in updates.items():
-            if key in date_fields:
-                if value is not None:
-                    updates[key] = model.get_new_datetime_string(value)
-                else:
-                    updates[key] = value
-            # Cast value if necessary
+            # Cast value if necessary (a date column included: ``cast_value``).
             # NOTE: Must use `is not None` — NOT `if value` — because
             # falsy values like {}, [], 0, False are valid data that
             # still need casting (e.g. json.dumps({}) → "{}").

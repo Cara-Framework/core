@@ -269,13 +269,15 @@ def _model_setattr(self, attribute, value):
         if hasattr(mutator_method, "_is_mutator"):
             value = mutator_method(self, value)
 
+    # A cast owns its column's write. An uncast DATE column (``__dates__``,
+    # created_at/updated_at) takes the same instant rule as ``DateTimeCast``:
+    # an aware value is stored as its UTC instant, a naive one is refused —
+    # never re-read in ``app.timezone`` (DOCTRINE §7). Running both used to
+    # re-parse the cast's output and drop its microseconds.
     if attribute in self.__casts__:
         value = self._set_cast_attribute(attribute, value)
-
-    if attribute in self.get_dates():
-        # Convert user timezone to UTC for database storage
-        value = self._convert_date_to_utc_for_database(value)
-        value = self.get_new_datetime_string(value)
+    else:
+        value = type(self).cast_value(attribute, value)
 
     try:
         if not attribute.startswith("_"):
@@ -491,12 +493,12 @@ def _model_get_dates(self):
 
     :rtype: list
     """
-    defaults = [
-        self.date_created_at,
-        self.date_updated_at,
-    ]
+    return type(self).date_columns()
 
-    return self.__dates__ + defaults
+
+def _model_date_columns(cls) -> list[str]:
+    """The columns that are dates: ``__dates__``, created_at and updated_at."""
+    return [*cls.__dates__, cls.date_created_at, cls.date_updated_at]
 
 
 def _model_get_new_date(self, _datetime=None):
@@ -530,14 +532,18 @@ def _model_get_new_date(self, _datetime=None):
 
 def _model_get_new_datetime_string(self, _datetime=None):
     """
-    Given an optional datetime value, constructs and returns a new datetime string. If no
-    datetime is specified, returns the current time. It is a WRITE value (a
-    soft delete's ``deleted_at``), so it keeps the microseconds — see
-    ``DateTimeCast.sql_instant``.
+    The UTC wall string a date column is WRITTEN as: now when no value is
+    given, else the instant ``_datetime`` names. It is a WRITE value (a soft
+    delete's ``deleted_at``, an update of a date column), so it keeps the
+    microseconds (``DateTimeCast.sql_instant``) and follows the one write
+    rule (``DateTimeCast.instant``): a naive value raises
+    ``NaiveDateTimeException`` instead of being read as UTC.
 
     :rtype: str
     """
-    return DateTimeCast.sql_instant(self.get_new_date(_datetime))
+    if _datetime is None:
+        return DateTimeCast.sql_instant(pendulum.now("UTC"))
+    return DateTimeCast.sql_instant(DateTimeCast.instant(_datetime))
 
 
 def _model_get_new_serialized_date(self, _datetime):

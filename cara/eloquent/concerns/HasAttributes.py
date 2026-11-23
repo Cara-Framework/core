@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from cara.eloquent.casts import cast_registry
+from cara.exceptions import NaiveDateTimeException
 
 
 class HasAttributes:
@@ -77,9 +78,12 @@ class HasAttributes:
             cast_instance = cast_registry.get_cast_instance(cast_type)
             if cast_instance:
                 sealed = getattr(type(self), "__seal_context__", None) or {}
-                if value is not None and attribute in sealed:
-                    context = self.seal_context(attribute, self._seal_row())
-                    return cast_instance.set(value, context)
-                return cast_instance.set(value)
+                try:
+                    if value is not None and attribute in sealed:
+                        context = self.seal_context(attribute, self._seal_row())
+                        return cast_instance.set(value, context)
+                    return cast_instance.set(value)
+                except NaiveDateTimeException as refused:
+                    raise refused.on(f"{type(self).__name__}.{attribute}") from None
 
         return value

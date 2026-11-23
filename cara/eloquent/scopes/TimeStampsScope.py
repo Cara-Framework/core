@@ -36,13 +36,11 @@ class TimeStampsScope(BaseScope):
     def _stamp(model, column, now):
         """Render ``now`` for ``column``, keeping the instant intact.
 
-        The value handed to the cast MUST stay tz-aware. Stringifying first
-        with ``to_datetime_string()`` dropped the offset, and
-        ``DateTimeCast.set`` then re-read that naive string as APP_TIMEZONE
-        (its documented contract for product-supplied naive input) — so a
-        product on Europe/Madrid stamped every created_at/updated_at two
-        hours in the past, an instant that never happened. Passing the aware
-        ``pendulum.DateTime`` takes the offset-preserving branch instead.
+        The value handed to the cast MUST stay tz-aware: ``DateTimeCast``
+        refuses a naive write (``NaiveDateTimeException``). Stringifying
+        first with ``to_datetime_string()`` dropped the offset — once read
+        back in APP_TIMEZONE, which stamped a Europe/Madrid product's
+        created_at two hours in the past; today it would be refused.
 
         Without a cast the value goes straight into the builder, so it is
         rendered ISO-8601 WITH the offset: a naive literal into a TIMESTAMPTZ
@@ -76,12 +74,13 @@ class TimeStampsScope(BaseScope):
         model = builder._model
         timestamp_value, updated_timestamp_value = self._timestamp_values(model)
 
-        builder._creates.update(
-            {
-                model.date_updated_at: updated_timestamp_value,
-                model.date_created_at: timestamp_value,
-            }
-        )
+        # The same rule as ``set_timestamp_bulk_create``: a row whose writer
+        # STATES when it was born (a store that keeps its own clock) keeps
+        # that instant; only an absent/None column is stamped now.
+        if builder._creates.get(model.date_created_at) is None:
+            builder._creates[model.date_created_at] = timestamp_value
+        if builder._creates.get(model.date_updated_at) is None:
+            builder._creates[model.date_updated_at] = updated_timestamp_value
 
     def set_timestamp_bulk_create(self, builder):
         if not builder._model.__timestamps__:

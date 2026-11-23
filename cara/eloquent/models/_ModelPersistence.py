@@ -282,8 +282,8 @@ def _model_save(self, **kwargs: Any) -> bool:
             # populated ``__dirty_attributes__`` (via
             # HasAttributes._set_cast_attribute). Letting update()
             # re-cast would DOUBLE-cast and corrupt non-idempotent
-            # casts — e.g. DateTimeCast.set on a non-UTC APP_TIMEZONE
-            # re-shifts the timestamp on every save. Cast exactly once,
+            # casts (an encrypted value encrypted twice, a hash hashed
+            # twice). Cast exactly once,
             # at the __setattr__ boundary. (Direct .update({...}) /
             # .create({...}) callers keep casting — they never went
             # through __setattr__.)
