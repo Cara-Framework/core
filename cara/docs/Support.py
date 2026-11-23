@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from collections.abc import Callable
@@ -21,6 +22,31 @@ def read(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def _class_ends(src: str) -> dict[int, int]:
+    """``{line of a top-level class statement: the offset its body ends at}``.
+
+    The attribute patterns used to read the 2,500 characters after the
+    ``class`` line, whatever they held: an attribute behind a long docstring
+    was never reached (Synkronus published three models with a ``__table__``
+    as having none), and a short class took the attributes of the class
+    AFTER it. A class is read to its own end and no further. Empty for a
+    file that does not parse: its classes have no extent to read.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return {}
+    # ``starts[n]`` is where line ``n + 1`` begins.
+    starts = [0, *(match.end() for match in re.finditer("\n", src))]
+    return {
+        node.lineno: starts[node.end_lineno]
+        if node.end_lineno < len(starts)
+        else len(src)
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+    }
 
 
 def git_root(path: Path) -> Path | None:

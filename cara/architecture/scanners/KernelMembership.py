@@ -38,7 +38,13 @@ import ast
 import re
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import (
+    IMPORT_NODE_TYPES,
+    nodes_of,
+    parse,
+    python_files,
+    relpath,
+)
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -78,7 +84,7 @@ def _direction_violations(
         if tree is None:
             continue
         rel = relpath(path, manifest.roots.deployable)
-        for node in ast.walk(tree):
+        for node in nodes_of(tree, IMPORT_NODE_TYPES):
             bases: list[str] = []
             lineno = getattr(node, "lineno", 0)
             if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -100,9 +106,7 @@ def _direction_violations(
 def _contains_persistence_mutation(tree: ast.Module) -> bool:
     """Whether one module owns an ORM write or mutating SQL primitive."""
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node in nodes_of(tree, (ast.Call,)):
         if isinstance(node.func, ast.Attribute) and node.func.attr in (
             _MUTATION_METHODS | _ATOMIC_INVARIANT_METHODS
         ):
@@ -222,7 +226,7 @@ class KernelMembership:
                 if tree is None:
                     continue
                 rel = relpath(path, manifest.roots.deployable)
-                for node in ast.walk(tree):
+                for node in nodes_of(tree, IMPORT_NODE_TYPES):
                     if not (isinstance(node, ast.ImportFrom) and node.module):
                         continue
                     if any(
@@ -446,7 +450,7 @@ def _imported_shared_stems(
         return set()
     shared_roots = ("app.shared", f"{kernel_root}.shared")
     consumed: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes_of(tree, IMPORT_NODE_TYPES):
         if isinstance(node, ast.ImportFrom):
             if allow_relative and node.level > 0:
                 candidate = (node.module or "").split(".")[-1]

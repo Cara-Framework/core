@@ -2,8 +2,8 @@
 {{ class_name }} Event for the {{ app_name }} application.
 """
 
-from cara.eloquent.concerns import SerializesModels
-from cara.events.contracts import Event
+from cara.events import Event
+from cara.queues.contracts import SerializesModels
 
 
 class {{ class_name }}(Event, SerializesModels):

@@ -6,6 +6,7 @@ This file provides view rendering capabilities.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from cara.mail import render_mail_view
@@ -38,5 +39,13 @@ class ViewRenderer:
         if data:
             mail_data.update(data)
 
-        application = getattr(self.factory, "application", None)
-        return render_mail_view(application, template, mail_data)
+        # ``render_mail_view`` finds its search paths by resolving ``view``
+        # from the container it is handed. The ``View`` factory carries no
+        # ``application``, so it was handed ``None``, the lookup failed and
+        # the renderer fell back to ``paths("views")`` — the engine's
+        # configured ``view_paths`` (``config("view.paths")``) never applied.
+        # Handing it a resolver bound to THIS engine renders from exactly the
+        # paths this renderer was built with.
+        engine = self.engine
+        scope = SimpleNamespace(make=lambda _abstract: engine)
+        return render_mail_view(scope, template, mail_data)

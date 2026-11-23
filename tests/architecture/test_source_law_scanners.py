@@ -63,6 +63,32 @@ def test_a_domain_exception_is_the_sanctioned_shape(tmp_path: Path) -> None:
     assert _messages(HttpInBusinessLogic, tmp_path) == []
 
 
+def test_importing_the_transport_package_through_its_parent_is_a_finding(
+    tmp_path: Path,
+) -> None:
+    """``from cara import request`` binds the HTTP package itself. ``cara`` is
+    not an HTTP prefix, so the module test alone never saw it."""
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "from cara import request\n\n\ndef run():\n    return request.Request\n",
+    )
+
+    assert any(
+        "imports cara.request" in m for m in _messages(HttpInBusinessLogic, tmp_path)
+    )
+
+
+def test_a_sibling_of_a_transport_package_is_not_a_transport_type(
+    tmp_path: Path,
+) -> None:
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "from cara import facades, http_client, requests_toolbelt\n",
+    )
+
+    assert _messages(HttpInBusinessLogic, tmp_path) == []
+
+
 # ── the environment is read in config/ only ──────────────────────────
 
 
@@ -90,6 +116,62 @@ def test_a_name_imported_from_os_cannot_slip_past(tmp_path: Path) -> None:
     )
 
     assert any("via `getenv`" in m for m in _messages(EnvReadDiscipline, tmp_path))
+
+
+def test_an_aliased_os_module_cannot_slip_past(tmp_path: Path) -> None:
+    """The receiver check compared against the literal ``os``: one ``as``
+    clause made every read through the module invisible."""
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "import os as _os\n"
+        "\n"
+        "\n"
+        "def run():\n"
+        "    return _os.getenv('A'), _os.environ['B'], _os.environ.get('C')\n",
+    )
+
+    messages = _messages(EnvReadDiscipline, tmp_path)
+
+    assert any("os.getenv(...)" in m for m in messages)
+    assert any("os.environ[...]" in m for m in messages)
+    assert any("os.environ.get(...)" in m for m in messages)
+
+
+def test_an_aliased_os_module_may_still_snapshot_the_environment(
+    tmp_path: Path,
+) -> None:
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "import os as _os\n\n\ndef run():\n    return _os.environ.copy()\n",
+    )
+
+    assert _messages(EnvReadDiscipline, tmp_path) == []
+
+
+def test_an_unrelated_module_aliased_to_something_else_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "import settings as conf\n\n\ndef run():\n    return conf.getenv('A')\n",
+    )
+
+    assert _messages(EnvReadDiscipline, tmp_path) == []
+
+
+def test_importing_the_environment_module_itself_is_a_finding(tmp_path: Path) -> None:
+    """``from cara.environment import env`` was a finding; the module reached
+    as ``import cara.environment`` or ``from cara import environment`` — the
+    same helper, one attribute further away — was not."""
+    for index, statement in enumerate(
+        ("import cara.environment", "from cara import environment")
+    ):
+        root = tmp_path / str(index)
+        write(root / "app" / "services" / "Report.py", f"{statement}\n")
+
+        assert any("cara.environment" in m for m in _messages(EnvReadDiscipline, root)), (
+            statement
+        )
 
 
 def test_importing_the_env_helper_is_itself_the_finding(tmp_path: Path) -> None:

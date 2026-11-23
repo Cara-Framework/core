@@ -26,10 +26,21 @@ class LogFake:
         self.records: list[LogRecord] = []
 
     # ── Facade-compatible methods ────────────────────────────────────
+    #
+    # Each level takes the REAL ``Logger`` method's keywords and no others
+    # (``tests/testing/test_fake_facade_parity.py`` pins the two together).
+    # They used to take ``**kwargs``, so ``Log.error("failed", order_id=7)``
+    # was recorded here while the real logger raised ``TypeError`` — on the
+    # error path, where the log line was the only report of the failure.
 
-    def _record(self, level: str, message: Any, *args: Any, **kwargs: Any) -> None:
-        category = kwargs.pop("category", None)
-        kwargs.pop("exc_info", None)
+    def _record(
+        self,
+        level: str,
+        message: Any,
+        args: tuple[Any, ...],
+        category: str | None,
+        **extra: Any,
+    ) -> None:
         text = str(message)
         if args:
             try:
@@ -37,26 +48,141 @@ class LogFake:
             except TypeError, ValueError:
                 text = f"{text} {' '.join(str(a) for a in args)}"
         self.records.append(
-            LogRecord(level=level, message=text, category=category, extra=kwargs)
+            LogRecord(
+                level=level,
+                message=text,
+                category=category,
+                extra={key: value for key, value in extra.items() if value is not None},
+            )
         )
 
-    def debug(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._record("debug", message, *args, **kwargs)
+    def debug(
+        self,
+        message: Any,
+        *args: Any,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: Any = None,
+        _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        del exc_info
+        self._record(
+            "debug",
+            message,
+            args,
+            category,
+            color=color,
+            _module_override=_module_override,
+            context=context,
+        )
 
-    def info(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._record("info", message, *args, **kwargs)
+    def info(
+        self,
+        message: Any,
+        *args: Any,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: Any = None,
+        _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        del exc_info
+        self._record(
+            "info",
+            message,
+            args,
+            category,
+            color=color,
+            _module_override=_module_override,
+            context=context,
+        )
 
-    def warning(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._record("warning", message, *args, **kwargs)
+    def warning(
+        self,
+        message: Any,
+        *args: Any,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: Any = None,
+        _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        del exc_info
+        self._record(
+            "warning",
+            message,
+            args,
+            category,
+            color=color,
+            _module_override=_module_override,
+            context=context,
+        )
 
-    def error(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._record("error", message, *args, **kwargs)
+    def error(
+        self,
+        message: Any,
+        *args: Any,
+        category: str | None = None,
+        color: str | None = None,
+        exception: Exception | None = None,
+        exc_info: Any = None,
+        _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        # ``exception=`` is ``Logger.error``'s alone, as in production.
+        del exc_info
+        self._record(
+            "error",
+            message,
+            args,
+            category,
+            color=color,
+            exception=exception,
+            _module_override=_module_override,
+            context=context,
+        )
 
-    def critical(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._record("critical", message, *args, **kwargs)
+    def critical(
+        self,
+        message: Any,
+        *args: Any,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: Any = None,
+        _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        del exc_info
+        self._record(
+            "critical",
+            message,
+            args,
+            category,
+            color=color,
+            _module_override=_module_override,
+            context=context,
+        )
 
-    def exception(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._record("exception", message, *args, **kwargs)
+    def exception(
+        self,
+        message: Any,
+        *args: Any,
+        category: str | None = None,
+        exc_info: Any = True,
+        _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        # No ``color``: the real ``Logger.exception`` does not take one.
+        del exc_info
+        self._record(
+            "exception",
+            message,
+            args,
+            category,
+            _module_override=_module_override,
+            context=context,
+        )
 
     def with_context(self, **context: Any) -> _FakeContextualLogger:
         """Return a scoped fake logger that appends context tags.

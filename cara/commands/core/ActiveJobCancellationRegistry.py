@@ -23,6 +23,16 @@ class ActiveJobCancellationRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._tasks: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Task]] = {}
+        self._cancellation_requested = False
+
+    @property
+    def cancellation_requested(self) -> bool:
+        """Whether the worker has asked its jobs to stop (``cancel_all``).
+
+        What tells a shutdown interruption from a ``CancelledError`` the job
+        let escape by itself: only the first is handed back unpenalised.
+        """
+        return self._cancellation_requested
 
     def register_current(self) -> int:
         """Register the current asyncio task and return its removal token."""
@@ -42,6 +52,9 @@ class ActiveJobCancellationRegistry:
     def cancel_all(self) -> int:
         """Request cancellation on every active job's owning event loop."""
         with self._lock:
+            # Before any task is cancelled, so the job thread that sees the
+            # resulting CancelledError already reads the request.
+            self._cancellation_requested = True
             tasks = list(self._tasks.values())
 
         requested = 0

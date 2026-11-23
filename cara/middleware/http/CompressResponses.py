@@ -40,6 +40,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from cara.configuration import config
+from cara.context import ExecutionContext
 from cara.facades import Log
 from cara.http import Request, Response, append_vary
 from cara.middleware.Middleware import Middleware
@@ -67,6 +68,15 @@ _DEFAULT_COMPRESSIBLE_PREFIXES: tuple[str, ...] = (
 _DEFAULT_MIN_SIZE = 1024  # 1 KB — below this gzip overhead dominates.
 _DEFAULT_LEVEL = 6  # nginx's gzip_comp_level default.
 
+# Bodies at least this large are compressed on a worker thread. ``handle``
+# runs on the event loop, and gzip at level 6 is pure CPU: 0.4 ms for a 63 KB
+# JSON list, 5.7 ms for a 630 KB one — during which every other request on the
+# worker waits. zlib releases the GIL while it deflates, so the thread really
+# does free the loop. Below the threshold the ~30 us thread hop costs more
+# than the compression it would move (41 us at 9 KB), so small bodies stay
+# inline.
+_OFF_LOOP_MIN_SIZE = 32 * 1024
+
 
 class CompressResponses(Middleware):
     """Gzip-compress eligible responses based on Accept-Encoding."""
@@ -78,10 +88,25 @@ class CompressResponses(Middleware):
 
     @staticmethod
     def _load_config() -> tuple[bool, int, int, tuple[str, ...]]:
-        enabled = config("compression.compression.enabled", True)
-        min_size = config("compression.compression.min_size", _DEFAULT_MIN_SIZE)
-        level = config("compression.compression.level", _DEFAULT_LEVEL)
-        configured_types = config("compression.compression.content_types", None)
+        # Built per request, so read the ``COMPRESSION`` dict once rather
+        # than walk the configuration tree per key. A reader that does not
+        # return the dict (a test double keyed by full paths) is asked key
+        # by key.
+        section = config("compression.compression", None)
+        if isinstance(section, dict):
+
+            def read(name: str, default: object) -> object:
+                return section.get(name, default)
+
+        else:
+
+            def read(name: str, default: object) -> object:
+                return config(f"compression.compression.{name}", default)
+
+        enabled = read("enabled", True)
+        min_size = read("min_size", _DEFAULT_MIN_SIZE)
+        level = read("level", _DEFAULT_LEVEL)
+        configured_types = read("content_types", None)
 
         if not isinstance(enabled, bool):
             raise TypeError("Response compression enabled must be boolean")
@@ -128,7 +153,7 @@ class CompressResponses(Middleware):
             if body is None or len(body) < self._min_size:
                 return response
 
-            compressed = gzip.compress(body, compresslevel=self._level)
+            compressed = await self._gzip(body)
             # Defensive: if gzip somehow grew the payload (very short or
             # incompressible content that slipped past the type filter),
             # send the original. Re-checking here keeps a malformed
@@ -156,6 +181,14 @@ class CompressResponses(Middleware):
         return response
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    async def _gzip(self, body: bytes) -> bytes:
+        """Compress ``body``, off the event loop when it is large enough to matter."""
+        if len(body) < _OFF_LOOP_MIN_SIZE:
+            return gzip.compress(body, compresslevel=self._level)
+        return await ExecutionContext.run_in_thread(
+            gzip.compress, body, compresslevel=self._level
+        )
 
     @staticmethod
     def _accepts_gzip(request: Request) -> bool:

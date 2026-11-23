@@ -27,11 +27,14 @@ server's own text of the previous definition.
 
 from __future__ import annotations
 
+import logging
 import re
-from contextlib import suppress
 from dataclasses import replace
 
+from cara.exceptions import QueryException
 from cara.schema.ConstraintDrift import _parsed_foreign_key
+from cara.schema.DeclaredIndex import stored_name
+from cara.schema.DeclaredSpelling import _probe_table
 from cara.schema.LiveSchema import LiveSchema, sql_literal
 from cara.schema.Objects import _foreign_key_preflight, created_objects
 from cara.schema.Operation import ADDITIVE, LOCKING, Operation
@@ -50,6 +53,8 @@ _BODY_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _LANGUAGE_RE = re.compile(r"\bLANGUAGE\s+'?\"?(?P<language>\w+)", re.IGNORECASE)
+
+_logger = logging.getLogger("cara.schema")
 
 
 def _flat(text: str) -> str:
@@ -78,7 +83,7 @@ def declared_routines(model: dict) -> list[dict]:
             )
             functions.append(
                 (
-                    match["name"],
+                    stored_name(match["name"]),
                     _flat(text),
                     (language["language"] if language else "").lower(),
                 )
@@ -87,7 +92,10 @@ def declared_routines(model: dict) -> list[dict]:
         for match in _TRIGGER_RE.finditer(up):
             end = up.find(";", match.end())
             triggers.append(
-                (match["name"], up[match.start() : end if end >= 0 else None])
+                (
+                    stored_name(match["name"]),
+                    up[match.start() : end if end >= 0 else None],
+                )
             )
         if functions or triggers:
             found.append(
@@ -198,24 +206,15 @@ def read_named_ddl(
             ]
             if not wanted or table not in live.tables:
                 continue
-            probe = f"_cara_trigger_probe_{abs(hash(table)) % 10**8}"
-            try:
-                connection.query(
-                    f'CREATE TEMP TABLE "{probe}" (LIKE "{sql_literal(target)}"."{table}")',
-                    (),
-                )
-            except Exception:
-                continue
-            try:
+            with _probe_table(connection, target, table, "trigger") as probe:
+                if probe is None:
+                    continue
                 for name, statement in wanted:
                     spelled = _spell_trigger(connection, table, probe, name, statement)
                     if spelled:
                         declared.setdefault(table, {})[name] = trigger_shape(
                             spelled, table, probe
                         )
-            finally:
-                with suppress(Exception):
-                    connection.query(f'DROP TABLE IF EXISTS "{probe}"', ())
     finally:
         manager.release(connection)
     return replace(
@@ -236,7 +235,10 @@ def _spell_trigger(connection, table: str, probe: str, name: str, statement: str
             "WHERE tgrelid = %s::regclass AND tgname = %s",
             (f'pg_temp."{probe}"', name),
         )
-    except Exception:
+    except QueryException:
+        # A declared trigger the probe cannot build is left unspelled, never
+        # called changed. A lost database is not that, and propagates.
+        _logger.debug("trigger probe could not build %s", name, exc_info=True)
         return None
     row = rows[0] if isinstance(rows, list) and rows else rows
     return (

@@ -15,9 +15,12 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import logging
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger("cara.openapi")
 
 
 def _inert(value: Any) -> bool:
@@ -73,6 +76,42 @@ def _static_call(node: ast.Call, values: dict[str, Any]) -> Any:
     return None
 
 
+def _static_fstring(node: ast.JoinedStr, values: dict[str, Any]) -> str | None:
+    """An f-string whose every placeholder resolves to an inert constant.
+
+    Rule CONSTANTS are built this way (``LANE_RULE = f"in:{','.join(KEYS)}"``)
+    and then referenced by name from ``rules()``; without this the constant
+    resolved to nothing and the published rule stayed partial although every
+    piece of it was plain data.
+    """
+    chunks: list[str] = []
+    for part in node.values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            chunks.append(part.value)
+            continue
+        if not isinstance(part, ast.FormattedValue):
+            return None
+        value = _static_value(part.value, values)
+        if value is None or not _inert(value):
+            return None
+        if part.conversion == ord("r"):
+            value = repr(value)
+        elif part.conversion == ord("a"):
+            value = ascii(value)
+        elif part.conversion == ord("s"):
+            value = str(value)
+        spec = ""
+        if part.format_spec is not None:
+            spec = _static_value(part.format_spec, values)
+            if not isinstance(spec, str):
+                return None
+        try:
+            chunks.append(format(value, spec))
+        except TypeError, ValueError:
+            return None
+    return "".join(chunks)
+
+
 def _static_value(node: ast.AST, values: dict[str, Any]) -> Any:
     """Evaluate only inert literal expressions used by request constants."""
     if isinstance(node, ast.Constant):
@@ -91,6 +130,8 @@ def _static_value(node: ast.AST, values: dict[str, Any]) -> Any:
         return attribute if _inert(attribute) else None
     if isinstance(node, ast.Call):
         return _static_call(node, values)
+    if isinstance(node, ast.JoinedStr):
+        return _static_fstring(node, values)
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         resolved = [_static_value(item, values) for item in node.elts]
         if any(value is None for value in resolved):
@@ -201,6 +242,13 @@ def _external_values(
         try:
             module = importlib.import_module(node.module)
         except Exception:  # noqa: BLE001 — an unimportable module documents nothing
+            # Reported, not swallowed: every rule built from this module's
+            # names is published partial, and the reason belongs in the log.
+            _logger.warning(
+                "OpenAPI: request constants from %s are unresolved (import failed)",
+                node.module,
+                exc_info=True,
+            )
             continue
         for alias in node.names:
             try:
@@ -211,6 +259,12 @@ def _external_values(
                 try:
                     value = getattr(module, alias.name)
                 except Exception:  # noqa: BLE001 — unresolvable stays partial
+                    _logger.warning(
+                        "OpenAPI: request constant %s.%s is unresolved",
+                        node.module,
+                        alias.name,
+                        exc_info=True,
+                    )
                     continue
             if isinstance(value, type) or _inert(value):
                 found[alias.asname or alias.name] = value

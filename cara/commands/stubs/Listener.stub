@@ -2,9 +2,8 @@
 {{ class_name }} Listener for handling events.
 """
 
-from cara.events.contracts import Event, Listener
-from cara.eloquent.concerns import SerializesModels
-from cara.queues.contracts import ShouldQueue
+from cara.events import Event, Listener
+from cara.queues.contracts import SerializesModels, ShouldQueue
 
 
 class {{ class_name }}(Listener, ShouldQueue, SerializesModels):

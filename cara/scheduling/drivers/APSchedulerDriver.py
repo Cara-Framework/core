@@ -13,27 +13,38 @@ scheduler to sit idle for hours.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
 import logging
 import os
+import threading
 import time as _time
 import uuid as _uuid
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from cara.broadcasting import drained
 from cara.exceptions import InvalidArgumentException
 from cara.facades import Cache as _Cache
 from cara.facades import Log
 from cara.observability import MetricsBase
-from cara.queues import ConcurrencyExceeded
+from cara.queues import ConcurrencyExceeded, JobThrottledException
 from cara.scheduling.contracts import SchedulingContract
+
+from . import _ScheduleTriggers
 
 _logger = logging.getLogger("cara.scheduling")
 
 #: Every ``outcome`` a fire records on ``scheduled_tasks_total``.
 _OUTCOMES = ("success", "failure", "throttled", "missed", "skipped")
+
+# A failed overlap-lock release is retried this many times, a short pause
+# apart, before its token is left for the next fire to release: a cache blip
+# usually clears within a fraction of a second.
+_RELEASE_ATTEMPTS = 3
+_RELEASE_RETRY_DELAY_SECONDS = 0.2
 
 # ── Prometheus instrumentation wrapper ────────────────────────────────
 
@@ -75,25 +86,6 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
         with contextlib.suppress(AttributeError, TypeError):
             metrics.scheduler_last_tick_timestamp_seconds.set(_time.time())
 
-    if inspect.iscoroutinefunction(callback):
-
-        async def _async_wrapped(*a, **kw):
-            _mark_tick()
-            start = _time.time()
-            try:
-                result = await callback(*a, **kw)
-                _observe("success", _time.time() - start)
-                return result
-            except ConcurrencyExceeded:
-                _observe("throttled", _time.time() - start)
-                raise
-            except Exception:
-                _observe("failure", _time.time() - start)
-                raise
-
-        _async_wrapped.__name__ = getattr(callback, "__name__", f"scheduled_{identifier}")
-        return _async_wrapped
-
     def _sync_wrapped(*a, **kw):
         _mark_tick()
         start = _time.time()
@@ -108,6 +100,14 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
             # rules do not double-count it (live 2026-11-01).
             _observe("throttled", _time.time() - start)
             raise
+        except JobThrottledException:
+            # The job's own gate refused the fire before its body ran (the
+            # previous tick still holds the overlap lock, a cooldown, a rate
+            # limit). Nothing ran, so this is the same "skipped" this driver
+            # gives a fire its own overlap lock skips. The registration used
+            # to swallow the refusal and the fire was counted a success.
+            _count_skipped_fire(identifier)
+            return None
         except Exception:
             _observe("failure", _time.time() - start)
             raise
@@ -129,8 +129,8 @@ def _wrap_without_overlapping(
     without pulling in a new dependency.
 
     On contention the run is *skipped*, not queued — matching Laravel's
-    ``withoutOverlapping`` semantics. The lock TTL caps tail damage if the
-    holder crashes before releasing.
+    ``withoutOverlapping`` semantics — and counted as ``skipped``. The lock
+    TTL caps tail damage if the holder crashes before releasing.
 
     OWNER-FENCED: each fire acquires with a UNIQUE ``{pid}:{uuid}`` owner token
     (``add``, atomic SET-NX) and releases with ``forget_if(key, owner)`` (atomic
@@ -139,39 +139,50 @@ def _wrap_without_overlapping(
     a peer/pod re-acquired) would delete the PEER's freshly-acquired lock on its
     ``finally`` — letting a third fire start while two were already running. The
     token makes release delete ONLY our own still-held lock.
+
+    A release that fails (a cache blip) is retried briefly, logged, and its
+    token REMEMBERED: the next fire in this process first releases that
+    token again — still compare-and-delete, so a lock a peer has since taken
+    is never touched. Before, one failed release left the entry skipping
+    every fire for the whole lock TTL (a day by default) with nothing logged
+    above DEBUG.
     """
 
     lock_key = f"scheduler:lock:{identifier}"
+    unreleased: set[str] = set()
+    unreleased_guard = threading.Lock()
 
     def _new_owner() -> str:
         return f"{os.getpid()}:{_uuid.uuid4().hex}"
 
-    def _release(owner: str) -> None:
-        try:
-            _Cache.forget_if(lock_key, owner)
-        except Exception:
-            _logger.debug("lock release failed for %s", identifier, exc_info=True)
-
-    if inspect.iscoroutinefunction(callback):
-
-        async def _async_locked(*a, **kw):
-            owner = _new_owner()
-            if not _Cache.add(lock_key, owner, lock_timeout):
-                Log.info(
-                    "Scheduled job '%s' skipped — previous run still in flight.",
+    def _release(owner: str, attempts: int) -> bool:
+        for attempt in range(attempts):
+            try:
+                _Cache.forget_if(lock_key, owner)
+                return True
+            except Exception:
+                if attempt + 1 < attempts:
+                    _time.sleep(_RELEASE_RETRY_DELAY_SECONDS * (attempt + 1))
+                    continue
+                Log.warning(
+                    "Scheduled job '%s' could not release its overlap lock; "
+                    "the next fire retries the release.",
                     identifier,
                     category="scheduler",
+                    exc_info=True,
                 )
-                return None
-            try:
-                return await callback(*a, **kw)
-            finally:
-                _release(owner)
+        return False
 
-        _async_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
-        return _async_locked
+    def _release_leftovers() -> None:
+        with unreleased_guard:
+            leftovers = list(unreleased)
+        for owner in leftovers:
+            if _release(owner, attempts=1):
+                with unreleased_guard:
+                    unreleased.discard(owner)
 
     def _sync_locked(*a, **kw):
+        _release_leftovers()
         owner = _new_owner()
         if not _Cache.add(lock_key, owner, lock_timeout):
             Log.info(
@@ -179,14 +190,44 @@ def _wrap_without_overlapping(
                 identifier,
                 category="scheduler",
             )
+            _count_skipped_fire(identifier)
             return None
         try:
             return callback(*a, **kw)
         finally:
-            _release(owner)
+            if not _release(owner, attempts=_RELEASE_ATTEMPTS):
+                with unreleased_guard:
+                    unreleased.add(owner)
 
     _sync_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
     return _sync_locked
+
+
+def _count_skipped_fire(identifier: str) -> None:
+    with contextlib.suppress(AttributeError, TypeError):
+        MetricsBase.scheduled_tasks_total.labels(task=identifier, outcome="skipped").inc()
+
+
+def _run_to_completion(identifier: str, callback: Callable) -> Callable:
+    """A sync callable that runs whatever ``callback`` returns to completion.
+
+    The engine's executors call the job and keep what it returns: handed a
+    coroutine function (or a sync wrapper returning a coroutine) they
+    dropped the coroutine, so the body never ran while the fire was logged
+    and counted as a success (``run_all`` too). Every job therefore reaches
+    the engine sync; an awaitable result runs on its own loop in the
+    executor thread, drained like a queue job's, and its exception
+    propagates as the fire's failure.
+    """
+
+    def _awaited(*a, **kw):
+        result = callback(*a, **kw)
+        if inspect.isawaitable(result):
+            return asyncio.run(drained(result))
+        return result
+
+    _awaited.__name__ = getattr(callback, "__name__", f"awaited_{identifier}")
+    return _awaited
 
 
 # ── Catch-up memory ───────────────────────────────────────────────────
@@ -218,23 +259,6 @@ def _wrap_catch_up(identifier: str, callback: Callable) -> Callable:
             _Cache.put(_last_fire_key(identifier), fired_at, _CATCH_UP_MEMORY_SECONDS)
         except Exception:
             _logger.warning("catch-up stamp failed for %s", identifier, exc_info=True)
-
-    if inspect.iscoroutinefunction(callback):
-
-        async def _async_remembered(*a, **kw):
-            fired_at = _time.time()
-            try:
-                result = await callback(*a, **kw)
-            except Exception:
-                _record(fired_at)
-                raise
-            _record(fired_at)
-            return result
-
-        _async_remembered.__name__ = getattr(
-            callback, "__name__", f"remembered_{identifier}"
-        )
-        return _async_remembered
 
     def _sync_remembered(*a, **kw):
         fired_at = _time.time()
@@ -372,6 +396,10 @@ class APSchedulerDriver(SchedulingContract):
         # scheduler that churns jobs cannot leak the map.
         self._snapshot_meta: dict[str, dict] = {}
 
+        # The outcome of the last ``run_all`` pass (``schedule:work --once``).
+        self.last_run_failures = 0
+        self.last_run_failed_ids: list[str] = []
+
         self.scheduler = self._create_scheduler()
 
     # ── Scheduler creation ────────────────────────────────────────────
@@ -444,9 +472,15 @@ class APSchedulerDriver(SchedulingContract):
     ) -> None:
         silent = bool(options.get("silent", False))
 
-        trigger = self._build_trigger(schedule_spec)
+        try:
+            trigger = self._build_trigger(schedule_spec)
+        except InvalidArgumentException as e:
+            # Name the entry: a refusal at boot must say which one to fix.
+            raise InvalidArgumentException(f"Scheduled job '{identifier}': {e}") from e
         _zero_outcome_series(identifier)
-        instrumented = _instrument_scheduled(identifier, callback)
+        instrumented = _instrument_scheduled(
+            identifier, _run_to_completion(identifier, callback)
+        )
         catch_up = isinstance(options, dict) and bool(options.get("catch_up"))
         if catch_up:
             instrumented = _wrap_catch_up(identifier, instrumented)
@@ -471,6 +505,7 @@ class APSchedulerDriver(SchedulingContract):
         executor = options.get("executor") if isinstance(options, dict) else None
         if executor:
             job_opts.setdefault("executor", str(executor))
+        self._refuse_undeclared_executor(identifier, job_opts.get("executor"))
 
         # Opaque snapshot metadata rides options straight through to the
         # snapshot publisher. Re-registering an id replaces its metadata
@@ -516,6 +551,24 @@ class APSchedulerDriver(SchedulingContract):
         if not silent:
             Log.info("Registered scheduled job '%s'.", identifier)
 
+    def _refuse_undeclared_executor(self, identifier: str, executor: Any) -> None:
+        """Refuse an entry whose executor pool the settings do not declare.
+
+        The engine looks the executor up only when the job first falls due,
+        then logs to its own logger and REMOVES the job: the entry was
+        accepted, listed at boot, and never ran. ``default`` always exists —
+        the engine creates it when the settings name none.
+        """
+        if not executor:
+            return
+        declared = {"default", *(self._settings.get("executors") or {})}
+        if str(executor) not in declared:
+            raise InvalidArgumentException(
+                f"Scheduled job '{identifier}' names executor {str(executor)!r}, "
+                f"which the scheduler settings do not declare "
+                f"(declared: {', '.join(sorted(declared))})."
+            )
+
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -560,19 +613,28 @@ class APSchedulerDriver(SchedulingContract):
         Powers ``schedule:work --once`` — runs the callbacks inline
         instead of starting the background cron engine (which would
         never fire before the command exits).
+
+        Returns the number that succeeded, as before. A failing task is
+        logged and the pass carries on; how many failed (and which) is left
+        on ``last_run_failures`` / ``last_run_failed_ids`` so the caller can
+        exit non-zero without inferring failures from the success count.
         """
         executed = 0
+        failed: list[str] = []
         for identifier, callback, _trigger, _job_opts in list(self._job_registry):
             try:
                 callback()
                 executed += 1
             except Exception as e:
+                failed.append(identifier)
                 Log.error(
                     "Job '%s' failed during run-once: %s",
                     identifier,
                     e,
                     exc_info=True,
                 )
+        self.last_run_failures = len(failed)
+        self.last_run_failed_ids = failed
         return executed
 
     def shutdown(self, wait: bool = True) -> None:
@@ -618,83 +680,6 @@ class APSchedulerDriver(SchedulingContract):
             _logger.warning("list_jobs failed, returning empty", exc_info=True)
             return []
 
-    # ── Trigger builders ──────────────────────────────────────────────
-
-    def _build_trigger(self, spec: dict[str, Any]):
-        sched_type = spec.get("type")
-        if not sched_type:
-            raise InvalidArgumentException("schedule_spec must include 'type' key.")
-
-        from apscheduler.triggers.cron import CronTrigger  # local: heavy optional dep
-        from apscheduler.triggers.date import DateTrigger  # local: heavy optional dep
-        from apscheduler.triggers.interval import (
-            IntervalTrigger,  # local: heavy optional dep
-        )
-
-        # Fall back to the scheduler-configured timezone (e.g. "UTC") when a
-        # job spec doesn't set its own. Pre-fix this was bare
-        # ``spec.get("timezone")`` → ``None`` for every dict-config cron, and
-        # APScheduler resolves ``timezone=None`` to the LOCAL OS timezone at
-        # construction, NOT the scheduler default — so on a non-UTC host every
-        # "daily at 03:00" cron fired at 03:00 local while its SQL window used
-        # pendulum.now("UTC"), shifting the job off its data window. (Masked in
-        # prod only because the slim base image happens to be UTC.)
-        tz = spec.get("timezone") or self._settings.get("timezone")
-
-        if sched_type == "interval":
-            return IntervalTrigger(
-                seconds=spec.get("seconds", 0),
-                minutes=spec.get("minutes", 0),
-                hours=spec.get("hours", 0),
-                days=spec.get("days", 0),
-                weeks=spec.get("weeks", 0),
-                timezone=tz,
-            )
-        elif sched_type == "cron":
-            expr = spec.get("expression", "")
-            if not isinstance(expr, str) or not expr.strip():
-                raise InvalidArgumentException("Cron type requires 'expression' string.")
-            parts = expr.split()
-            if len(parts) != 5:
-                raise InvalidArgumentException(
-                    "Cron expression must have 5 fields: minute hour day month day_of_week"
-                )
-            minute, hour, day, month, day_of_week = parts
-            return CronTrigger(
-                minute=minute,
-                hour=hour,
-                day=day,
-                month=month,
-                day_of_week=day_of_week,
-                timezone=tz,
-            )
-        elif sched_type == "daily":
-            return CronTrigger(
-                hour=spec.get("hour", 0),
-                minute=spec.get("minute", 0),
-                timezone=tz,
-            )
-        elif sched_type == "hourly":
-            return CronTrigger(minute=spec.get("minute", 0), timezone=tz)
-        elif sched_type == "weekly":
-            return CronTrigger(
-                minute=spec.get("minute", 0),
-                hour=spec.get("hour", 0),
-                day="*",
-                month="*",
-                day_of_week=spec.get("day_of_week"),
-                timezone=tz,
-            )
-        elif sched_type in ("date", "at"):
-            # "at" is the canonical name from the Scheduling contract and
-            # ScheduleBuilder.at(); "date" mirrors APScheduler's own
-            # trigger name.  Pre-fix only "date" was handled — every
-            # ScheduleBuilder.at() call raised InvalidArgumentException
-            # because the builder emits type="at" (matching the contract
-            # docstring) but the driver only checked for "date".
-            run_date = spec.get("run_date")
-            if not run_date:
-                raise InvalidArgumentException("Date/at type requires 'run_date'.")
-            return DateTrigger(run_date=run_date, timezone=tz)
-        else:
-            raise InvalidArgumentException(f"Unknown schedule type: {sched_type}")
+    # Spec → engine trigger (and the crontab weekday translation) lives in
+    # ``_ScheduleTriggers``; bound here so it stays this driver's method.
+    _build_trigger = _ScheduleTriggers._build_trigger

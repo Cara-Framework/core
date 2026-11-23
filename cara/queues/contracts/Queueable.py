@@ -31,9 +31,12 @@ class Queueable(SerializesModels):
         self._job_tracker: Any | None = None  # Lazy-loaded from container
         self._db_job_id: int | None = None  # Database job ID for unified tracking
 
-        # Laravel-style properties
+        # Laravel-style properties. The delay lives on ``_delay``: an instance
+        # attribute named ``delay`` shadowed ``BaseQueueable.delay()`` and
+        # ``BaseNotification.delay()``, so ``job.delay(30)`` raised
+        # ``TypeError: 'NoneType' object is not callable``.
         self.queue = None
-        self.delay = None
+        self._delay = None
         self.connection = None
 
     def set_tracking_id(self, tracking_id: str) -> Queueable:
@@ -55,7 +58,7 @@ class Queueable(SerializesModels):
             **super().serialize(),
             "job_tracking_id": self.job_tracking_id,
             "queue": self.queue,
-            "delay": self.delay,
+            "delay": self._delay,
             "connection": self.connection,
         }
 
@@ -64,7 +67,7 @@ class Queueable(SerializesModels):
         super().unserialize(data)
         self.job_tracking_id = data.get("job_tracking_id")
         self.queue = data.get("queue", "default")
-        self.delay = data.get("delay")
+        self._delay = data.get("delay")
         self.connection = data.get("connection")
 
     def __repr__(self):

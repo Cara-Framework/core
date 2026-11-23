@@ -6,11 +6,18 @@ Encapsulates validation, authorization, and custom validation hooks for a single
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import Any
 
 from cara.configuration import config
+from cara.context import ExecutionContext
 from cara.exceptions import AuthorizationFailedException, ValidationException
+from cara.facades import DB
 from cara.validation import Validation
+
+#: Rules that answer by querying the database (``exists``/``unique`` one row,
+#: ``batch_exists`` one set). See ``FormRequest._run_rules``.
+_QUERYING_RULES = frozenset({"exists", "unique", "batch_exists"})
 
 
 class FormRequest:
@@ -73,8 +80,7 @@ class FormRequest:
         rules = self.rules()
         self._refuse_undeclared_keys(request, sent, data, rules)
 
-        validator = Validation.make(data, rules, self.messages())
-        validator.after(self.after)
+        validator = await self._run_rules(data, rules)
 
         if validator.fails():
             raise ValidationException(validation_errors=validator.errors())
@@ -85,6 +91,58 @@ class FormRequest:
             request.validated = validated
 
         return validated
+
+    async def _run_rules(self, data: Any, rules: dict[str, Any]) -> Validation:
+        """Run ``rules`` (and ``after``) over ``data``; the finished validator.
+
+        A rule that queries the database (``_QUERYING_RULES``) runs its
+        synchronous query inside ``Validation.make``; inline, every such
+        request held the event loop for a database round trip. The whole run
+        goes to a worker thread then, the way the auth middleware resolves
+        its user (``ExecutionContext.run_in_thread``, context vars copied).
+
+        Inline still when this context holds an open transaction: a worker
+        thread gets its own connection and could not see the transaction's
+        uncommitted rows, so an ``exists`` on a row written earlier in the
+        same unit of work would refuse it.
+        """
+
+        def run() -> Validation:
+            validator = Validation.make(data, rules, self.messages())
+            validator.after(self.after)
+            # Settle the verdict (after-callbacks included) here, where the
+            # rules ran, so no query is left for the caller's thread.
+            validator.fails()
+            return validator
+
+        if self._queries_the_database(rules) and not self._holds_a_transaction():
+            return await ExecutionContext.run_in_thread(run)
+        return run()
+
+    @staticmethod
+    def _queries_the_database(rules: dict[str, Any]) -> bool:
+        for rule_string in rules.values():
+            if not isinstance(rule_string, str):
+                continue
+            for token in rule_string.split("|"):
+                if token.split(":", 1)[0].strip().lower() in _QUERYING_RULES:
+                    return True
+        return False
+
+    @staticmethod
+    def _holds_a_transaction() -> bool:
+        """Whether this context has a transaction open on the default connection.
+
+        When the database layer cannot answer, nothing proves the context is
+        transaction-free, so the rules run inline as they always did.
+        """
+        try:
+            return DB.transaction_level() > 0
+        except Exception as exc:
+            logging.getLogger("cara.http.form_request").debug(
+                "transaction depth unavailable, validating inline: %s", exc
+            )
+            return True
 
     #: Per-request override of the product setting: ``True``/``False`` pins
     #: this door, ``None`` follows ``server.refuse_unknown_request_keys``.

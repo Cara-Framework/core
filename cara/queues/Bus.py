@@ -105,6 +105,10 @@ class Bus:
                 unique_key = job.unique_id()
 
             params = Bus.get_dispatch_params(job)
+            # The job is rebuilt from its constructor parameters, which do not
+            # carry a delay set on the instance (``job.delay(n)`` or the
+            # class's ``default_delay``): without this it was silently dropped.
+            delay = delay or getattr(job, "_delay", None)
             dispatch_call = job.__class__.dispatch(**params)
             if routing_key:
                 dispatch_call.with_routing_key(routing_key)
@@ -297,9 +301,8 @@ class Bus:
 
             return result
 
-        except JobThrottledException:
-            if tracker and job_id:
-                tracker.update_job_status(job_id, "throttled")
+        except JobThrottledException as throttle:
+            Bus._record_sync_throttle(tracker, job_id, throttle)
             return None
 
         except Exception as e:
@@ -310,6 +313,62 @@ class Bus:
                 job._mark_failed(str(e), should_retry=False)
 
             raise
+
+        except BaseException as interruption:
+            Bus._record_sync_interruption(tracker, job_id, interruption)
+            raise
+
+    @staticmethod
+    def _record_sync_interruption(
+        tracker: JobTracker | None, job_id: int | None, interruption: BaseException
+    ) -> None:
+        """Settle the tracked row of an inline run that was cancelled mid-body.
+
+        ``CancelledError`` is not an ``Exception``: when the task awaiting an
+        inline run was cancelled (its parent job's timeout or shutdown cancel,
+        a lost lease fence, a dropped request, Ctrl+C) neither handler above
+        saw it, and the row stayed ``processing`` for ever — nothing
+        redelivers an inline run. Guarded like every tracking write here, so
+        the cancellation the caller must see is never replaced.
+        """
+        if not tracker or not job_id:
+            return
+        try:
+            tracker.track_job_interrupted(job_id, type(interruption).__name__)
+        except Exception as exc:
+            facades.Log.warning(
+                "Failed to record interrupted sync job %s: %s",
+                job_id,
+                exc,
+                category="cara.queue.jobs",
+            )
+
+    @staticmethod
+    def _record_sync_throttle(
+        tracker: JobTracker | None, job_id: int | None, throttle: BaseException
+    ) -> None:
+        """Settle the tracked row of an inline run a gate refused.
+
+        This wrote the status ``throttled``, a word no tracked-job vocabulary
+        declares: the job table's CHECK constraint refused the UPDATE, the
+        error left through this handler, and a dispatch that should have been
+        a quiet skip raised a database error at its caller with the row stuck
+        at ``processing`` (audit, 2026-11-23). The tracker owns the word now
+        (:meth:`JobTracker.track_job_throttled`), and the write is guarded
+        like every other tracking write on this path: tracking is
+        observability and never fails the dispatch it observes.
+        """
+        if not tracker or not job_id:
+            return
+        try:
+            tracker.track_job_throttled(job_id, str(throttle))
+        except Exception as exc:
+            facades.Log.warning(
+                "Failed to record throttled sync job %s: %s",
+                job_id,
+                exc,
+                category="cara.queue.jobs",
+            )
 
     @staticmethod
     def _resolve_application() -> Any:

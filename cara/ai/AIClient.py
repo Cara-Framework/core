@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import random
 import time
 from typing import Any
 
@@ -21,6 +22,7 @@ from cara.ai.AIResponseError import AIResponseError
 from cara.ai.Parsing import parse_json as _parse_json
 from cara.context import ExecutionContext
 from cara.facades import Log
+from cara.support import retry_after_seconds
 
 
 def _log(level: str, msg: str) -> None:
@@ -245,6 +247,7 @@ class AIClient:
                         f"AI timeout [{self.provider.value}/{attempt_model}] retry={retry}",
                     )
                     self._on_attempt_error(attempt_model, e, None, retry)
+                    self._sleep_before_retry(attempt_model, retry, "timeout")
                 except requests.exceptions.HTTPError as e:
                     status = getattr(e.response, "status_code", "?")
                     body = (getattr(e.response, "text", "") or "")[:200]
@@ -257,23 +260,22 @@ class AIClient:
                     if status in (400, 401, 403, 404):
                         break
                     if status == 429:
-                        retry_after_raw = (
-                            (e.response.headers or {}).get("Retry-After")
-                            if e.response
-                            else None
-                        )
-                        try:
-                            wait_s = float(retry_after_raw) if retry_after_raw else 0.0
-                        except TypeError, ValueError:
-                            wait_s = 0.0
-                        if wait_s <= 0:
-                            wait_s = self._backoff_seconds(retry, status=429)
+                        if retry >= self.max_retries:
+                            # No attempt follows on this model: a wait here
+                            # only holds the worker before the fallback (or
+                            # the raise). It used to sleep anyway.
+                            continue
+                        wait_s = self._rate_limit_wait_seconds(e.response, retry)
                         _log(
                             "warning",
                             f"AI 429 [{self.provider.value}/{attempt_model}] "
                             f"backing off {wait_s:.1f}s",
                         )
                         time.sleep(wait_s)
+                    elif isinstance(status, int) and status >= 500:
+                        self._sleep_before_retry(
+                            attempt_model, retry, f"HTTP {status}", status=status
+                        )
                 except Exception as e:  # record and retry/fallback
                     last_error = e
                     _log("error", f"AI fail [{self.provider.value}/{attempt_model}]: {e}")
@@ -413,10 +415,63 @@ class AIClient:
         Default: no-op. Override for metrics / breakers / cooldowns; must
         never raise into the caller."""
 
+    #: Longest ``Retry-After`` honoured for one retry (the default backoff's
+    #: own ceiling), further bounded by one attempt's ``timeout``.
+    MAX_RETRY_AFTER_SECONDS = 30.0
+
+    def _rate_limit_wait_seconds(self, response: Any, retry: int) -> float:
+        """Wait before retrying a 429: the provider's ``Retry-After`` when it
+        named one, else :meth:`_backoff_seconds`.
+
+        ``if e.response`` guarded this read, and a ``requests.Response`` is
+        falsy for every 4xx/5xx (``__bool__`` is ``.ok``) — so the header was
+        never read and a provider asking for 7 s was retried after 1 s. The
+        wait is capped at one attempt's ``timeout``: a throttled attempt
+        answers at once, so wait + retry stays inside the
+        ``(max_retries + 1) * timeout`` worst case callers budget for.
+        """
+        named = retry_after_seconds(
+            getattr(response, "headers", None),
+            cap=min(self.MAX_RETRY_AFTER_SECONDS, float(self.timeout)),
+        )
+        if named is not None and named > 0:
+            return named
+        return self._backoff_seconds(retry, status=429)
+
     def _backoff_seconds(self, retry: int, *, status: int | None = None) -> float:
         """Wait before the next retry when the provider gave no explicit
         ``Retry-After``. Default: capped exponential."""
         return float(min(2**retry, 30))
+
+    def _sleep_before_retry(
+        self, model: str, retry: int, reason: str, *, status: int | None = None
+    ) -> None:
+        """Back off before retrying a 5xx or a timeout.
+
+        These were retried at once: a provider that is down or overloaded was
+        hit again within milliseconds, ``max_retries`` times per model, by
+        every worker in step. Now: :meth:`_backoff_seconds` (exponential),
+        bounded like a 429's wait by ``min(MAX_RETRY_AFTER_SECONDS, timeout)``
+        so the ``(max_retries + 1) * timeout`` worst case still holds, then
+        jittered into its upper half so concurrent callers spread out while
+        no retry comes back instantly. Nothing follows the last attempt on a
+        model (the fallback model or the raise), so no wait there.
+        """
+        if retry >= self.max_retries:
+            return
+        cap = min(self.MAX_RETRY_AFTER_SECONDS, float(self.timeout))
+        base = min(self._backoff_seconds(retry, status=status), cap)
+        wait_s = base * (0.5 + 0.5 * self._jitter())
+        _log(
+            "warning",
+            f"AI {reason} [{self.provider.value}/{model}] backing off {wait_s:.2f}s",
+        )
+        time.sleep(wait_s)
+
+    @staticmethod
+    def _jitter() -> float:
+        """A fraction in ``[0, 1)`` that spreads retry waits (test seam)."""
+        return random.random()
 
     # -- provider dispatch ------------------------------------------------ #
 
@@ -484,7 +539,11 @@ class AIClient:
                 f"AI provider returned no choices "
                 f"(model={data.get('model')!r}, error={data.get('error')!r})"
             )
-        content = (choices[0].get("message") or {}).get("content", "").strip()
+        # ``content`` is JSON null on a refusal, a content filter or a tool
+        # call: ``.get("content", "")`` returned that None and ``.strip()``
+        # raised, so every retry and the fallback model were spent on an
+        # answer that had already arrived (finish_reason says why it is empty).
+        content = str((choices[0].get("message") or {}).get("content") or "").strip()
         usage = dict(data.get("usage") or {})
         finish_reason = choices[0].get("finish_reason")
         if finish_reason:
@@ -528,7 +587,7 @@ class AIClient:
             ) from e
         if "error" in data:
             raise AIResponseError(f"Ollama error: {data['error']}")
-        content = (data.get("message") or {}).get("content", "").strip()
+        content = str((data.get("message") or {}).get("content") or "").strip()
         usage: dict[str, Any] = {
             "prompt_tokens": data.get("prompt_eval_count"),
             "completion_tokens": data.get("eval_count"),

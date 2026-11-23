@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import annotationlib
 import inspect
+import weakref
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,6 +17,18 @@ from cara.exceptions import ConfigurationException
 
 if TYPE_CHECKING:
     from .Middleware import Middleware
+
+#: Middleware class → its ``__init__`` parameter definitions. A parameterized
+#: route middleware (``throttle:api``, ``as_of:orders``) is instantiated on
+#: every request that reaches it, and each instantiation used to re-run
+#: ``inspect.signature`` and re-EVALUATE every string annotation
+#: (``annotationlib.ForwardRef(...).evaluate`` compiles and evals source text).
+#: A class's signature cannot change while the process runs, so it is read
+#: once. Weak keys: a class built in a test or dropped by a reload is not
+#: pinned by this table.
+_DEFINITIONS: weakref.WeakKeyDictionary[type, dict[str, dict[str, Any]]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 class MiddlewareParameterParser:
@@ -51,7 +64,10 @@ class MiddlewareParameterParser:
     def _extract_parameter_definitions(
         middleware_class: type[Middleware],
     ) -> dict[str, dict[str, Any]]:
-        """Extract parameter definitions from __init__ signature."""
+        """Extract parameter definitions from __init__ signature (read once per class)."""
+        cached = _DEFINITIONS.get(middleware_class)
+        if cached is not None:
+            return cached
         init = middleware_class.__init__
         definitions = {}
 
@@ -75,6 +91,7 @@ class MiddlewareParameterParser:
                 "index": len(definitions),  # Parameter order
             }
 
+        _DEFINITIONS[middleware_class] = definitions
         return definitions
 
     @staticmethod

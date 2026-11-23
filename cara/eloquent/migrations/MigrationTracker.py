@@ -26,6 +26,11 @@ def _row_value(row, key: str, index: int = 0):
     return row[index]
 
 
+def _batch_number(value) -> int | None:
+    """A batch read back as an ``int`` whatever type the driver answers in."""
+    return None if value is None else int(value)
+
+
 class MigrationTracker:
     """Tracks applied files and protects the migration critical section."""
 
@@ -231,12 +236,20 @@ class MigrationTracker:
     def get_ran_migrations(self) -> list[str]:
         return [row["migration"] for row in self.get_ran_migration_records()]
 
-    def get_ran_migration_records(self) -> list[dict[str, str | None]]:
+    def get_ran_migration_records(self) -> list[dict[str, str | int | None]]:
+        """Every applied migration, oldest batch first: name, checksum, batch.
+
+        ``batch`` rides along so ``migrate:status`` can show each row's batch
+        from this one query instead of one ``get_migrations_by_batch`` per
+        batch. Additive: callers reading only ``migration`` / ``checksum``
+        are unaffected.
+        """
         connection = self._get_connection()
         try:
             rows = (
                 connection.query(
-                    f"SELECT migration, checksum FROM {self.table_name} ORDER BY batch, id"
+                    f"SELECT migration, checksum, batch FROM {self.table_name} "
+                    "ORDER BY batch, id"
                 )
                 or []
             )
@@ -244,6 +257,7 @@ class MigrationTracker:
                 {
                     "migration": _row_value(row, "migration", 0),
                     "checksum": _row_value(row, "checksum", 1),
+                    "batch": _batch_number(_row_value(row, "batch", 2)),
                 }
                 for row in rows
             ]

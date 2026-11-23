@@ -74,9 +74,11 @@ def test_an_update_never_reaches_another_tenants_rows():
         .to_sql()
     )
 
+    # The soft-delete scope also keeps a bulk update off trashed rows; the
+    # tenant predicate still ANDs onto the caller's grouped wheres.
     assert sql.endswith(
         'WHERE ("listing"."channel_id" = \'1\' OR "listing"."external_sku" = \'X\') '
-        "AND \"tenant_id\" = '5'"
+        'AND "tenant_id" = \'5\' AND "deleted_at" IS NULL'
     )
 
 

@@ -78,12 +78,17 @@ class ScheduleBuilder:
         )
         return self
 
-    def interval(self, seconds=0, minutes=0, hours=0):
+    def interval(self, seconds=0, minutes=0, hours=0, days=0, weeks=0):
+        # Days and weeks ride through too: the driver refuses a period that
+        # adds up to zero, which is what a days-only interval became when
+        # these two were not forwarded.
         spec = {
             "type": "interval",
             "seconds": seconds,
             "minutes": minutes,
             "hours": hours,
+            "days": days,
+            "weeks": weeks,
         }
         self.driver.schedule_job(
             self.identifier,
@@ -156,7 +161,11 @@ class ScheduleBuilder:
         self.options["snapshot_meta"] = dict(meta or {})
         return self
 
-    def without_overlapping(self, timeout: int = 1440) -> ScheduleBuilder:
+    # 86400 s = the documented 24 hours. This default was 1440 — the Laravel
+    # number, which is MINUTES there — so the fluent lock lapsed after 24
+    # minutes and a longer run lost its overlap protection, while the dict
+    # config path and the driver's own fallback already used 86400.
+    def without_overlapping(self, timeout: int = 86400) -> ScheduleBuilder:
         """
         Prevent this scheduled task from overlapping executions (Laravel-style).
 

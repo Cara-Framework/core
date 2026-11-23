@@ -92,14 +92,12 @@ def _model_save_quietly(self):
 
     User.save_quietly(...)
     """
-    # ``without_events`` flips a CLASS flag, and ``save`` raises on a database
-    # error: without the ``finally`` one failed quiet save would silence the
-    # model's observers for the rest of the process.
-    self.without_events()
-    try:
+    # Muted for this execution context only (``ObservesEvents.muted_events``).
+    # It used to flip the CLASS flag ``__has_events__``, which also silenced
+    # every concurrent save of the class on other threads and tasks. The
+    # context manager restores the mute even when ``save`` raises.
+    with self.__class__.muted_events():
         return self.save()
-    finally:
-        self.with_events()
 
 
 def _model_delete_quietly(self):
@@ -115,19 +113,12 @@ def _model_delete_quietly(self):
     Returns:
         self
     """
-    # The class flag must come back even when the DELETE raises — see
-    # ``_model_save_quietly``.
-    try:
-        return (
-            self.without_events()
-            .where(
-                self.get_primary_key(),
-                self.get_primary_key_value(),
-            )
-            .delete()
-        )
-    finally:
-        self.with_events()
+    # Muted for this execution context only — see ``_model_save_quietly``.
+    with self.__class__.muted_events():
+        return self.__class__.where(
+            self.get_primary_key(),
+            self.get_primary_key_value(),
+        ).delete()
 
 
 def _model_attach_related(self, relation, related_record):
@@ -164,7 +155,21 @@ def _model_filter_guarded(cls, dictionary: dict[str, Any]) -> dict[str, Any]:
     if cls.__guarded__ == ["*"]:
         # If all fields are guarded, all data should be filtered
         return {}
-    return {f: dictionary[f] for f in dictionary if f not in cls.__guarded__}
+    guarded = {_column_spelling(name) for name in cls.__guarded__}
+    return {f: dictionary[f] for f in dictionary if _column_spelling(f) not in guarded}
+
+
+def _column_spelling(key: Any) -> Any:
+    """``key`` as the column it writes, the way ``TenantScope`` recognises a
+    column "under any spelling": the grammar drops a ``table.`` qualifier and
+    the quote characters, so ``{"users.is_admin": 1}`` writes ``is_admin``.
+    The deny-list compared exact keys, and the qualified spelling slipped
+    past ``__guarded__ = ["is_admin"]``. Case-folded too: SQLite folds even a
+    quoted identifier, and refusing one key too many is the safe direction
+    for a deny-list."""
+    if not isinstance(key, str):
+        return key
+    return key.rsplit(".", 1)[-1].strip().strip('"`[]').strip().casefold()
 
 
 def _model_upsert(

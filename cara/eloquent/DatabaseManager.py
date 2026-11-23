@@ -274,9 +274,20 @@ class DatabaseManager:
         back after every call, so a session lock taken through them is held by
         whichever pooled handle ran it, or by none once that handle closes.
         Postgres releases this one if the process dies.
+
+        "Of its own" holds inside an open transaction too. The session used
+        to come from ``create_connection_instance``, which hands back the
+        transaction's PINNED wrapper: the lock was then taken on the
+        transaction's session and the ``finally`` below closed that wrapper —
+        the caller's transaction lost its connection mid-flight, and its
+        commit ran on nothing. The callers (``schema:apply`` /
+        ``schema:rollback``) hold the lock ACROSS many transactions of their
+        own, so the lock cannot be transaction-scoped: it always gets a
+        separate session, which this block opens and is the only one to close.
         """
-        session = self.create_connection_instance(connection)
+        session = self._new_connection_instance(self._resolve_connection_name(connection))
         acquired = False
+        released = False
         try:
             session.set_cursor()
             session.statement("SELECT pg_try_advisory_lock(%s) AS acquired", (key,))
@@ -287,9 +298,28 @@ class DatabaseManager:
                 if acquired:
                     session.set_cursor()
                     session.statement("SELECT pg_advisory_unlock(%s)", (key,))
+                    released = True
             finally:
+                if acquired and not released:
+                    # The unlock did not run, so the session still holds the
+                    # lock. Pooled as it is, an idle connection would keep
+                    # every later ``schema:apply`` locked out until it
+                    # happened to be closed; ending the session is what
+                    # releases a session lock.
+                    self._discard_session(session)
                 session.open = 0
                 session.close_connection()
+
+    @staticmethod
+    def _discard_session(session) -> None:
+        """End ``session``'s driver connection so it is never pooled again."""
+        driver_connection = getattr(session, "_connection", None)
+        if driver_connection is None:
+            return
+        try:
+            driver_connection.close()
+        except Exception:
+            _logger.debug("advisory session close failed", exc_info=True)
 
     def advisory_xact_lock(self, *keys: str, connection=None) -> None:
         """Take transaction-scoped advisory locks on named keys.
@@ -481,6 +511,15 @@ class DatabaseManager:
             # to fall through to a fresh connection rather than crash.
             _logger.warning("transaction registry lookup failed", exc_info=True)
 
+        return self._new_connection_instance(connection_name, schema, connect)
+
+    def _new_connection_instance(self, connection_name, schema=None, connect=True):
+        """A connection instance of its own — never the transaction's pinned one.
+
+        ``create_connection_instance`` is this plus the transaction-aware
+        short-circuit. A caller that needs a SEPARATE session whatever the
+        context holds (``advisory_session``) comes here, and owns what it gets.
+        """
         connection_info = self.get_connection_info(connection_name)
         connection_class = self.get_connection_class(connection_name)
 
@@ -497,6 +536,8 @@ class DatabaseManager:
         }
 
         instance = connection_class(**clean_info).set_schema(schema)
+        # The pool is kept per configured connection, not per driver.
+        instance.connection_name = connection_info.get("name", connection_name)
         return instance.make_connection() if connect else instance
 
     def get_platform(self, connection=None):

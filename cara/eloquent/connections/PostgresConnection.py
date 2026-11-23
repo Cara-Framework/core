@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import contextlib
-import logging
 import re
-import threading
 import time
+from functools import partial
 from typing import Self
 
 from cara.exceptions import (
@@ -18,15 +17,22 @@ from ..query.grammars import PostgresGrammar
 from ..query.processors import PostgresPostProcessor
 from ..schema.platforms import PostgresPlatform
 from .BaseConnection import BaseConnection
+from .PostgresPool import PostgresPool
 from .PostgresScopedReads import PostgresScopedReads, scope_snapshot
 
 _SAVEPOINT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
-_pool_lock = threading.Lock()
-CONNECTION_POOL = []
-_pool_initialized = False
-_pool_semaphore = None
-_pool_max_size = None
+#: How long (seconds) a pooled connection may sit idle and still be handed out
+#: WITHOUT the ``SELECT 1`` liveness probe. Outside a transaction every
+#: statement checks a connection out and back in, so probing every checkout
+#: made each such statement TWO round trips. A connection that answered a
+#: statement this recently is alive for every purpose the probe serves; what
+#: the probe exists to catch (idle timeouts, a pooler or NAT dropping a quiet
+#: socket, a restart during a lull) happens to connections idle for longer,
+#: and those are still probed. Per connection:
+#: ``connection_pooling_probe_idle_seconds`` (``0`` probes every checkout).
+#: The check-in times themselves are each pool's own (``PostgresPool``).
+_POOL_PROBE_IDLE_SECONDS = 1.0
 
 
 class PostgresConnection(PostgresScopedReads, BaseConnection):
@@ -94,6 +100,10 @@ class PostgresConnection(PostgresScopedReads, BaseConnection):
         # and whether its own transaction was opened in that snapshot.
         self._read_session = None
         self._snapshot_transaction = False
+        # The pool whose permit this wrapper holds, or None. A permit goes
+        # back to the pool that issued it, whatever the wrapper is asked to
+        # connect to afterwards (``set_schema`` changes the pool it resolves).
+        self._permit_pool: PostgresPool | None = None
         if name:
             self.name = name
 
@@ -127,7 +137,9 @@ class PostgresConnection(PostgresScopedReads, BaseConnection):
         try:
             self._connection.autocommit = True
             self.enable_disable_foreign_keys()
-        except Exception:
+        except BaseException:
+            # ``BaseException``: an interrupt between the checkout and the
+            # caller's own ``finally`` kept the permit just the same.
             with contextlib.suppress(Exception):
                 self.close_connection()
             raise
@@ -201,47 +213,31 @@ class PostgresConnection(PostgresScopedReads, BaseConnection):
 
         return {k: v for k, v in kw.items() if v is not None}
 
-    def _ensure_pool_initialized(self):
-        global _pool_initialized, _pool_max_size, _pool_semaphore
-        if _pool_initialized:
-            return
-        with _pool_lock:
-            if _pool_initialized:
-                return
-            _pool_semaphore = threading.Semaphore(self.connection_pool_size)
-            _pool_max_size = self.connection_pool_size
-            min_size = self.full_details.get("connection_pooling_min_size", 0)
-            if min_size:
-                import psycopg2  # local: heavy optional dep
+    def _pool(self, dsn: dict) -> PostgresPool:
+        """This wrapper's pool: one per configured connection AND per
+        resolved DSN/session options (``dsn``: its ``_connect_kwargs()``).
 
-                for _ in range(min_size):
-                    try:
-                        conn = psycopg2.connect(**self._connect_kwargs())
-                        conn.autocommit = True
-                        CONNECTION_POOL.append(conn)
-                    except Exception as warm_err:
-                        # A cold DB at boot leaves the pool with 0 pre-warmed
-                        # connections (lazy connect recovers later, so no hang/
-                        # leak) — but log it, or a boot-against-a-dead-DB is
-                        # completely invisible.
-
-                        logging.getLogger("cara.database.pool").warning(
-                            "Pool warm-up connect failed (%s pre-warmed); "
-                            "falling back to lazy connect: %s",
-                            len(CONNECTION_POOL),
-                            warm_err,
-                        )
-                        break
-            _pool_initialized = True
+        The name alone is not enough — ``set_schema`` gives one name several
+        ``search_path``s, and a session opened under one must not serve the
+        other. The DSN alone is not enough either: two names on one database
+        are two budgets (``connection_pooling_max_size`` each).
+        """
+        key = (
+            self.connection_name,
+            tuple(sorted((option, str(value)) for option, value in dsn.items())),
+        )
+        label = self.connection_name or (
+            f"{dsn.get('host', '')}:{dsn.get('port', '')}/{dsn.get('database', '')}"
+        )
+        return PostgresPool.of(key, label, self.connection_pool_size)
 
     _POOL_ACQUIRE_TIMEOUT = 30
 
     def _release_pool_slot(self) -> None:
-        """Release this wrapper's pool permit exactly once."""
-        global _pool_semaphore
-        if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
-            _pool_semaphore.release()
-            self._pool_slot_acquired = False
+        """Hand this wrapper's permit back to the pool that issued it, once."""
+        pool, self._permit_pool = self._permit_pool, None
+        if pool is not None:
+            pool.release()
 
     def create_connection(self):
         """Inside ``read_snapshot()`` a session of the block's snapshot,
@@ -261,7 +257,12 @@ class PostgresConnection(PostgresScopedReads, BaseConnection):
         if not self.full_details.get("connection_pooling_enabled"):
             return self._connect_with_retry(psycopg2)
 
-        self._ensure_pool_initialized()
+        dsn = self._connect_kwargs()
+        pool = self._pool(dsn)
+        pool.warm(
+            partial(psycopg2.connect, **dsn),
+            self.full_details.get("connection_pooling_min_size", 0),
+        )
 
         # Release any slot this wrapper still owns from a previous
         # ``create_connection`` call before acquiring a new one. The
@@ -276,58 +277,64 @@ class PostgresConnection(PostgresScopedReads, BaseConnection):
         # keeps the per-wrapper invariant at ≤1 slot.
         self._release_pool_slot()
 
-        acquired = _pool_semaphore.acquire(timeout=self._POOL_ACQUIRE_TIMEOUT)
-        if not acquired:
+        if not pool.acquire(self._POOL_ACQUIRE_TIMEOUT):
             # Pool exhaustion is a capacity problem, not a query bug —
             # surface it as 503 so load balancers / clients can retry
             # instead of treating it as a 500 application fault.
             raise DatabaseUnavailableException(
                 f"Connection pool exhausted: could not acquire a slot "
                 f"within {self._POOL_ACQUIRE_TIMEOUT}s "
-                f"(pool_size={self.connection_pool_size})",
+                f"(pool_size={pool.max_size})",
                 retry_after=1,
             )
-        self._pool_slot_acquired = True
+        self._permit_pool = pool
 
-        connection = None
-        with _pool_lock:
-            if CONNECTION_POOL:
-                connection = CONNECTION_POOL.pop()
+        try:
+            connection, idle_since = pool.take()
+            if connection is not None and self._revived(connection, idle_since):
+                return connection
+            return self._connect_with_retry(psycopg2)
+        except BaseException:
+            # ``BaseException``: an interrupt while probing or connecting
+            # left the permit with a wrapper nobody would ever close.
+            self._release_pool_slot()
+            raise
 
-        if connection:
-            try:
-                if connection.closed:
-                    connection = None
-                else:
-                    if connection.info.transaction_status != 0:
-                        connection.rollback()
-                    connection.autocommit = True
-                    cursor = connection.cursor()
-                    try:
-                        # SELECT 1 can raise if the server-side
-                        # connection was closed without psycopg2 noticing
-                        # (idle-in-transaction timeout, network drop).
-                        # The bare execute()→close() pattern leaked the
-                        # cursor on that path — wrap in try/finally so
-                        # the cursor is released whether the probe
-                        # succeeds or blows up.
-                        cursor.execute("SELECT 1")
-                    finally:
-                        with contextlib.suppress(Exception):
-                            cursor.close()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    connection.close()
-                connection = None
+    def _revived(self, connection, idle_since: float | None) -> bool:
+        """Make a session leaving the pool ready for use; False (and closed)
+        when it is not usable any more."""
+        try:
+            if connection.closed:
+                return False
+            if connection.info.transaction_status != 0:
+                connection.rollback()
+            connection.autocommit = True
+            if self._needs_liveness_probe(idle_since):
+                cursor = connection.cursor()
+                try:
+                    # SELECT 1 can raise if the server-side connection was
+                    # closed without psycopg2 noticing (idle-in-transaction
+                    # timeout, network drop); the cursor is released whether
+                    # the probe succeeds or blows up.
+                    cursor.execute("SELECT 1")
+                finally:
+                    with contextlib.suppress(Exception):
+                        cursor.close()
+            return True
+        except Exception:
+            with contextlib.suppress(Exception):
+                connection.close()
+            return False
 
-        if not connection:
-            try:
-                connection = self._connect_with_retry(psycopg2)
-            except Exception:
-                self._release_pool_slot()
-                raise
-
-        return connection
+    def _needs_liveness_probe(self, idle_since: float | None) -> bool:
+        """Whether a connection leaving the pool must answer ``SELECT 1`` first:
+        always, unless it was checked in within ``_POOL_PROBE_IDLE_SECONDS``."""
+        window = self.full_details.get(
+            "connection_pooling_probe_idle_seconds", _POOL_PROBE_IDLE_SECONDS
+        )
+        if idle_since is None or not window or window <= 0:
+            return True
+        return time.monotonic() - idle_since >= window
 
     def _connect_with_retry(self, psycopg2):
         """Create a new psycopg2 connection with exponential backoff on 'too many clients'."""
@@ -388,34 +395,22 @@ class PostgresConnection(PostgresScopedReads, BaseConnection):
             # A leased session: handed back to its block, which ends it.
             self._return_read_session()
             return
-        if self._connection is None:
+        connection, self._connection = self._connection, None
+        try:
+            if connection is None:
+                return
+            if self._permit_pool is not None:
+                # Back to the pool it was checked out of — the one that
+                # issued this wrapper's permit.
+                self._permit_pool.give_back(connection)
+            else:
+                # Not checked out of a pool (pooling off, or a session put
+                # on the wrapper by hand): this wrapper pools nothing it did
+                # not take from a pool.
+                with contextlib.suppress(Exception):
+                    connection.close()
+        finally:
             self._release_pool_slot()
-            return
-
-        if self.full_details.get("connection_pooling_enabled"):
-            try:
-                with _pool_lock:
-                    if len(CONNECTION_POOL) < self.connection_pool_size:
-                        try:
-                            if not self._connection.closed:
-                                if self._connection.info.transaction_status != 0:
-                                    self._connection.rollback()
-                                self._connection.autocommit = True
-                                CONNECTION_POOL.append(self._connection)
-                            # else: already closed, discard
-                        except Exception:
-                            with contextlib.suppress(Exception):
-                                self._connection.close()
-                    else:
-                        with contextlib.suppress(Exception):
-                            self._connection.close()
-            finally:
-                self._release_pool_slot()
-        else:
-            with contextlib.suppress(Exception):
-                self._connection.close()
-
-        self._connection = None
 
     @staticmethod
     def _validate_savepoint_name(name: str) -> None:
@@ -572,6 +567,19 @@ class PostgresConnection(PostgresScopedReads, BaseConnection):
         """
         try:
             if not self._connection or self._connection.closed:
+                if self.transaction_level > 0:
+                    # The session of an OPEN transaction is gone and took the
+                    # transaction with it. Reconnecting handed the rest of
+                    # the block a fresh AUTOCOMMIT session while the level
+                    # still said "in a transaction": earlier writes were
+                    # lost, later ones committed one by one, and the block
+                    # ended "successfully". All it took was one caller
+                    # swallowing the statement that hit the dead session.
+                    raise DatabaseUnavailableException(
+                        "The database session of an open transaction was "
+                        "lost; the transaction cannot continue.",
+                        retry_after=1,
+                    )
                 self.make_connection()
 
             self.set_cursor()

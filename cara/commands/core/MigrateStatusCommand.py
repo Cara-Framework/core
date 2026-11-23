@@ -64,6 +64,11 @@ class MigrateStatusCommand(CommandBase):
 
         except Exception as e:
             self.error(f"× Failed to check migration status: {str(e)}")
+            # A status that could not be read is a failure, not "no news":
+            # the bare fall-through returned None → exit 0, so a caller that
+            # gates on this command (``status="$(craft migrate:status)"``)
+            # carried on against a database it never reached.
+            return 1
 
     def _build_migration(self) -> Migration:
         """Build migration instance with proper configuration."""
@@ -104,6 +109,7 @@ class MigrateStatusCommand(CommandBase):
 
         # Sort files by name to show chronologically
         sorted_files = sorted(all_files)
+        batches = self._batches_by_migration(migration_manager)
 
         ran_count = 0
         pending_count = 0
@@ -116,7 +122,7 @@ class MigrateStatusCommand(CommandBase):
             # Check if migration has been run
             if migration_name in ran_migrations:
                 status = "✓ Ran"
-                batch = self._get_migration_batch(migration_name, migration_manager)
+                batch = str(batches.get(migration_name, "-"))
                 ran_count += 1
             else:
                 status = "✗ Pending"
@@ -141,15 +147,17 @@ class MigrateStatusCommand(CommandBase):
         else:
             self.success("\n✓ All migrations are up to date!")
 
-    def _get_migration_batch(
-        self, migration_name: str, migration_manager: Migration
-    ) -> str:
-        """Get the batch number for a migration."""
-        try:
-            # Get migration details from tracker
-            batch_info = migration_manager.tracker.get_migration_details(migration_name)
-            if batch_info and "batch" in batch_info:
-                return str(batch_info["batch"])
-            return "1"  # Default batch if not found
-        except Exception:
-            return "1"  # Default batch on error
+    @staticmethod
+    def _batches_by_migration(migration_manager: Migration) -> dict[str, int]:
+        """``{migration: batch}`` for every applied migration.
+
+        One query: ``get_ran_migration_records`` carries each row's batch, so
+        the status table no longer costs one round trip per batch. A row
+        with no batch is left out and shows "-", never a guessed number —
+        the per-row lookup before this fabricated "1" for every migration.
+        """
+        return {
+            str(record["migration"]): record["batch"]
+            for record in migration_manager.tracker.get_ran_migration_records()
+            if record.get("batch") is not None
+        }

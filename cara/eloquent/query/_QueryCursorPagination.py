@@ -7,6 +7,7 @@ import logging
 from cara.http import decode_cursor, encode_cursor
 
 from ..pagination import CursorPaginator, keyset_operator
+from ._QueryIteration import _record_key
 
 _logger = logging.getLogger("cara.eloquent.query")
 QueryBuilder: type
@@ -87,6 +88,13 @@ def _qb_cursor_paginate(
             )
         )
 
+    # The caller's own orders are REPLACED by the keyset order, as in
+    # ``chunk_by_id`` (``_keyset_page``): appended behind an earlier
+    # ``order_by("name")`` the pages were sorted by ``name`` while the cursor
+    # sought past ``(column, primary_key)`` — rows were skipped and others
+    # served again on every page.
+    builder._order_by = ()
+
     # Fetch one extra to know whether a next page exists.
     results = (
         builder.order_by(column, direction)
@@ -102,16 +110,11 @@ def _qb_cursor_paginate(
     next_cursor = None
     if has_more and len(results) > 0:
         last = results[-1]
-        value = (
-            getattr(last, column, None)
-            if not isinstance(last, dict)
-            else last.get(column)
-        )
-        row_id = (
-            getattr(last, primary_key, None)
-            if not isinstance(last, dict)
-            else last.get(primary_key)
-        )
+        # Read by the unqualified name: a row exposes ``rank``, never
+        # ``event.rank`` (the form a joined query has to order by), so the
+        # qualified read answered ``None`` and tripped the NOT NULL refusal.
+        value = _record_key(last, column)
+        row_id = _record_key(last, primary_key)
         # A NULL sort value has no keyset to seek past: ``col > NULL`` is
         # never true, so the next page could only repeat or skip rows.
         if value is None:

@@ -141,7 +141,10 @@ class AlertSink:
         try:
             req = Request(
                 "https://events.pagerduty.com/v2/enqueue",
-                data=json.dumps(payload).encode("utf-8"),
+                # ``default=str`` like the Slack body below: a Decimal rate or
+                # a datetime in ``context`` raised TypeError here, and the page
+                # reached Slack while PagerDuty — the pager — never got it.
+                data=json.dumps(payload, default=str).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
             )
             with urlopen(req, timeout=cls.HTTP_TIMEOUT_SECONDS) as resp:

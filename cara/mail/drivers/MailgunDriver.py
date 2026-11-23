@@ -127,10 +127,10 @@ class MailgunDriver(MailContract):
 
         html_content = mailable_data.get("html")
         if not html_content and mailable_data.get("view"):
-            # Render view if available
-            html_content = self._render_view(
-                mailable_data.get("view"), mailable_data.get("view_data", {})
-            )
+            # ``Mailable.to_dict`` rendered the view and it came back empty:
+            # fail the send. The old placeholder mailed the raw
+            # ``view_data`` (tokens, unsubscribe links) to the recipient.
+            raise ValueError(f"mail view {mailable_data.get('view')!r} rendered empty")
 
         if html_content:
             data["html"] = html_content
@@ -195,22 +195,6 @@ class MailgunDriver(MailContract):
                     self._log_error(f"Mailgun attachment failed for {file_path}: {e}")
 
         return files
-
-    def _render_view(self, template: str, data: dict[str, Any]) -> str | None:
-        """
-        Render view template. This is a placeholder implementation.
-
-        Args:
-            template: Template name
-            data: Template data
-
-        Returns:
-            Rendered HTML or None
-        """
-        # This would integrate with Cara's view system
-        return (
-            f"<html><body><h1>Email Template: {template}</h1><p>{data}</p></body></html>"
-        )
 
     def test_connection(self) -> bool:
         """

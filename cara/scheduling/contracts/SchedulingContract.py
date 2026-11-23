@@ -7,12 +7,18 @@ scheduling implementations.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 
 class SchedulingContract:
     """Interface that any scheduling driver must implement."""
+
+    #: The outcome of the last :meth:`run_all` pass: how many registered jobs
+    #: failed, and their identifiers. ``schedule:work --once`` reads both to
+    #: exit non-zero, so a driver that runs jobs must keep them current.
+    last_run_failures: int = 0
+    last_run_failed_ids: Sequence[str] = ()
 
     def schedule_job(
         self,
@@ -42,7 +48,8 @@ class SchedulingContract:
     def run_all(self) -> int:
         """Execute every registered job immediately, once (``--once`` mode).
 
-        Returns the number of jobs that executed successfully.
+        Returns the number of jobs that executed successfully, and records
+        the failures on ``last_run_failures`` / ``last_run_failed_ids``.
         """
         return 0
 

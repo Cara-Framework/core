@@ -272,3 +272,217 @@ def test_the_message_scrubs_crlf_and_replaces_rather_than_duplicates_headers():
     assert parsed.get("X-Empty") is None
     attachment = next(parsed.iter_attachments())
     assert attachment.get_payload(decode=True).decode("utf-8") == "a,b\nç,é\n"
+
+
+# --- handshake, preflight and TLS-context regressions (audit 2026-11-23) ---
+
+TLS_SETTINGS = SmtpSettings(
+    host="smtp.example", port=2525, username="u", password="p", encryption="tls"
+)
+
+
+class _NoEsmtp(_Server):
+    """A server whose EHLO answers ``code`` and whose HELO answers 250."""
+
+    ehlo_code = 421
+    helo_calls = 0
+
+    def ehlo(self):
+        return self.ehlo_code, b"not now"
+
+    def helo(self, *_a):
+        type(self).helo_calls += 1
+        return 250, b"hello"
+
+
+@pytest.mark.parametrize("encryption", ["tls", "none"])
+def test_a_4xx_ehlo_is_retryable_never_an_account_refusal(
+    monkeypatch, sleeps, encryption
+):
+    class _Busy(_NoEsmtp):
+        ehlo_code = 421
+
+    opened = _install(monkeypatch, _Busy)
+    outcome = send_smtp(
+        _message(),
+        envelope_from="from@example.com",
+        recipient="owner@example.com",
+        settings=SmtpSettings(
+            host="smtp.example",
+            port=2525,
+            username="u",
+            password="p",
+            encryption=encryption,
+        ),
+    )
+    assert outcome == MailDeliveryOutcome(
+        MailDeliveryOutcome.RETRYABLE_FAILURE, "SMTPHeloError:421"
+    )
+    assert len(opened) == transport.MAIL_SEND_MAX_ATTEMPTS
+    assert all(server.payloads == [] for server in opened)
+
+
+def test_a_5xx_ehlo_falls_back_to_helo(monkeypatch, sleeps):
+    class _Legacy(_NoEsmtp):
+        ehlo_code = 502
+        helo_calls = 0
+
+    opened = _install(monkeypatch, _Legacy)
+    no_auth = SmtpSettings(host="smtp.example", port=2525, encryption="none")
+    outcome = send_smtp(
+        _message(),
+        envelope_from="from@example.com",
+        recipient="owner@example.com",
+        settings=no_auth,
+    )
+    assert outcome.sent and _Legacy.helo_calls == 1 and len(opened) == 1
+
+
+def test_a_refused_helo_after_a_5xx_ehlo_is_an_account_refusal(monkeypatch, sleeps):
+    class _Refuses(_NoEsmtp):
+        ehlo_code = 550
+
+        def helo(self, *_a):
+            return 550, b"go away"
+
+    _install(monkeypatch, _Refuses)
+    with pytest.raises(SmtpAccountRefusedError):
+        _send()
+
+
+@pytest.mark.parametrize(
+    ("recipient", "reason"),
+    [
+        ("", "recipient_blank"),
+        ("   ", "recipient_blank"),
+        (None, "recipient_blank"),
+        ("çağrı@example.com", "recipient_not_ascii"),
+        ("user@örnek.com.tr", "recipient_not_ascii"),
+    ],
+)
+def test_an_undeliverable_recipient_fails_once_without_a_connection(
+    monkeypatch, sleeps, recipient, reason
+):
+    opened = _install(monkeypatch, _Server)
+    outcome = send_smtp(
+        _message(),
+        envelope_from="from@example.com",
+        recipient=recipient,
+        settings=SETTINGS,
+    )
+    assert outcome == MailDeliveryOutcome(MailDeliveryOutcome.PERMANENT_FAILURE, reason)
+    assert opened == [] and sleeps == []
+
+
+def test_an_unrenderable_message_is_not_sent_and_never_unknown(monkeypatch, sleeps):
+    from email.mime.text import MIMEText
+
+    message = MIMEText("body", "plain", "utf-8")
+    message["From"] = "from@example.com"
+    message["To"] = "owner@example.com"
+    message["Subject"] = "Re: order\nstray second line"  # the generator refuses it
+    opened = _install(monkeypatch, _Server)
+    outcome = send_smtp(
+        message,
+        envelope_from="from@example.com",
+        recipient="owner@example.com",
+        settings=SETTINGS,
+    )
+    assert outcome.status == MailDeliveryOutcome.PERMANENT_FAILURE
+    assert outcome.reason.startswith("message_render_failed:")
+    assert opened == [], "rendered before any connection, so never past 354"
+
+
+def test_every_connection_shares_one_verifying_tls_context(monkeypatch, sleeps):
+    contexts: list = []
+
+    class _Tls(_Server):
+        def starttls(self, *, context=None):
+            contexts.append(context)
+            return 220, b"go"
+
+    _install(monkeypatch, _Tls)
+    for _ in range(2):
+        send_smtp(
+            _message(),
+            envelope_from="from@example.com",
+            recipient="owner@example.com",
+            settings=TLS_SETTINGS,
+        )
+    assert len(contexts) == 2 and contexts[0] is contexts[1]
+    shared = contexts[0]
+    assert shared.verify_mode == transport.ssl.CERT_REQUIRED
+    assert shared.check_hostname is True
+
+
+def test_encryption_is_case_insensitive_so_tls_never_means_plaintext(monkeypatch, sleeps):
+    upgraded: list = []
+
+    class _Tls(_Server):
+        def starttls(self, **_kw):
+            upgraded.append(True)
+            return 220, b"go"
+
+    _install(monkeypatch, _Tls)
+    send_smtp(
+        _message(),
+        envelope_from="from@example.com",
+        recipient="owner@example.com",
+        settings=SmtpSettings(host="smtp.example", encryption="TLS"),
+    )
+    assert upgraded == [True]
+
+
+def test_a_failed_handshake_closes_the_socket(monkeypatch, sleeps):
+    closed: list = []
+
+    class _NoTls(_Server):
+        def starttls(self, **_kw):
+            raise smtplib.SMTPNotSupportedError("no STARTTLS")
+
+        def quit(self):
+            closed.append(True)
+            return 221, b"bye"
+
+    _install(monkeypatch, _NoTls)
+    with pytest.raises(SmtpAccountRefusedError):
+        send_smtp(
+            _message(),
+            envelope_from="from@example.com",
+            recipient="owner@example.com",
+            settings=TLS_SETTINGS,
+        )
+    assert closed == [True]
+
+
+def test_a_multi_recipient_envelope_is_all_or_nothing(monkeypatch, sleeps):
+    from cara.mail import send_smtp_envelope
+
+    class _OneBad(_Server):
+        def __init__(self):
+            super().__init__()
+            self.named: list = []
+
+        def rcpt(self, address, *_a):
+            self.named.append(address)
+            return (550, b"no such user") if address.startswith("bad") else (250, b"ok")
+
+        def docmd(self, command, *_a):
+            raise AssertionError("DATA must never open after a refused recipient")
+
+    opened = _install(monkeypatch, _OneBad)
+    outcome = send_smtp_envelope(
+        _message(),
+        envelope_from="from@example.com",
+        recipients=["good@example.com", "bad@example.com", "hidden@example.com"],
+        settings=SETTINGS,
+    )
+    assert outcome == MailDeliveryOutcome(
+        MailDeliveryOutcome.PERMANENT_FAILURE, "recipient_refused_5xx"
+    )
+    assert len(opened) == 1
+    assert opened[0].named == [
+        "good@example.com",
+        "bad@example.com",
+        "hidden@example.com",
+    ]

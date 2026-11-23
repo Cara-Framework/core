@@ -77,10 +77,22 @@ class Validation(ValidationContract):
     # Mapping: rule_name (lowercase) → Rule class.
     _custom_rules: dict[str, type[Rule]] = {}
 
+    # The built-in rule classes, scanned from ``cara/validation/rules/`` ONCE
+    # per process. The scan used to run in every ``__init__``: a directory
+    # listing, ~50 ``import_module`` calls and an ``inspect.getmembers`` sweep
+    # of each rule module — 320 µs before a single rule ran, against ~20 µs
+    # for validating a five-field payload. Every ``Validation.make`` paid it,
+    # so one request doing a FormRequest plus three ``validated_query_int``
+    # reads spent over a millisecond of event-loop time re-discovering files
+    # that cannot change while the process runs. Instances still get their
+    # own copy (``_discover_rules`` returns one), so mutating one validator's
+    # registry never reaches another.
+    _builtin_rules: dict[str, type[Rule]] | None = None
+
     def __init__(self) -> None:
         self._errors: dict[str, list[str]] = {}
         self._validated: dict[str, Any] = {}
-        # Dynamically load all rule classes from cara/validation/rules/
+        # The built-in rule classes from cara/validation/rules/ (a copy).
         self.__rule_classes = self._discover_rules()
         # Merge user-supplied rules registered via Validation.extend(...).
         self.__rule_classes.update(self._custom_rules)
@@ -91,11 +103,23 @@ class Validation(ValidationContract):
         self,
     ) -> dict[str, type[Rule]]:
         """
+        The built-in rule classes: rule_name (lowercase) → RuleClass.
+        E.g. "required" → RequiredRule
+
+        Scanned once per process (see ``_builtin_rules``); every call returns
+        a fresh dict the caller may mutate.
+        """
+        builtin = Validation._builtin_rules
+        if builtin is None:
+            builtin = Validation._builtin_rules = self._scan_rule_package()
+        return dict(builtin)
+
+    def _scan_rule_package(
+        self,
+    ) -> dict[str, type[Rule]]:
+        """
         Inspect the 'cara.validation.rules' package for any class whose name ends with 'Rule' and
         implements Rule.
-
-        Returns a mapping: rule_name (lowercase) → RuleClass.
-        E.g. "required" → RequiredRule
         """
         rules_pkg = "cara.validation.rules"
         pkg_dir = os.path.dirname(__file__) + "/rules"
@@ -213,6 +237,7 @@ class Validation(ValidationContract):
                 concrete_field, value, provided = resolved
                 rule_plan.append((field, concrete_field, rule_string, value, provided))
 
+        memo: dict[Any, Any] = {}
         for (
             original_field,
             concrete_field,
@@ -315,6 +340,11 @@ class Validation(ValidationContract):
                 rule_instance = rule_cls()
                 # Pass the full data for rules that need access to other fields (like confirmed)
                 params["_data"] = data
+                # One scratch dict for the whole ``make`` call. A rule is
+                # instantiated per element of a wildcard field, so a rule that
+                # judges the element against its siblings (``distinct``) has
+                # nowhere else to keep what it already read from them.
+                params["_memo"] = memo
 
                 # Custom message resolution. For wildcard-expanded rules
                 # we accept both the concrete path (``slugs.0.required``)

@@ -185,3 +185,21 @@ def test_a_non_utf8_file_is_skipped_not_fatal(tmp_path):
 
     assert any("app/jobs/Large.py" in finding.path for finding in findings)
     assert not [finding for finding in findings if "Binary.py" in finding.path]
+
+
+def test_a_nested_implementation_directory_is_charged_once(tmp_path):
+    """``Big.py`` + ``Big/Part.py`` + ``Big/Part/Leaf.py`` is one logical
+    module of 30 lines. ``Big/Part.py`` sorts before ``Big.py`` and had already
+    absorbed ``Leaf.py`` when ``Big.py`` summed ``Big/**`` — so ``Leaf.py`` was
+    charged twice and a module inside its budget was reported as 40 lines."""
+    body = "\n".join(f"VALUE_{index} = {index}" for index in range(10))
+    write(tmp_path / "app" / "services" / "Big.py", body)
+    write(tmp_path / "app" / "services" / "Big" / "Part.py", body)
+    write(tmp_path / "app" / "services" / "Big" / "Part" / "Leaf.py", body)
+
+    assert SourceShape.scan(_manifest(tmp_path, source_shape_hard_limit=30)) == []
+
+    findings = SourceShape.scan(_manifest(tmp_path, source_shape_hard_limit=25))
+    assert [finding.message for finding in findings] == [
+        "file exceeds hard 25-line limit: app/services/Big.py (30)"
+    ]

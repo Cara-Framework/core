@@ -75,6 +75,13 @@ class BaseGrammar:
 
     process_column = _BaseGrammarValues._grammar_process_column
 
+    # The character the dialect's column/table templates wrap identifiers in
+    # (both supported dialects use the SQL-standard double quote). A dialect
+    # quoting differently overrides this alongside its templates.
+    identifier_quote = '"'
+
+    escape_identifier = _BaseGrammarValues._grammar_escape_identifier
+
     _table_column_string = _BaseGrammarValues._table_column_string
 
     _compile_value = _BaseGrammarValues._compile_value
@@ -96,6 +103,8 @@ class BaseGrammar:
     compile_expression = _BaseGrammarValues._grammar_compile_expression
 
     _compile_expression_operand = _BaseGrammarValues._compile_expression_operand
+
+    expression_literal = _BaseGrammarValues._grammar_expression_literal
 
     def truncate_table(self, table, foreign_keys=False):
         """

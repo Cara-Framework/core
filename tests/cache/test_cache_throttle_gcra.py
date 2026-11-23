@@ -115,8 +115,30 @@ def test_parameters_that_describe_no_bucket_are_configuration_errors(
         )
 
 
+def _corrupt_cell(driver: FileCacheDriver | CacheFake, key: str) -> None:
+    """Plant a non-integer in the COUNTER namespace, where the cell lives.
+
+    No public method writes one there (``put`` writes the value namespace), so
+    the double reaches its own storage directly.
+    """
+    if isinstance(driver, FileCacheDriver):
+        driver._write_file(driver._counter_path(key), None, "not a timestamp")
+    else:
+        driver._counters[key] = "not a timestamp"
+
+
 def test_a_cell_holding_something_else_refuses_rather_than_resetting(driver) -> None:
-    driver.put("rate:user:7", "not a timestamp", ttl=60)
+    _corrupt_cell(driver, "rate:user:7")
 
     with pytest.raises(CacheConfigurationException):
         _spend(driver)
+
+
+def test_a_value_under_the_same_key_is_not_the_cell(driver) -> None:
+    """The cell lives in the counter namespace, as on Redis: a ``put`` of the
+    same key neither breaks the bucket nor is overwritten by it."""
+    driver.put("rate:user:7", "not a timestamp", ttl=60)
+
+    assert _spend(driver) == (True, 2, 0, 1000)
+    assert _spend(driver) == (True, 1, 0, 2000)
+    assert driver.get("rate:user:7") == "not a timestamp"

@@ -31,8 +31,23 @@ def _load_security_header_policy(
 ) -> tuple[dict[str, str], str | None, bool]:
     """Resolve one immutable snapshot of the configured header policy."""
     config_reader = config_reader or configuration.config
+    # ``SecurityHeaders`` is built per request: read the ``SECURITY`` dict
+    # once and take the three keys from it. A reader that does not return the
+    # dict (the all-defaults fallback, a test double keyed by full paths) is
+    # asked key by key, as before.
+    section = config_reader("security.security")
+    if isinstance(section, dict):
+
+        def read(name: str, default: Any = None) -> Any:
+            return section.get(name, default)
+
+    else:
+
+        def read(name: str, default: Any = None) -> Any:
+            return config_reader(f"security.security.{name}", default)
+
     headers = dict(_DEFAULT_HEADERS)
-    overrides = config_reader("security.security.headers")
+    overrides = read("headers")
     if isinstance(overrides, dict):
         for key, value in overrides.items():
             if value is None:
@@ -41,13 +56,13 @@ def _load_security_header_policy(
                 headers[key] = str(value)
 
     unset = object()
-    custom_hsts = config_reader("security.security.hsts", unset)
+    custom_hsts = read("hsts", unset)
     hsts: str | None = _DEFAULT_HSTS
     if custom_hsts is None:
         hsts = None
     elif custom_hsts is not unset and isinstance(custom_hsts, str):
         hsts = custom_hsts
-    preload = bool(config_reader("security.security.hsts_preload", False))
+    preload = bool(read("hsts_preload", False))
     return headers, hsts, preload
 
 
@@ -61,19 +76,38 @@ def _scope_is_https(scope: Any) -> bool:
     if not peer_is_trusted_proxy(scope):
         return False
 
-    raw_headers = {
-        (
-            key.decode().lower()
-            if isinstance(key, (bytes, bytearray))
-            else str(key).lower()
-        ): (value.decode() if isinstance(value, (bytes, bytearray)) else str(value))
-        for key, value in scope.get("headers", []) or []
-    }
-    forwarded_proto = raw_headers.get("x-forwarded-proto")
+    forwarded_proto = _scope_header(scope, "x-forwarded-proto")
     if (
         isinstance(forwarded_proto, str)
         and forwarded_proto.split(",")[0].strip().lower() == "https"
     ):
         return True
-    forwarded = raw_headers.get("forwarded")
+    forwarded = _scope_header(scope, "forwarded")
     return bool(isinstance(forwarded, str) and "proto=https" in forwarded.lower())
+
+
+def _scope_header(scope: dict, name: str) -> str | None:
+    """One request header's value (the last occurrence), read as latin-1.
+
+    Only the header asked for is decoded. This used to decode EVERY header as
+    strict UTF-8 to read two of them, so behind a trusted proxy — any loopback
+    peer counts — a single high byte anywhere (a latin-1 ``User-Agent``)
+    raised ``UnicodeDecodeError``. On the success path ``SecurityHeaders``
+    swallowed it and dropped HSTS; on the error path nothing caught it, the
+    exception handler itself crashed, and a 404 or 401 left as a bare 500
+    with no envelope and no CORS headers.
+    """
+    wanted = name.encode("ascii")
+    found: str | None = None
+    for key, value in scope.get("headers", []) or []:
+        if isinstance(key, (bytes, bytearray)):
+            if key.lower() != wanted:
+                continue
+        elif str(key).lower() != name:
+            continue
+        found = (
+            value.decode("latin-1")
+            if isinstance(value, (bytes, bytearray))
+            else str(value)
+        )
+    return found

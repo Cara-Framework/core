@@ -39,8 +39,10 @@ class _Opener:
     def __call__(self, exported):
         name = f"session-{len(self.opened)}"
         self.opened.append(exported)
-        return name, (None if exported else "0000000A-0000001B-1"), (
-            lambda: self.released.append(name)
+        return (
+            name,
+            (None if exported else "0000000A-0000001B-1"),
+            (lambda: self.released.append(name)),
         )
 
 
@@ -143,7 +145,9 @@ def test_what_was_built_is_the_sessions_own_and_goes_with_it():
 
 def test_a_built_table_is_named_by_its_relation_and_its_sql():
     one = built_table_name("listing", "SELECT * FROM public.listing WHERE tenant_id = 1")
-    other = built_table_name("listing", "SELECT * FROM public.listing WHERE tenant_id = 2")
+    other = built_table_name(
+        "listing", "SELECT * FROM public.listing WHERE tenant_id = 2"
+    )
     assert one != other and one.startswith("cara_read_listing_")
     assert one == built_table_name(
         "listing", "SELECT * FROM public.listing WHERE tenant_id = 1"
@@ -389,9 +393,7 @@ def test_a_built_relation_is_built_by_the_first_statement_and_read_by_the_rest(
     ]
 
 
-def test_a_later_build_of_the_session_keeps_what_it_built_and_guards_again(
-    pool, catalog
-):
+def test_a_later_build_of_the_session_keeps_what_it_built_and_guards_again(pool, catalog):
     handed, _returned = pool
     product = BuiltRelation("SELECT * FROM public.product WHERE tenant_id = %s", [7])
     with read_snapshot(), read_scope({"listing": _LISTING}):
@@ -402,7 +404,9 @@ def test_a_later_build_of_the_session_keeps_what_it_built_and_guards_again(
             )
     _holder, session = handed
     builds = [
-        sent for sent in session.log if isinstance(sent, str) and "CREATE TEMPORARY" in sent
+        sent
+        for sent in session.log
+        if isinstance(sent, str) and "CREATE TEMPORARY" in sent
     ]
     assert len(builds) == 2 and builds[0].startswith("ROLLBACK; BEGIN TRANSACTION")
     # The second build leaves the read-only savepoint (which only read),

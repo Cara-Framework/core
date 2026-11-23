@@ -7,7 +7,11 @@ import re
 from collections.abc import Callable
 from typing import Any, Self
 
-from cara.eloquent.expressions import QueryExpression, SubGroupExpression
+from cara.eloquent.expressions import (
+    QueryExpression,
+    SubGroupExpression,
+    UpdateQueryExpression,
+)
 from cara.exceptions import (
     InvalidArgumentException,
     QueryException,
@@ -332,7 +336,15 @@ def _qb_bulk_update(
             )
 
     builder = self.clone()
-    builder._updates = ()
+    # The ``update`` scopes are shown what this statement writes. They ran
+    # against an EMPTY update list, so ``TenantScope``'s move guard had
+    # nothing to inspect and a tenant-armed
+    # ``bulk_update([{"id": 1, "tenant_id": 9}])`` moved the row to another
+    # tenant — the write ``update({"tenant_id": 9})`` refuses. The statement
+    # itself is still built from ``rows`` below.
+    builder._updates = tuple(
+        UpdateQueryExpression({c: row[c] for c in columns if c in row}) for row in rows
+    )
     builder.set_action("update")
     builder.run_scopes()
     grammar = builder.get_grammar()
@@ -461,9 +473,12 @@ def _qb_cursor(self, chunk_size: int = 1000):
         if not chunk_result:
             break
 
-        for record in chunk_result:
-            # chunk_builder hydrates so its eager loads apply to each record.
-            yield chunk_builder.prepare_result(record, collection=False)
+        # chunk_builder hydrates so its eager loads apply. The whole chunk is
+        # hydrated in ONE call: hydrating record by record ran every eager
+        # relation once per ROW (a 1000-row chunk with two relations issued
+        # 2000 queries instead of 2). ``collection=False`` keeps the rows
+        # untagged for the strict lazy-load guard, as they always were.
+        yield from chunk_builder.prepare_result(chunk_result, collection=False) or ()
 
         offset += size
         if len(chunk_result) < size:

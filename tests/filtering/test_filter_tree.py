@@ -161,6 +161,10 @@ def test_entity_values_collects_through_groups():
         ([{"f": "linked", "o": "is", "v": ["yes"]}], "true or false"),
         ([{"f": "updated", "o": "before", "v": ["2026-8-1"]}], "ISO dates"),
         ([{"f": "updated", "o": "last_days", "v": ["0"]}], "day count"),
+        # ``str.isdigit`` accepts digits ``int()`` cannot read: this was an
+        # uncaught ValueError (a 500), not a validation message.
+        ([{"f": "updated", "o": "last_days", "v": ["\u00b2"]}], "day count"),
+        ([{"f": "updated", "o": "last_days", "v": ["\u2460"]}], "day count"),
         ([{"f": "price", "o": "gt", "v": ["Infinity"]}], "finite"),
         ([{"any": []}], "at least one condition"),
         ([{"any": [{"any": [{"f": "status", "o": "in", "v": ["draft"]}]}]}], "nest"),

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import ast
 
-from cara.architecture._ast_utils import iter_modules
+from cara.architecture._ast_utils import all_nodes, iter_modules
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -87,7 +87,7 @@ class SilentExceptSwallow:
         for _path, rel, tree in iter_modules(
             manifest.roots.scan_dirs("silent_except_swallow"), manifest.roots.deployable
         ):
-            for node in ast.walk(tree):
+            for node in all_nodes(tree):
                 if not isinstance(node, ast.ExceptHandler):
                     continue
                 if node.type is None:

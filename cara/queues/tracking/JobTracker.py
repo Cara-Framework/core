@@ -169,6 +169,49 @@ class JobTracker:
 
             job_record.save()
 
+    def track_job_throttled(self, job_id: int, reason: str | None = None) -> None:
+        """Settle a tracked INLINE run that a gate refused before its body ran.
+
+        A queued throttle goes back to the queue and its row back to
+        ``pending``. An inline (sync) dispatch has no queue: ``Bus`` answers
+        the caller ``None`` and nothing ever runs this row again, so it gets
+        a terminal word. That word is ``cancelled`` — the declared status for
+        "this run was called off": ``failed`` would count a refusal as an
+        incident (a throttle is not a job failure), and ``pending`` /
+        ``processing`` would leave a row that reads as stuck forever. The
+        reason is kept in ``metadata`` so the row can be told apart from an
+        operator's cancellation.
+
+        Only words the injected model declares are ever written here: an
+        undeclared one fails the table's CHECK constraint.
+        """
+        self._call_off(job_id, f"throttled: {reason}" if reason else "throttled")
+
+    def track_job_interrupted(self, job_id: int, reason: str | None = None) -> None:
+        """Settle a tracked INLINE run that was cancelled while its body ran.
+
+        The task awaiting it was cancelled (a parent job's timeout or shutdown,
+        a dropped request, Ctrl+C). Nothing redelivers an inline run, so its
+        row gets the terminal word a refused one gets, for the same reason.
+        """
+        self._call_off(job_id, f"interrupted: {reason}" if reason else "interrupted")
+
+    def _call_off(self, job_id: int, cancel_reason: str) -> None:
+        if not self.job_model:
+            return
+
+        job_record = self.job_model.find(job_id)
+        if not job_record:
+            return
+
+        now = pendulum.now("UTC")
+        self._transition(job_record, self.job_model.STATUS_CANCELLED, now=now)
+        job_record.cancelled_at = now
+        metadata = job_record.metadata or {}
+        metadata["cancel_reason"] = cancel_reason
+        job_record.metadata = metadata
+        job_record.save()
+
     def track_job_failed(
         self, job_uid: str, error: str, should_retry: bool = True
     ) -> str | None:

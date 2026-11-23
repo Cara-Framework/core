@@ -16,7 +16,7 @@ drift survive that question:
 Both sides are compared as the SERVER spells them. The live side is
 ``pg_get_indexdef``; the declared side is the model's own statement built on
 a session TEMP clone of the table and read back the same way
-(:func:`cara.schema.LiveSchema.normalize_declared_indexes`). A blueprint
+(:func:`cara.schema.DeclaredSpelling.normalize_declared_indexes`). A blueprint
 ``field.index([...])`` and a raw ``__indexes__`` statement therefore compare
 by one exact rule, and a declaration that merely READS differently
 (``LOWER(x)`` against the stored ``lower((x)::text)``) is not a change.
@@ -42,8 +42,10 @@ from cara.schema.DeclaredIndex import (
     _unique_index_preflight,
     declared_indexes,
     index_shape,
+    quoted_name,
+    stored_name,
 )
-from cara.schema.LiveSchema import LiveSchema
+from cara.schema.LiveSchema import LiveSchema, sql_literal
 from cara.schema.Operation import ADDITIVE, LOCKING, Operation
 
 
@@ -55,7 +57,10 @@ def reshape_index_name(name: str, shape: str) -> str:
     index swapped in. Truncated so Postgres stores the name it is given.
     """
     digest = hashlib.sha256(shape.encode()).hexdigest()[:8]
-    return f"{name[: _MAX_IDENTIFIER_LENGTH - 12]}_rs_{digest}"
+    # Cut in bytes, as the server cuts: a multi-byte name cut by characters
+    # would still be stored shorter than given, and never found again.
+    head = name.encode()[: _MAX_IDENTIFIER_LENGTH - 12].decode(errors="ignore")
+    return f"{head}_rs_{digest}"
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,9 @@ def _foreign_key_preflight(name: str) -> tuple[str, str]:
     """A foreign key leaning on a unique index blocks dropping it."""
     return (
         "SELECT 1 FROM pg_constraint WHERE contype = 'f' "
-        f"AND conindid = to_regclass('{name}') LIMIT 1",
+        # The regclass text is parsed as an identifier: a mixed-case name
+        # must arrive quoted or it resolves to its case-folded twin.
+        f"AND conindid = to_regclass('{sql_literal(quoted_name(name))}') LIMIT 1",
         f"foreign keys reference {name} — dropping it would need them dropped "
         "too; re-point them by hand before the reshape",
     )
@@ -159,41 +166,40 @@ def _swap(
 ) -> Operation:
     """Drop the old index and give the built one its name, in one transaction."""
     name, old = drift.index.name, drift.live_definition
+    # The names the statements carry; ``name`` / ``temp`` stay the catalogue
+    # spellings for keys and prose.
+    q, t = quoted_name(name), quoted_name(temp)
     if drift.index.constraint and live_constraint:
         forward = (
-            f'ALTER TABLE "{table}" DROP CONSTRAINT {name}, '
-            f"ADD CONSTRAINT {name} UNIQUE USING INDEX {temp}"
+            f'ALTER TABLE "{table}" DROP CONSTRAINT {q}, '
+            f"ADD CONSTRAINT {q} UNIQUE USING INDEX {t}"
         )
         reverse = (
-            f'ALTER TABLE "{table}" DROP CONSTRAINT {name}, '
-            f"ADD CONSTRAINT {name} {constraint_definition}"
+            f'ALTER TABLE "{table}" DROP CONSTRAINT {q}, '
+            f"ADD CONSTRAINT {q} {constraint_definition}"
             if constraint_definition
             else None
         )
     elif drift.index.constraint:
         forward = (
-            f"DO $$ BEGIN DROP INDEX {name}; "
-            f'ALTER TABLE "{table}" ADD CONSTRAINT {name} UNIQUE USING INDEX {temp}; END $$'
+            f"DO $$ BEGIN DROP INDEX {q}; "
+            f'ALTER TABLE "{table}" ADD CONSTRAINT {q} UNIQUE USING INDEX {t}; END $$'
         )
-        reverse = (
-            f'DO $$ BEGIN ALTER TABLE "{table}" DROP CONSTRAINT {name}; {old}; END $$'
-        )
+        reverse = f'DO $$ BEGIN ALTER TABLE "{table}" DROP CONSTRAINT {q}; {old}; END $$'
     elif live_constraint:
         forward = (
-            f'DO $$ BEGIN ALTER TABLE "{table}" DROP CONSTRAINT {name}; '
-            f"ALTER INDEX {temp} RENAME TO {name}; END $$"
+            f'DO $$ BEGIN ALTER TABLE "{table}" DROP CONSTRAINT {q}; '
+            f"ALTER INDEX {t} RENAME TO {q}; END $$"
         )
         reverse = (
-            f"DO $$ BEGIN ALTER INDEX {name} RENAME TO {temp}; "
-            f'ALTER TABLE "{table}" ADD CONSTRAINT {name} {constraint_definition}; END $$'
+            f"DO $$ BEGIN ALTER INDEX {q} RENAME TO {t}; "
+            f'ALTER TABLE "{table}" ADD CONSTRAINT {q} {constraint_definition}; END $$'
             if constraint_definition
             else None
         )
     else:
-        forward = (
-            f"DO $$ BEGIN DROP INDEX {name}; ALTER INDEX {temp} RENAME TO {name}; END $$"
-        )
-        reverse = f"DO $$ BEGIN ALTER INDEX {name} RENAME TO {temp}; {old}; END $$"
+        forward = f"DO $$ BEGIN DROP INDEX {q}; ALTER INDEX {t} RENAME TO {q}; END $$"
+        reverse = f"DO $$ BEGIN ALTER INDEX {q} RENAME TO {t}; {old}; END $$"
 
     preflight_sql, preflight_failure = (
         _foreign_key_preflight(name)
@@ -228,7 +234,7 @@ def _rebuild(
         kind="rebuild_index",
         table=table,
         key=f"{table}:{name}:rebuild",
-        forward_sql=f"REINDEX INDEX CONCURRENTLY {name}",
+        forward_sql=f"REINDEX INDEX CONCURRENTLY {quoted_name(name)}",
         reverse_sql=None,
         safety=ADDITIVE,
         reason=(
@@ -292,7 +298,7 @@ def changed_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
         temp = drift.scaffold
         build = None
         if temp in invalid:
-            build = f"REINDEX INDEX CONCURRENTLY {temp}"
+            build = f"REINDEX INDEX CONCURRENTLY {quoted_name(temp)}"
         elif temp not in live_definitions:
             build = index.statement(table, temp, concurrently=True)
         if build is not None:
@@ -302,7 +308,7 @@ def changed_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
                     table=table,
                     key=f"{table}:{name}:reshape",
                     forward_sql=build,
-                    reverse_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {temp}",
+                    reverse_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {quoted_name(temp)}",
                     safety=ADDITIVE,
                     reason=(
                         f"index {name} in the database is not what the model "
@@ -337,4 +343,5 @@ __all__ = [
     "drifted_indexes",
     "reshape_index_name",
     "reshape_scaffolding",
+    "stored_name",
 ]

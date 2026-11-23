@@ -214,13 +214,21 @@ def _grammar_process_offset(self):
 def _grammar_process_returning(self):
     """``RETURNING`` for the columns an UPDATE must hand back, or nothing.
 
-    The builder asks for it only on a loaded model's UPDATE, for the columns
-    whose written value only the database knows (see ``_qb_update``). Every
-    other statement keeps answering with its affected-row count.
+    The builder asks for it on a loaded model's UPDATE, for the columns
+    whose written value only the database knows, and for a model query that
+    wants its written rows back (see ``_qb_update``). Every other statement
+    keeps answering with its affected-row count.
+
+    ``*`` is emitted bare: the qualified ``"table".*`` every other column
+    reference gets is refused by SQLite ("RETURNING may not use TABLE.*
+    wildcards"), and an UPDATE has one target table on both dialects.
     """
     if not self._returning:
         return ""
-    columns = ", ".join(self._table_column_string(column) for column in self._returning)
+    columns = ", ".join(
+        "*" if column == "*" else self._table_column_string(column)
+        for column in self._returning
+    )
     return f"RETURNING {columns}"
 
 
@@ -267,7 +275,7 @@ def _grammar_process_having(self, qmark=False):
         self
     """
     sql = ""
-    for having in self._having:
+    for position, having in enumerate(self._having):
         column = having.column
         equality = having.equality
         value = having.value
@@ -287,11 +295,18 @@ def _grammar_process_having(self, qmark=False):
             else:
                 compiled_value = self._compile_value(value)
 
-        sql += sql_string.format(
+        clause = sql_string.format(
             column=self._table_column_string(column) if raw is False else column,
             equality=equality,
             value=compiled_value,
         )
+        if position:
+            # A statement takes ONE ``HAVING``; further conditions are ANDed
+            # onto it. Every condition used to carry its own keyword
+            # (``HAVING a > ?HAVING a < ?``), a syntax error on every dialect
+            # as soon as a query called ``having()`` twice.
+            clause = " AND " + clause.removeprefix("HAVING").lstrip()
+        sql += clause
 
     return sql
 
@@ -315,6 +330,11 @@ def _grammar_process_wheres(self, qmark=False, strip_first_where=False):
         equality = where.equality
         value = where.value
         value_type = where.value_type
+        if isinstance(value, SubGroupExpression) and not value.builder._wheres:
+            # A group that constrains nothing is no predicate. It compiled to
+            # ``WHERE () AND ...`` — a syntax error — whenever a conditional
+            # callback (``where(lambda q: q.when(flag, ...))``) added nothing.
+            continue
         """
         Need to get a specific keyword here. This keyword either needs to be something like
         WHERE, AND, OR.
@@ -357,18 +377,15 @@ def _grammar_process_wheres(self, qmark=False, strip_first_where=False):
         if value_type == "expression":
             # ``where(F("a"), op, F("b"))`` — render BOTH sides through
             # the expression compiler so column references are quoted
-            # identifiers and any literal operand is escaped as a value.
-            # No %s binding is emitted for either side.
+            # identifiers and any literal operand is escaped as a value
+            # (``_compile_expression_operand``). No %s binding is emitted
+            # for either side.
             left = (
                 self.compile_expression(column)
                 if self.is_column_expression(column)
                 else self._table_column_string(column)
             )
-            right = (
-                self.compile_expression(value)
-                if self.is_column_expression(value)
-                else self._compile_value(value).strip()
-            )
+            right = self._compile_expression_operand(value)
             sql += self.where_string().format(
                 keyword=keyword,
                 column=left,
@@ -479,16 +496,24 @@ def _grammar_process_wheres(self, qmark=False, strip_first_where=False):
                 else:
                     query_value += self.value_string().format(value=val, separator=",")
             query_value = query_value.rstrip(",").rstrip(", ") + ")"
-        elif value is True and value_type != "NOT NULL":
+        # The ``IS True`` / ``= '1'`` templates carry no operator slot, so
+        # they are the ``=`` comparison only. Taken for every operator they
+        # silently INVERTED the caller: ``where("active", "!=", True)``
+        # compiled to ``active IS True`` and returned exactly the rows it was
+        # asked to exclude. Any other operator compares the boolean like any
+        # value: bound, with its operator.
+        elif value is True and value_type != "NOT NULL" and equality == "=":
             sql_string = self.get_true_column_string()
             query_value = 1
-        elif value is False and value_type != "NOT NULL":
+        elif value is False and value_type != "NOT NULL" and equality == "=":
             sql_string = self.get_false_column_string()
             query_value = 0
         elif qmark and value_type != "column":
             query_value = "'?'"
             if (
-                value is not True
+                # ``where_not_null`` carries ``True`` as a placeholder value
+                # its template never renders; nothing is bound for it.
+                value_type != "NOT NULL"
                 and value_type != "value_equals"
                 and value_type != "NULL"
                 and value_type != "BETWEEN"

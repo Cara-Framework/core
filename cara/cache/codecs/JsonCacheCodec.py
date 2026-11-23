@@ -17,6 +17,9 @@ import pendulum
 
 from cara.exceptions import CacheConfigurationException
 
+#: The string escaper ``json.dumps(..., ensure_ascii=False)`` itself uses.
+_JSON_STRING = json.encoder.encode_basestring
+
 
 class JsonCacheCodec:
     """Canonical tagged JSON with HMAC integrity.
@@ -223,7 +226,7 @@ class JsonCacheCodec:
                     budget=budget,
                 )
                 entries.append(
-                    (self._canonical_json(encoded_key), [encoded_key, encoded_value])
+                    (self._key_order(key, encoded_key), [encoded_key, encoded_value])
                 )
             entries.sort(key=lambda entry: entry[0])
             return {"t": "dict", "v": [entry[1] for entry in entries]}
@@ -243,12 +246,29 @@ class JsonCacheCodec:
         if tag == "none":
             self._require_keys(node, {"t"})
             return None
-        self._require_keys(
-            node,
-            {"t", "v", "fold"} if tag in {"datetime", "time"} else {"t", "v"},
-        )
+        # Exactly {"t", "v"} — plus "fold" for the two tags that carry one.
+        # "t" is known present and a dict's keys are distinct, so the length
+        # settles it without building two sets per node (this runs once per
+        # value on every cache hit).
+        if tag == "datetime" or tag == "time":
+            well_formed = len(node) == 3 and "v" in node and "fold" in node
+        else:
+            well_formed = len(node) == 2 and "v" in node
+        if not well_formed:
+            raise CacheConfigurationException("Redis cache value tag shape is invalid.")
         value = node["v"]
 
+        # The three tags that make up nearly every node come first; the tags
+        # are mutually exclusive, so the order of the branches decides nothing
+        # but how many comparisons a node costs.
+        if tag == "str" and isinstance(value, str):
+            return value
+        if tag == "dict" and isinstance(value, list):
+            return self._decode_dict(value, depth, budget)
+        if tag == "list" and isinstance(value, list):
+            return [
+                self._decode_value(item, depth=depth + 1, budget=budget) for item in value
+            ]
         if tag == "bool" and isinstance(value, bool):
             return value
         if tag == "int" and isinstance(value, str):
@@ -267,8 +287,6 @@ class JsonCacheCodec:
                 ) from exc
             if math.isfinite(decoded):
                 return decoded
-        if tag == "str" and isinstance(value, str):
-            return value
         if tag in {"bytes", "bytearray"} and isinstance(value, str):
             try:
                 decoded_bytes = base64.b64decode(value, validate=True)
@@ -321,12 +339,10 @@ class JsonCacheCodec:
                 raise CacheConfigurationException(
                     "Redis cache time tag is invalid."
                 ) from exc
-        if tag in {"list", "tuple", "set", "frozenset"} and isinstance(value, list):
+        if tag in {"tuple", "set", "frozenset"} and isinstance(value, list):
             decoded_items = [
                 self._decode_value(item, depth=depth + 1, budget=budget) for item in value
             ]
-            if tag == "list":
-                return decoded_items
             if tag == "tuple":
                 return tuple(decoded_items)
             try:
@@ -337,38 +353,50 @@ class JsonCacheCodec:
                 raise CacheConfigurationException(
                     "Redis cache set contains an unhashable value."
                 ) from exc
-        if tag == "dict" and isinstance(value, list):
-            decoded_dict = {}
-            for entry in value:
-                if not isinstance(entry, list) or len(entry) != 2:
-                    raise CacheConfigurationException(
-                        "Redis cache dict entry is invalid."
-                    )
-                key = self._decode_value(
-                    entry[0],
-                    depth=depth + 1,
-                    budget=budget,
-                )
-                item = self._decode_value(
-                    entry[1],
-                    depth=depth + 1,
-                    budget=budget,
-                )
-                try:
-                    if key in decoded_dict:
-                        raise CacheConfigurationException(
-                            "Redis cache dict contains a duplicate key."
-                        )
-                    decoded_dict[key] = item
-                except TypeError as exc:
-                    raise CacheConfigurationException(
-                        "Redis cache dict contains an unhashable key."
-                    ) from exc
-            return decoded_dict
-
         raise CacheConfigurationException(
             f"Redis cache value tag {tag!r} is invalid or unsupported."
         )
+
+    def _decode_dict(self, value: list[Any], depth: int, budget: list[int]) -> dict:
+        decoded_dict = {}
+        for entry in value:
+            if not isinstance(entry, list) or len(entry) != 2:
+                raise CacheConfigurationException("Redis cache dict entry is invalid.")
+            key = self._decode_value(
+                entry[0],
+                depth=depth + 1,
+                budget=budget,
+            )
+            item = self._decode_value(
+                entry[1],
+                depth=depth + 1,
+                budget=budget,
+            )
+            try:
+                if key in decoded_dict:
+                    raise CacheConfigurationException(
+                        "Redis cache dict contains a duplicate key."
+                    )
+                decoded_dict[key] = item
+            except TypeError as exc:
+                raise CacheConfigurationException(
+                    "Redis cache dict contains an unhashable key."
+                ) from exc
+        return decoded_dict
+
+    def _key_order(self, key: Any, encoded_key: Any) -> str:
+        """The text a dict entry is ordered by: its key's canonical JSON.
+
+        A string key — nearly every key — has the fixed shape
+        ``{"t":"str","v":<json string>}``, written here directly: a
+        ``json.dumps`` per key (a new encoder each call) was more than half of
+        the whole encode. Text, not bytes: UTF-8 preserves code-point order,
+        so the entry order, and with it the encoded payload, is byte-identical
+        to sorting by the UTF-8 canonical JSON.
+        """
+        if type(key) is str:
+            return f'{{"t":"str","v":{_JSON_STRING(key)}}}'
+        return self._canonical_json(encoded_key).decode("utf-8")
 
     @staticmethod
     def _canonical_json(value: Any) -> bytes:

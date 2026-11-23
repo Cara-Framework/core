@@ -12,7 +12,7 @@ import os
 import pkgutil
 
 from cara.exceptions import LoaderNotFoundException
-from cara.support import as_filepath, load
+from cara.support import as_filepath, base_path, load, modularize
 
 
 def parameters_filter(obj_name, obj):
@@ -80,11 +80,39 @@ class Loader:
             pkgutil.iter_modules(module_paths), key=lambda m: m[1]
         ):
             module = load(
-                f"{os.path.relpath(module_loader.path)}.{name}",
+                self._import_name(module_loader.path, name),
                 raise_exception=raise_exception,
             )
             modules[name] = module
         return modules
+
+    @staticmethod
+    def _import_name(directory: str, name: str) -> str:
+        """The dotted import name of module ``name`` found in ``directory``.
+
+        Derived relative to the configured base path (the deployable root,
+        the directory its entry point puts on ``sys.path``), not to the
+        working directory: relative to cwd the same ``config/logging.py``
+        imported as ``config.logging`` from the deployable, as
+        ``api.config.logging`` from its parent (a second copy of the module)
+        and as ``..config.logging`` (an import error) from a subdirectory.
+        A directory outside the base path keeps the cwd-relative name it
+        always had.
+        """
+        relative = None
+        try:
+            candidate = os.path.relpath(
+                os.path.abspath(directory), os.path.abspath(base_path())
+            )
+            if candidate != os.pardir and not candidate.startswith(os.pardir + os.sep):
+                relative = candidate
+        except ValueError:  # another drive on Windows
+            pass
+        if relative is None:
+            relative = os.path.relpath(directory)
+        if relative == os.curdir:
+            return name
+        return modularize(f"{relative}.{name}", suffix="")
 
     def find(
         self,

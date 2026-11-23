@@ -133,7 +133,9 @@ def render_literals(sql: str, params: Sequence[Any]) -> str:
     if position != len(values):
         raise ValueError("render_literals: more parameters than %s placeholders")
     if "%" in rendered:
-        raise ValueError("a scoped relation may not render a '%' (it would read as a bind)")
+        raise ValueError(
+            "a scoped relation may not render a '%' (it would read as a bind)"
+        )
     return rendered
 
 
@@ -142,9 +144,7 @@ READ_CLOCK_SETTING = "cara.read_clock"
 #: The request clock in SQL: the scope's instant inside a clocked scope, the
 #: database clock (transaction start) everywhere else. The one sanctioned
 #: ``now()`` of a read: the guard below reads past it.
-READ_CLOCK_SQL = (
-    f"COALESCE(NULLIF(current_setting('{READ_CLOCK_SETTING}', true), '')::timestamptz, now())"
-)
+READ_CLOCK_SQL = f"COALESCE(NULLIF(current_setting('{READ_CLOCK_SETTING}', true), '')::timestamptz, now())"
 #: The request clock as an UPPER BOUND on what a read sees — for rows the
 #: scope's relations do not bound (a function over an append-only log):
 #: ``recorded_at <= {READ_CLOCK_BOUND_SQL}`` is the rows recorded by the scope's
@@ -259,7 +259,7 @@ class ReadScope:
         if head is None:
             return f"WITH {ctes} {body}"
         recursive = head.group(1) or ""
-        return f"WITH{recursive} {ctes}, {body[head.end():]}"
+        return f"WITH{recursive} {ctes}, {body[head.end() :]}"
 
     def _refuse(self, body: str) -> None:
         if self.clock is not None and _reads_clock(body):
@@ -298,7 +298,9 @@ def _mention_pattern(names: tuple[str, ...]) -> re.Pattern[str]:
     bare name not inside a longer word nor after ``.`` / ``"``, or the name
     quoted, not after ``.``. Longest first, so a name never shadows a longer
     one it begins."""
-    alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    alternatives = "|".join(
+        re.escape(name) for name in sorted(names, key=len, reverse=True)
+    )
     return re.compile(
         rf'(?<![\w."])(?P<bare>{alternatives})(?![\w"])|(?<![\w.])"(?P<quoted>{alternatives})"'
     )

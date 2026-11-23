@@ -115,16 +115,14 @@ class AuthenticateUser(ShouldAuthenticate):
                 if user:
                     successful_guard = guard_name
                     break
-            # Mirrors ``ShouldAuthenticate.handle``: only an HTTP-facing
-            # taxonomy exception is a guard saying "no". A bare
-            # ``except Exception`` turned a Postgres pool exhaustion or a
-            # Redis timeout into a 401 carrying the raw driver message,
-            # bypassing DefaultExceptionHandler's 5xx redaction and hiding a
-            # total outage from every 5xx alert. Everything else propagates.
+            # The base class's rule (``guard_denial``): only a 4xx is a guard
+            # saying "no"; a fault propagates. A bare ``except Exception``
+            # turned a Postgres pool exhaustion or a Redis timeout into a 401
+            # carrying the raw driver message; classifying with
+            # ``is_http_exception`` still let a 503 (auth backend down) from
+            # one guard be overwritten by the next guard's 401.
             except CaraException as e:
-                if not getattr(e, "is_http_exception", False):
-                    raise
-                last_error = e
+                last_error = self.guard_denial(e)
                 Log.debug(
                     f"AuthenticateUser: guard '{guard_name}' failed: "
                     f"{e.__class__.__name__}: {e}",

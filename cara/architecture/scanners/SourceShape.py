@@ -50,15 +50,19 @@ def _module_line_counts(root: Path) -> dict[Path, int]:
     pay the real total.
     """
     files = python_files(root)
-    counts = {
-        path.resolve(): len((read_source(path) or "").splitlines()) for path in files
-    }
+    own = {path.resolve(): len((read_source(path) or "").splitlines()) for path in files}
+    # Sum each file's OWN lines, never an already-aggregated total. Summing the
+    # running totals charged a nested split twice: ``Big/Part.py`` sorts before
+    # ``Big.py``, so by the time ``Big.py`` added up ``Big/**`` the entry for
+    # ``Big/Part.py`` already contained ``Big/Part/Leaf.py`` — and the walk
+    # then added ``Leaf.py`` again. Three 10-line files reported as 40.
+    counts = dict(own)
     for owner in files:
         implementation = owner.with_suffix("")
         if not implementation.is_dir():
             continue
         counts[owner.resolve()] += sum(
-            counts[path.resolve()]
+            own[path.resolve()]
             for path in python_files(implementation)
             if path.name != "__init__.py"
         )

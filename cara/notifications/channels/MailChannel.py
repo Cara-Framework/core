@@ -74,7 +74,14 @@ class MailChannel(BaseChannel):
                 raise ConfigurationException(
                     f"MailChannel setting {key!r} must be a non-empty string or None."
                 )
-            self.link_settings[key] = value.strip()
+            # The signing secret is kept byte-for-byte: the token is keyed by
+            # the RAW secret (``UnsubscribeToken.mint``, which every product
+            # issuer and verifier also passes raw). Stripping it here signed
+            # with a different key than the verifier checked, so a secret
+            # with surrounding whitespace broke every link this channel sent.
+            self.link_settings[key] = (
+                value if key == "app.unsubscribe_secret" else value.strip()
+            )
 
     def send(self, notifiable, notification) -> bool:
         """

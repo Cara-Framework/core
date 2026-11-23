@@ -14,7 +14,13 @@ import ast
 from collections import defaultdict
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import (
+    IMPORT_NODE_TYPES,
+    nodes_of,
+    parse,
+    python_files,
+    relpath,
+)
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -91,7 +97,7 @@ def _violations(
     symbols: dict[str, frozenset[str]],
 ) -> list[tuple[int, str]]:
     violations: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in nodes_of(tree, IMPORT_NODE_TYPES):
         if isinstance(node, ast.ImportFrom):
             module = _absolute_module(rel, node)
             for alias in node.names:

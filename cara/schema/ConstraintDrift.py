@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 
+from cara.schema.DeclaredIndex import quoted_name, stored_name
 from cara.schema.LiveSchema import LiveSchema, constraint_body, declared_columns
 from cara.schema.Objects import (
     _declared_checks,
@@ -70,7 +71,7 @@ def raw_checks(model: dict) -> list[tuple[str, str]]:
         for match in _NAMED_CHECK_RE.finditer(sql):
             body = _balanced_body(sql, match.end())
             if body:
-                found.append((match.group("name"), body))
+                found.append((stored_name(match.group("name")), body))
     return found
 
 
@@ -85,7 +86,7 @@ def _all_declared_checks(model: dict, table: str) -> list[tuple[str, str]]:
 
 def declared_checks(model: dict, table: str) -> list[tuple[str, str]]:
     """``(name, expression)`` for every CHECK the model declares — the input
-    :func:`cara.schema.LiveSchema.normalize_declared_checks` spells."""
+    :func:`cara.schema.DeclaredSpelling.normalize_declared_checks` spells."""
     return _all_declared_checks(model, table)
 
 
@@ -165,7 +166,7 @@ def changed_checks(
     — left the old body enforcing on a database both gates called clean, and
     ``dev:seed-check`` reading its vocabulary from that body kept asking for
     the value the model had dropped. The two bodies are compared as the
-    SERVER spells them (:func:`cara.schema.LiveSchema.normalize_declared_checks`),
+    SERVER spells them (:func:`cara.schema.DeclaredSpelling.normalize_declared_checks`),
     so a declaration that merely reads differently is not a change, and each
     at its fixpoint, so neither does a CHECK that went through ``pg_dump``.
 
@@ -208,13 +209,14 @@ def changed_checks(
                 table=table,
                 key=f"{table}:{name}",
                 forward_sql=(
-                    f'ALTER TABLE "{table}" DROP CONSTRAINT {name}, '
-                    f"ADD CONSTRAINT {name} CHECK ({expression}) NOT VALID"
+                    f'ALTER TABLE "{table}" DROP CONSTRAINT {quoted_name(name)}, '
+                    f"ADD CONSTRAINT {quoted_name(name)} CHECK ({expression}) NOT VALID"
                 ),
                 reverse_sql=(
-                    f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {name}, '
-                    f"ADD CONSTRAINT {name} "
-                    f"{_renamed_body(constraint_body(current), renamed)} NOT VALID"
+                    f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS '
+                    f"{quoted_name(name)}, ADD CONSTRAINT {quoted_name(name)} "
+                    f"{_renamed_body(constraint_body(current), renamed)}"
+                    f"{_as_found(live, table, name)}"
                 ),
                 safety=LOCKING,
                 reason=(
@@ -256,6 +258,18 @@ def left_not_valid(live: LiveSchema, table: str, name: str) -> bool:
     return bool(current) and constraint_body(current) != str(current).strip()
 
 
+def _as_found(live: LiveSchema, table: str, name: str) -> str:
+    """The suffix that re-adds a replaced constraint in the state the forward
+    found it: `` NOT VALID`` only when it was never validated.
+
+    Both replace recipes restored the old body ``NOT VALID`` unconditionally,
+    so rolling back a replace of a VALIDATED constraint left it unproven and
+    the next plan asked to validate it again. A plain ``ADD CONSTRAINT``
+    proves the rows as it attaches — the validated state the forward found.
+    """
+    return " NOT VALID" if left_not_valid(live, table, name) else ""
+
+
 def _validate_check(
     table: str, name: str, expression: str, reason: str, failure: str, undone_by: str
 ) -> Operation:
@@ -263,7 +277,7 @@ def _validate_check(
         kind="validate_check",
         table=table,
         key=f"{table}:{name}:validate",
-        forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
+        forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {quoted_name(name)}',
         reverse_sql=None,
         safety=LOCKING,
         reason=reason,
@@ -331,7 +345,7 @@ def raw_foreign_keys(model: dict) -> list[dict]:
         named = _NAMED_FOREIGN_KEY_RE.search(sql)
         parsed = _parsed_foreign_key(sql[named.start() :]) if named else None
         if parsed is not None:
-            keys.append({"name": named.group("name"), **parsed})
+            keys.append({"name": stored_name(named.group("name")), **parsed})
     return keys
 
 
@@ -360,12 +374,13 @@ def changed_foreign_key(table: str, key: dict, live: LiveSchema) -> list[Operati
             table=table,
             key=f"{table}:{name}",
             forward_sql=(
-                f'ALTER TABLE "{table}" DROP CONSTRAINT {name}, '
+                f'ALTER TABLE "{table}" DROP CONSTRAINT {quoted_name(name)}, '
                 f"{_foreign_key_clause(key)}"
             ),
             reverse_sql=(
-                f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {name}, '
-                f"ADD CONSTRAINT {name} {body} NOT VALID"
+                f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS '
+                f"{quoted_name(name)}, ADD CONSTRAINT {quoted_name(name)} {body}"
+                f"{_as_found(live, table, name)}"
             ),
             safety=LOCKING,
             reason="FOREIGN KEY in the database asserts something the model no longer declares",
@@ -408,9 +423,10 @@ def orphaned_unique_constraints(
                 kind="drop_unique_constraint",
                 table=table,
                 key=f"{table}:{name}",
-                forward_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {name}',
+                forward_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {quoted_name(name)}',
                 reverse_sql=(
-                    f'ALTER TABLE "{table}" ADD CONSTRAINT {name} {definition}'
+                    f'ALTER TABLE "{table}" ADD CONSTRAINT {quoted_name(name)} '
+                    f"{definition}"
                     if definition
                     else None
                 ),

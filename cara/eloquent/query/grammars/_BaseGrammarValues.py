@@ -128,10 +128,21 @@ def _grammar_process_column(self, column, separator=""):
     if column and "." in column:
         table, column = column.split(".")
     return self.column_string().format(
-        column=column,
+        column=self.escape_identifier(column),
         separator=separator,
         table=table or self.table,
     )
+
+
+def _grammar_escape_identifier(self, name):
+    """Make ``name`` safe to place between the dialect's identifier quotes.
+
+    Only strings are touched: ``None`` (no table qualifier) passes through.
+    """
+    if not isinstance(name, str):
+        return name
+    quote = self.identifier_quote
+    return name.replace(quote, quote + quote)
 
 
 def _table_column_string(self, column, alias=None, separator=""):
@@ -150,6 +161,16 @@ def _table_column_string(self, column, alias=None, separator=""):
     table = None
     if column and "." in column:
         table, column = column.split(".")
+
+    # The one choke point every builder identifier (``where({key: v})``,
+    # ``group_by``, join ``on``, update keys, returning, aggregates) passes
+    # through. The templates wrap the name in the dialect's quote character
+    # but never escaped it, so ``where({'x"; DROP TABLE users; --': 1})``
+    # closed the identifier and ran the rest as SQL. Doubling an embedded
+    # quote is the SQL standard escape inside a quoted identifier; a name
+    # without one (every ordinary column) compiles byte-identically.
+    column = self.escape_identifier(column)
+    table = self.escape_identifier(table)
 
     if column == "*":
         return self.column_strings.get("select_all").format(
@@ -191,9 +212,9 @@ def _grammar_compile_expression(self, expr) -> str:
     quoting every column reference as an identifier (via
     ``_table_column_string`` so ``table.col`` qualification and the
     grammar's quote chars are honoured) and escaping any non-expression
-    operand as a literal value (via ``value_string`` — the same escape
-    path the rest of the grammar uses). Nested ``Operation`` nodes are
-    wrapped in parentheses so SQL precedence is explicit.
+    operand as a literal value (``_compile_expression_operand``). Nested
+    ``Operation`` nodes are wrapped in parentheses so SQL precedence is
+    explicit.
 
     This is the single rendering seam shared by F-style updates,
     ``where(F(...), op, F(...))`` filters, and the GREATEST/LEAST
@@ -215,7 +236,7 @@ def _grammar_compile_expression(self, expr) -> str:
 
     # A bare literal handed straight to compile_expression — escape it
     # as a value so the fragment is still well-formed.
-    return self._compile_value(expr).strip()
+    return self._compile_expression_operand(expr)
 
 
 def _compile_expression_operand(self, operand) -> str:
@@ -225,6 +246,14 @@ def _compile_expression_operand(self, operand) -> str:
     nested ``Operation`` trees additionally get parenthesised so the
     emitted SQL reflects the Python composition order. Anything else is
     a Python literal and is escaped as a value.
+
+    ROOT CAUSE: "escaped" was only ever the docstring. The literal was
+    spliced in as ``'{value}'`` with its own quotes untouched — on the
+    executed path too, where nothing binds an expression operand — so
+    ``where(F("name"), "=", "x' OR '1'='1")`` matched every row and
+    ``"o'brien"`` was a syntax error. Doubling the single quote is the whole
+    of SQL's string-literal escaping on both supported dialects (PostgreSQL
+    with its default ``standard_conforming_strings``).
     """
     if self.is_column_expression(operand):
         rendered = self.compile_expression(operand)
@@ -232,7 +261,26 @@ def _compile_expression_operand(self, operand) -> str:
             return f"({rendered})"
         return rendered
 
-    return self._compile_value(operand).strip()
+    return self.expression_literal(str(operand))
+
+
+def _grammar_expression_literal(self, text: str) -> str:
+    """``text`` as a SQL string literal inlined into the statement.
+
+    The literal is part of the statement TEXT, and two readers downstream
+    interpret that text again: the connection turns every ``'?'`` into a
+    driver placeholder, and psycopg2 reads ``%`` as a format directive
+    whenever the statement carries bindings. So ``F("code") == "?"`` consumed
+    another clause's binding, and ``"50%"`` beside any bound value raised
+    inside the driver. Each dialect's grammar spells those two characters in
+    a form neither reader recognises (``PostgresGrammar`` / ``SQLiteGrammar``
+    override this); the SQL type stays what a plain literal has. A literal
+    without them compiles byte-identically to before.
+
+    This base form — quotes doubled, nothing else — is for a dialect whose
+    connection performs neither rewrite.
+    """
+    return self._compile_value(text.replace("'", "''")).strip()
 
 
 def _grammar_where_regexp_string(self):

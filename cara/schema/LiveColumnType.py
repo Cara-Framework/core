@@ -22,6 +22,17 @@ def live_type_sql(live: dict) -> str:
     precision, scale = live.get("numeric_precision"), live.get("numeric_scale")
     if base == "NUMERIC" and precision is not None and scale is not None:
         return f"NUMERIC({precision},{scale})"
+    if max_length and base in {"BIT VARYING", "BIT"}:
+        # A bit string's length is reported where a character type's is;
+        # dropped, ``bit varying(8)`` came back unbounded and ``bit(8)`` as
+        # ``bit`` — which Postgres reads as ``bit(1)``.
+        return f"{base}({max_length})"
+    formatted = live.get("formatted_type")
+    if base == "ARRAY" and formatted and str(formatted).endswith("[]"):
+        # ``format_type`` keeps the element's modifier (``character
+        # varying(20)[]``); ``udt_name`` (``_varchar``) has none, so an array
+        # of bounded elements came back unbounded.
+        return str(formatted)
     if base == "ARRAY" and udt and udt.startswith("_"):
         return f'"{udt[1:]}"[]'
     if base == "USER-DEFINED" and udt:

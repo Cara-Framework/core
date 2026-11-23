@@ -41,6 +41,47 @@ def test_timeout_audit_accepts_bounded_calls_and_ignores_lookalikes():
     )
 
 
+def test_timeout_none_is_the_unbounded_call_not_a_bound():
+    """Only the keyword's presence was read, so the one value that means
+    "wait forever" satisfied the audit."""
+    found = _timeouts(
+        "import asyncio, httpx, requests\n"
+        "requests.get('u', timeout=None)\n"
+        "httpx.Client(timeout=None)\n"
+        "asyncio.to_thread(requests.post, 'u', timeout=None)\n"
+        "requests.get('u', timeout=limit)\n"  # a name may be anything: left alone
+    )
+    assert found == [
+        "requests.get passes timeout=None",
+        "httpx.Client passes timeout=None",
+        "asyncio.to_thread(requests.post) passes timeout=None",
+    ]
+
+
+def test_a_session_bound_by_with_or_kept_on_the_instance_is_followed():
+    """Sessions were tracked through ``name = Session()`` alone, so the two
+    commonest ways to hold one hid every call made on it."""
+    found = _timeouts(
+        "import requests\n"
+        "class Client:\n"
+        "    def __init__(self):\n"
+        "        self.session = requests.Session()\n"
+        "    def fetch(self):\n"
+        "        self.session.get('u')\n"
+        "        self.session.get('u', timeout=3)\n"
+        "        self.cache.get('key')\n"  # another attribute: not a session
+        "def push():\n"
+        "    with requests.Session() as http:\n"
+        "        http.mount('https://', adapter)\n"  # not a request verb
+        "        http.post('u')\n"
+        "        http.request('GET', 'u', timeout=3)\n"
+    )
+    assert found == [
+        "self.session.get lacks timeout=",
+        "http.post lacks timeout=",
+    ]
+
+
 def test_timeout_audit_scans_a_tree(tmp_path):
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "Fetch.py").write_text("import requests\nrequests.get('u')\n")

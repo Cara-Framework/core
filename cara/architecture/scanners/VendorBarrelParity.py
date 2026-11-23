@@ -44,7 +44,17 @@ class VendorBarrelParity:
             kernel_dir = manifest.roots.kernel.get(pkg)
             if kernel_dir is None:
                 continue
-            kernel_all = dunder_all(parse(kernel_dir / "__init__.py"))
+            # ``parse`` answers None for a kernel package with no readable
+            # ``__init__.py`` — a declared kernel root whose checkout is absent
+            # or mid-regeneration, or a barrel with a syntax error. Handing
+            # that None to ``dunder_all`` raised AttributeError out of the
+            # scanner and took the whole pack down with a traceback naming
+            # neither the package nor the file. Nothing to fold onto means
+            # nothing to check HERE — the answer ``_check_kernel_bridge`` next
+            # door already gives for the same None; a kernel directory holding
+            # modules and no barrel is BarrelCompleteness's own finding.
+            kernel_tree = parse(kernel_dir / "__init__.py")
+            kernel_all = dunder_all(kernel_tree) if kernel_tree is not None else None
             if kernel_all is None:
                 continue
 

@@ -46,6 +46,16 @@ its result and settled. Now it cancels the task it fences at that task's next
 says the cancellation is the heartbeat's). Re-taking a lapsed lease with
 SETNX would not be safe either: a run that took it in the gap and finished
 leaves no trace, and the stale run would then commit over its newer state.
+
+A LEASE THAT COULD NOT BE RENEWED FOR ITS WHOLE LENGTH IS LOST TOO. ``renew``
+raising is a blip while the lease still has headroom, but once no renewal has
+landed for ``lease_seconds`` the lease has lapsed on the authority's side and
+may already be another run's — and this process cannot ask. Until 2026-11-23
+the heartbeat kept retrying for ever and never fenced: a worker cut off from
+the database went on writing to the marketplace while the relay handed its
+delivery row to another worker. The lapse is measured from the START of the
+last renewal that landed (the earliest the authority can have extended it),
+so the run is fenced no later than the authority gives the lease away.
 """
 
 from __future__ import annotations
@@ -53,6 +63,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import threading
+import time
 from collections.abc import Callable
 from typing import ClassVar
 
@@ -66,6 +77,9 @@ class LeaseHeartbeat:
 
     #: Renewals per lease length: a lease survives two missed renewals.
     RENEWALS_PER_LEASE = 3
+
+    #: The clock the lapse check reads; a class attribute so a test can drive it.
+    _clock: ClassVar[Callable[[], float]] = staticmethod(time.monotonic)
 
     _live: ClassVar[set[LeaseHeartbeat]] = set()
     _live_lock: ClassVar[threading.Lock] = threading.Lock()
@@ -88,12 +102,16 @@ class LeaseHeartbeat:
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
         self._fence: tuple[asyncio.AbstractEventLoop, asyncio.Task] | None = None
+        #: When the lease last began a full ``lease_seconds``: taken as the
+        #: heartbeat starts, then at the start of each renewal that landed.
+        self._held_since = self._clock()
         self.renewals = 0
         self.lost = False
         #: True once this heartbeat cancelled the task it fences.
         self.fenced = False
 
     def start(self) -> LeaseHeartbeat:
+        self._held_since = self._clock()
         with self._live_lock:
             self._live.add(self)
         thread = threading.Thread(
@@ -154,11 +172,20 @@ class LeaseHeartbeat:
 
     def _run(self) -> None:
         while not self._stopped.wait(self.interval_seconds):
+            attempt_at = self._clock()
             try:
                 renewed = contextvars.Context().run(self._renew)
             except Exception as exc:
-                # A cache or database blip: the lease still has two renewals
-                # of headroom, so keep trying on the normal cadence.
+                if self._stopped.is_set():
+                    return
+                if self._clock() - self._held_since >= self.lease_seconds:
+                    self._lose(
+                        f"could not be renewed for {self.lease_seconds:.0f}s "
+                        f"and has lapsed ({type(exc).__name__}: {exc})"
+                    )
+                    return
+                # A cache or database blip: the lease still has headroom, so
+                # keep trying on the normal cadence.
                 Log.warning(
                     "Lease %s renewal failed; retrying in %.0fs: %s",
                     self.name,
@@ -170,17 +197,24 @@ class LeaseHeartbeat:
             if self._stopped.is_set():
                 return
             if not renewed:
-                self.lost = True
-                self.stop()
-                Log.warning(
-                    "Lease %s is no longer held by this run; renewal stopped%s.",
-                    self.name,
-                    " and the run fenced" if self._fence is not None else "",
-                    category="cara.queue.lease",
-                )
-                self._trip()
+                self._lose("is no longer held by this run")
                 return
+            self._held_since = attempt_at
             self.renewals += 1
+
+    def _lose(self, why: str) -> None:
+        """The lease is not provably this run's any more: stop for good and
+        fence the run."""
+        self.lost = True
+        self.stop()
+        Log.warning(
+            "Lease %s %s; renewal stopped%s.",
+            self.name,
+            why,
+            " and the run fenced" if self._fence is not None else "",
+            category="cara.queue.lease",
+        )
+        self._trip()
 
     @classmethod
     def live(cls) -> list[LeaseHeartbeat]:

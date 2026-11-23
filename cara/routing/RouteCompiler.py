@@ -15,9 +15,20 @@ from urllib.parse import unquote
 class RouteCompiler:
     """Handles route compilation and parameter extraction."""
 
+    #: How many times an ALREADY-compiled route was compiled again, process
+    #: wide (``Route.group`` re-prefixes a route in place). ``Router`` keeps a
+    #: lookup index over the patterns and compares this number to know the
+    #: patterns it indexed are still the ones in force. A first compile does
+    #: not count: a route is not in any router before it exists.
+    recompiles: int = 0
+
     def __init__(self, url: str, compilers: dict[str, str]):
         self._compiled_regex = None
         self.url_list: list[str] = []
+        #: The literal segments the pattern starts with (``("api", "orders")``
+        #: for ``/api/orders/@id``). A path can only match this route when it
+        #: starts with exactly these segments — see ``_RouteIndex``.
+        self.static_prefix: tuple[str, ...] = ()
         # Maps parameter name → compiler type name (e.g. "id" → "int")
         self.param_types: dict[str, str] = {}
         self.compilers = compilers or {"default": r"([^/]+)"}
@@ -28,10 +39,17 @@ class RouteCompiler:
         parts = url.strip("/").split("/")
         regex = "^"
         url_list: list[str] = []
+        static_prefix: list[str] = []
+        in_static_prefix = True
 
         for part in parts:
             if part == "":
                 continue
+
+            if part.startswith("@"):
+                in_static_prefix = False
+            elif in_static_prefix:
+                static_prefix.append(part)
 
             # Required parameter: "@id" or "@id:int"
             if part.startswith("@") and not part.endswith("?"):
@@ -59,7 +77,10 @@ class RouteCompiler:
 
         # Allow an optional trailing slash, then anchor end
         regex += r"/?$"
+        if self._compiled_regex is not None:
+            RouteCompiler.recompiles += 1
         self.url_list = url_list
+        self.static_prefix = tuple(static_prefix)
         self._compiled_regex = re.compile(regex)
         return regex
 
@@ -94,12 +115,21 @@ class RouteCompiler:
         Optional params stay None when missing (not empty string) so
         callers can distinguish "absent" from "empty".
         """
+        return self.match(path) or {}
+
+    def match(self, path: str) -> dict[str, Any] | None:
+        """The parameters ``path`` binds, or ``None`` when it does not match.
+
+        One regex match answers both "does it match" and "with what", so a
+        router that matched a route need not match it again to read its
+        parameters (see ``extract_parameters`` for the decoding policy).
+        """
         if not self._compiled_regex:
-            return {}
+            return None
 
         match = self._compiled_regex.match(path)
         if not match:
-            return {}
+            return None
 
         raw_groups = match.groups()
         params: dict[str, Any] = {}

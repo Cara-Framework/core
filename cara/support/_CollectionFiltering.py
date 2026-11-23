@@ -40,7 +40,16 @@ def _collection_unique(self, key=None):
         A new Collection instance with the unique items.
     """
     if not key:
-        items = list(set(self._items))
+        # First occurrences, in order. ``list(set(...))`` returned them in
+        # hash order (different on every run for strings) and raised on
+        # unhashable rows such as dicts.
+        try:
+            items = list(dict.fromkeys(self._items))
+        except TypeError:
+            items = []
+            for item in self._items:
+                if item not in items:
+                    items.append(item)
         return self.__class__(items)
 
     keys = set()
@@ -73,11 +82,13 @@ def _collection_duplicates(self, key=None):
         A new Collection instance with the duplicate items.
     """
     if not key:
+        # A dict keeps the duplicates in first-repeat order; the set it
+        # replaces returned them in hash order.
         seen = set()
-        duplicates = set()
+        duplicates = {}
         for item in self._items:
             if item in seen:
-                duplicates.add(item)
+                duplicates[item] = None
             else:
                 seen.add(item)
         return self.__class__(list(duplicates))
@@ -153,7 +164,7 @@ def _collection_where_in(self, key, values):
     Returns:
         A new Collection instance with the filtered items.
     """
-    values = self._get_items(values)
+    wanted = self._member_test(self._get_items(values))
 
     if "*" in str(key):
         # Handle wildcards
@@ -161,13 +172,13 @@ def _collection_where_in(self, key, values):
             [
                 item
                 for item in self._items
-                if any(val in values for val in self._data_get_with_wildcards(item, key))
+                if any(wanted(val) for val in self._data_get_with_wildcards(item, key))
             ]
         )
     else:
         # Regular path
         return self.__class__(
-            [item for item in self._items if self._data_get(item, key) in values]
+            [item for item in self._items if wanted(self._data_get(item, key))]
         )
 
 
@@ -184,7 +195,7 @@ def _collection_where_not_in(self, key, values):
     Returns:
         A new Collection instance with the filtered items.
     """
-    values = self._get_items(values)
+    unwanted = self._member_test(self._get_items(values))
 
     if "*" in str(key):
         # Handle wildcards - exclude items where ANY wildcard value is in the values list
@@ -193,14 +204,14 @@ def _collection_where_not_in(self, key, values):
                 item
                 for item in self._items
                 if not any(
-                    val in values for val in self._data_get_with_wildcards(item, key)
+                    unwanted(val) for val in self._data_get_with_wildcards(item, key)
                 )
             ]
         )
     else:
         # Regular path
         return self.__class__(
-            [item for item in self._items if self._data_get(item, key) not in values]
+            [item for item in self._items if not unwanted(self._data_get(item, key))]
         )
 
 
@@ -356,9 +367,33 @@ def _get_value(self, key):
                     items.append(value)
         elif callable(key):
             result = key(item)
-            if result:
+            # ``None`` means "no value", exactly as on the key path above. A
+            # truthiness test also dropped 0, 0.0 and False, so
+            # ``avg(lambda r: r["v"])`` over [0, 10] answered 10 and ``min`` 10.
+            if result is not None:
                 items.append(result)
     return items
+
+
+def _member_test(self, values):
+    """``candidate in values`` as a callable, O(1) per hashable candidate.
+
+    ``where_in`` / ``where_not_in`` / ``diff`` tested each item against the
+    value LIST: n items against n values was n² comparisons (20k × 20k: 2.4 s).
+    Unhashable values, or an unhashable candidate, keep the list scan.
+    """
+    try:
+        lookup = set(values)
+    except TypeError:
+        return values.__contains__
+
+    def contains(candidate):
+        try:
+            return candidate in lookup
+        except TypeError:
+            return candidate in values
+
+    return contains
 
 
 def _data_get(self, item, key, default=None):

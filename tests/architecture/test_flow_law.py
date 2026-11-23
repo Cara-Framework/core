@@ -208,3 +208,83 @@ def test_upper_snake_constant_is_not_mistaken_for_a_class(tmp_path):
         "from app.models import MIN_GTIN_DIGITS\nclass ScrapeJob:\n    pass\n",
     )
     assert FlowLaw.scan(manifest) == []
+
+
+def test_a_relative_import_of_the_data_layer_is_the_same_reach(tmp_path):
+    """The forbidden prefixes are absolute names; ``from ...repositories
+    import X`` read as the module ``repositories`` and matched none of them."""
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "app" / "controllers" / "shop" / "OrderController.py",
+        "from ...repositories import OrderRepository\n"
+        "from ...models import Order\n"
+        "class OrderController:\n"
+        "    pass\n",
+    )
+
+    findings = FlowLaw.scan(manifest)
+
+    assert len(findings) == 1
+    assert "2 flow-law violation" in findings[0].message
+    assert "app.repositories" in findings[0].message
+    assert "app.models" in findings[0].message
+
+
+def test_a_relative_import_of_the_repositories_package_object_is_a_finding(tmp_path):
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "app" / "jobs" / "RefreshJob.py",
+        "from .. import repositories\nclass RefreshJob:\n    pass\n",
+    )
+
+    findings = FlowLaw.scan(manifest)
+
+    assert len(findings) == 1
+    assert "through app barrel" in findings[0].message
+
+
+def test_a_relative_sibling_import_inside_the_edge_layer_is_left_alone(tmp_path):
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "app" / "controllers" / "shop" / "OrderController.py",
+        "from .Base import Base\n"
+        "from ..shared import Pagination\n"
+        "from ...services.shop import OrderService\n"
+        "class OrderController(Base):\n"
+        "    pass\n",
+    )
+
+    assert FlowLaw.scan(manifest) == []
+
+
+def test_the_bare_container_globals_are_container_lookups_too(tmp_path):
+    """``cara.foundation.resolve`` and ``cara.helpers.app`` are called with no
+    receiver, so the ``.resolve`` / ``.make`` suffix check never saw them."""
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "app" / "jobs" / "RefreshJob.py",
+        "from cara.foundation import resolve\n"
+        "class RefreshJob:\n"
+        "    def execute(self):\n"
+        "        return resolve('ProductRepository'), app('PriceRepository')\n",
+    )
+
+    findings = FlowLaw.scan(manifest)
+
+    assert len(findings) == 1
+    assert "2 flow-law violation" in findings[0].message
+    assert "resolves repository from container via resolve" in findings[0].message
+    assert "resolves repository from container via app" in findings[0].message
+
+
+def test_resolving_a_service_from_the_container_is_not_a_repository_reach(tmp_path):
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "app" / "jobs" / "RefreshJob.py",
+        "from cara.foundation import resolve\n"
+        "class RefreshJob:\n"
+        "    def execute(self):\n"
+        "        return resolve('RefreshProductService'), resolve(self.repository)\n",
+    )
+
+    assert FlowLaw.scan(manifest) == []

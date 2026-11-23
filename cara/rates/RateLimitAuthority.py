@@ -119,7 +119,7 @@ def _record_failure(exc: Exception) -> None:
         ConnectionError,
     ):
         facades.Log.warning(
-            "Rate-limit cache backend unhealthy (%s: %s); denying requests",
+            "Rate-limit cache backend could not answer (%s: %s)",
             exc.__class__.__name__,
             exc,
             category="rate.backend",

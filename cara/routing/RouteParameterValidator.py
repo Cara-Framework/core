@@ -22,8 +22,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.validation import Validation
-
 from .CompilerRuleMapper import CompilerRuleMapper
 
 
@@ -73,61 +71,5 @@ class RouteParameterValidator:
         try:
             return converter(value)
         except ValueError, TypeError:
-            # Conversion failed - validation will catch this later
+            # Non-fatal by design: the registry is process-global (see class doc)
             return value
-
-    @classmethod
-    def validate_parameters(cls, parameters: dict[str, Any]) -> dict[str, Any] | None:
-        """
-        Validate route parameters against their rules.
-
-        Returns None if validation passes, structured error dict if it fails.
-        """
-        # Local import to break circular import
-
-        validation = Validation()
-
-        # Prepare parameters and rules
-        validation_rules = {}
-        converted_parameters = {}
-
-        for param_name, param_value in parameters.items():
-            # Get all rules for this parameter (explicit + auto-discovered)
-            all_rules = cls.get_all_rules_for_parameter(param_name)
-
-            if all_rules:
-                validation_rules[param_name] = all_rules
-                # Convert parameter value based on compiler type
-                converted_parameters[param_name] = cls.convert_parameter_value(
-                    param_name, param_value
-                )
-            else:
-                # No rules for this parameter
-                converted_parameters[param_name] = param_value
-
-        # If no parameters have validation rules, skip validation
-        if not validation_rules:
-            return None
-
-        # Run validation
-        validation_errors = validation.make(converted_parameters, validation_rules)
-
-        # If validation passed, return None
-        if not validation_errors:
-            return None
-
-        # Extract clean error structure from ValidationErrors object
-        return cls._extract_validation_errors(validation_errors)
-
-    @classmethod
-    def _extract_validation_errors(cls, validation_errors) -> dict[str, Any]:
-        """Extract clean error structure from ValidationErrors object."""
-        # Extract errors using ValidationErrors' interface
-        error_dict = validation_errors.all()
-        first_error = validation_errors.first()
-
-        return {
-            "route_parameter_validation_failed": True,
-            "errors": error_dict,
-            "first_error": first_error or "Validation failed",
-        }

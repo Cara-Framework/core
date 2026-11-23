@@ -18,30 +18,80 @@ from cara.exceptions import (
     InvalidArgumentException,
     ListenerNotFoundException,
 )
+from cara.queues import QueuePayload
 from cara.queues.contracts import BaseJob
 
 
 def _resolve_event_class(dispatcher: EventDispatcher, event_class_name: str) -> type[Any]:
+    """The registered event class ``event_class_name`` names.
+
+    The hop carries the FULLY QUALIFIED name, like the listener: a bare class
+    name matched the first registered event with that name, so two events
+    called ``OrderPlaced`` in different modules rebuilt whichever registered
+    first. A bare name — a message queued before this change — is still
+    accepted when exactly one registered class carries it, and refused when
+    it is ambiguous.
+    """
+    registered: dict[str, type[Any]] = {}
     for cls in dispatcher._registered_events.values():
-        if cls.__name__ == event_class_name:
-            return cls
+        registered.setdefault(_listener_class_path(cls), cls)
+    found = registered.get(event_class_name)
+    if found is not None:
+        return found
+    if "." not in event_class_name:
+        bare = [cls for cls in registered.values() if cls.__name__ == event_class_name]
+        if len(bare) == 1:
+            return bare[0]
+        if len(bare) > 1:
+            raise InvalidArgumentException(
+                f"Event class name {event_class_name!r} is ambiguous: "
+                f"{', '.join(sorted(_listener_class_path(c) for c in bare))} are "
+                "all registered. Requeue the hop with the fully qualified name."
+            )
     raise InvalidArgumentException(
         f"Event class {event_class_name!r} is not registered on the dispatcher. "
         "Register it with dispatcher.register_event() before dispatching."
     )
 
 
+def _listener_class_path(cls: type[Any]) -> str:
+    """The name a queued listener hop carries: module plus qualified name."""
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
 def _resolve_listener_class(
     dispatcher: EventDispatcher, listener_class_name: str
 ) -> type[Any]:
+    """The subscribed listener class ``listener_class_name`` names.
+
+    The hop carries the FULLY QUALIFIED name: a bare class name matched the
+    first subscribed listener with that name, so ``orders.NotifyListener``
+    ran in place of ``billing.NotifyListener``. A bare name — a message
+    queued before this change — is still accepted when exactly one
+    subscribed class carries it, and refused when it is ambiguous rather
+    than running whichever happened to subscribe first.
+    """
+    subscribed: dict[str, type[Any]] = {}
     for bucket in (dispatcher._listeners, dispatcher._wildcard_listeners):
         for listeners in bucket.values():
             for lst in listeners:
                 cls = lst.__class__
-                if cls.__name__ == listener_class_name:
-                    return cls
+                subscribed.setdefault(_listener_class_path(cls), cls)
+    found = subscribed.get(listener_class_name)
+    if found is not None:
+        return found
+    if "." not in listener_class_name:
+        bare = [cls for cls in subscribed.values() if cls.__name__ == listener_class_name]
+        if len(bare) == 1:
+            return bare[0]
+        if len(bare) > 1:
+            raise ListenerNotFoundException(
+                f"Listener class name {listener_class_name!r} is ambiguous: "
+                f"{', '.join(sorted(_listener_class_path(c) for c in bare))} are "
+                "all subscribed. Requeue the hop with the fully qualified name."
+            )
     raise ListenerNotFoundException(
-        f"No subscribed listener with class name {listener_class_name!r} was found "
+        f"No subscribed listener {listener_class_name!r} was found "
         "on the event dispatcher (subscribe the listener before queueing)."
     )
 
@@ -117,6 +167,31 @@ class HandleListenerJob(BaseJob):
     # Event-specific queue settings
     default_queue = "events"
 
+    @staticmethod
+    def listener_path(listener_cls: type[Any]) -> str:
+        """The ``listener_class`` a hop for ``listener_cls`` must carry."""
+        return _listener_class_path(listener_cls)
+
+    @staticmethod
+    def event_payload(event: Any) -> dict[str, Any]:
+        """The event's own payload as plain data, or raise naming the field.
+
+        ``to_dict()`` when the event declares one; otherwise its public
+        attributes — ``_``-prefixed bookkeeping never reached the rebuilt
+        event's constructor anyway, and a live object in it would only make
+        the envelope refuse the whole hop with a less useful message.
+        """
+        to_dict = getattr(event, "to_dict", None)
+        if callable(to_dict):
+            data = to_dict()
+        else:
+            data = {k: v for k, v in vars(event).items() if not str(k).startswith("_")}
+        if not isinstance(data, dict):
+            raise InvalidArgumentException(
+                f"{type(event).__name__}.to_dict() must return a dict to be queued."
+            )
+        return QueuePayload.require_plain(data, "event_data")
+
     def __init__(
         self,
         listener_class: str,
@@ -127,6 +202,11 @@ class HandleListenerJob(BaseJob):
         self.listener_class = listener_class
         self.event_data = dict(event_data) if event_data else {}
         self.event_class = event_class
+        # ``payload`` is derived from the fields above. The worker rebuilds
+        # this job with every constructor-chain parameter, BaseJob's
+        # ``payload`` included, and forwarding it as well raised "got
+        # multiple values for keyword argument 'payload'".
+        kwargs.pop("payload", None)
         super().__init__(
             payload={
                 "listener_type": listener_class,

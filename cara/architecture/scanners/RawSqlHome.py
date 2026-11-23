@@ -45,10 +45,12 @@ import ast
 import re
 
 from cara.architecture._ast_utils import (
+    IMPORT_NODE_TYPES,
     _path_has_fragment,
     all_nodes,
     docstring_node_ids,
     iter_modules,
+    nodes_of,
 )
 from cara.architecture._ratchet import _ratchet
 from cara.architecture.Finding import Finding
@@ -101,7 +103,7 @@ def _bound_database_names(tree: ast.Module) -> set[str]:
     facades: set[str] = set()
     managers: set[str] = set()
     resolvers: set[str] = set()
-    for node in nodes:
+    for node in nodes_of(tree, IMPORT_NODE_TYPES):
         if not isinstance(node, ast.ImportFrom) or not node.module:
             continue
         if node.module == "cara.facades":
@@ -229,11 +231,10 @@ def raw_sql_findings(tree: ast.Module, rel: str) -> list[Finding]:
         for child in ast.walk(compiler)
     }
     findings: list[Finding] = []
-    nodes = all_nodes(tree)
-    for node in nodes:
+    for node in nodes_of(tree, (ast.Call,)):
         if id(node) in compiler_ids:
             continue
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        if not isinstance(node.func, ast.Attribute):
             continue
         receiver = node.func.value
         method = node.func.attr
@@ -253,7 +254,7 @@ def raw_sql_findings(tree: ast.Module, rel: str) -> list[Finding]:
             )
 
     excluded = docstring_node_ids(tree) | _schema_metadata_node_ids(tree) | compiler_ids
-    for node in nodes:
+    for node in all_nodes(tree):
         if id(node) in excluded:
             continue
         text = _literal_text(node)

@@ -18,6 +18,7 @@ from cara.facades import Log, Queue
 from cara.queues import LeaseHeartbeat, SignedJsonJobSerializer, instantiate_job
 from cara.queues.middleware import run_through_middleware_async
 
+from ._DeliveryLease import _hold_delivery_lease, _RunBudget, _stop_heartbeat
 from .ActiveJobCancellationRegistry import ActiveJobCancellationRegistry
 from .DeliverySettlementError import DeliverySettlementError
 
@@ -111,52 +112,6 @@ def _stamp_dispatch_context(instance: Any, msg: dict) -> None:
     instance._current_attempt = JobProcessor._envelope_counter(msg, "attempts") + 1
 
 
-def _hold_delivery_lease(
-    delivery_store: Any,
-    job_id: str,
-    claim: Any,
-    tracker: Any,
-    db_job_id: Any,
-) -> LeaseHeartbeat:
-    """Keep this worker's execution lease alive while it runs the delivery.
-
-    The claim takes a short heartbeat lease, renewed every third of it until
-    the body ends: a live job keeps its row ``processing``, a dead worker's
-    row lapses within one lease and the relay returns it to the outbox. A
-    lost lease fences the run. Settlement rides the lease's remaining two
-    thirds; the heartbeat stops BEFORE settling, so no renewal races it.
-
-    ``release`` is the forced-exit path (``LeaseHeartbeat.release_all``): a
-    job that ignored shutdown cancellation hands its row back to ``pending``
-    exactly as the cancellation path does, and the broker redelivers its
-    unacknowledged copy once this process's connection closes.
-    """
-    lease_token = claim.lease_token
-    deadline = claim.lease_deadline
-
-    def _renew() -> bool:
-        return bool(
-            delivery_store.renew_execution(job_id, lease_token, deadline=deadline)
-        )
-
-    def _release() -> None:
-        delivery_store.abandon_execution(job_id, lease_token)
-        if tracker is not None and db_job_id is not None:
-            tracker.update_job_status_strict(db_job_id, "pending")
-
-    return LeaseHeartbeat(
-        f"queue_job_delivery:{job_id}",
-        lease_seconds=delivery_store.execution_heartbeat_seconds,
-        renew=_renew,
-        release=_release,
-    ).start()
-
-
-def _stop_heartbeat(heartbeat: LeaseHeartbeat | None) -> None:
-    if heartbeat is not None:
-        heartbeat.stop()
-
-
 def _process_message(
     channel,
     method_frame,
@@ -233,6 +188,7 @@ def _process_message(
     delivery_store = None
     delivery_lease_token = None
     delivery_heartbeat: LeaseHeartbeat | None = None
+    run_budget: _RunBudget | None = None
     terminal_outcome = None
 
     try:
@@ -300,12 +256,14 @@ def _process_message(
             return False
         elif claim.outcome == "claimed" and claim.lease_token:
             delivery_lease_token = claim.lease_token
+            run_budget = _RunBudget(claim.lease_deadline)
             delivery_heartbeat = _hold_delivery_lease(
                 delivery_store,
                 str(verified_payload["job_id"]),
                 claim,
                 tracker,
                 verified_payload.get("db_job_id"),
+                run_budget,
             )
         elif terminal_outcome is None:
             raise QueueException(
@@ -521,6 +479,8 @@ def _process_message(
                         return await app_instance.call(_m, *_args)
                     return await _m(*_args)
 
+                if run_budget is not None:
+                    run_budget.begin(job_timeout)
                 try:
 
                     async def _call_with_middleware():
@@ -535,8 +495,6 @@ def _process_message(
                         cancellation_registry=cancellation_registry,
                         lease=delivery_heartbeat,
                     )
-                except TimeoutError as e:
-                    raise TimeoutError(f"Job exceeded timeout of {job_timeout}s") from e
                 finally:
                     # The run is over; settlement rides the remaining lease.
                     _stop_heartbeat(delivery_heartbeat)

@@ -16,6 +16,7 @@ from .Errors import (
     _emitted_status,
     _has_key,
 )
+from .Sources import _parse_source, _statements, _walk
 from .UntypedErrorResponse import UntypedErrorResponse
 
 
@@ -37,14 +38,21 @@ class ErrorContractExtractor:
     ):
         self._roots = (*framework_roots, *app_roots)
         self._hints = dict(STATUS_HINTS if status_hints is None else status_hints)
+        # One extractor answers ``discriminators()``, ``statuses()`` and
+        # ``untyped_responses()`` from the same read of the source. Each used
+        # to walk every root again: a generator asking all three re-scanned
+        # the framework and the application three times (Synkronus: 1.6 s of
+        # a build, for one answer). Read once per extractor, like
+        # ``ControllerContractExtractor._reach``.
+        self._scanned: tuple[list[ErrorDiscriminator], list[str]] | None = None
 
     def extract(self) -> list[ErrorDiscriminator]:
         """Every discriminator, sorted by ``type``."""
-        return self._scan()[0]
+        return list(self._scan()[0])
 
     def untyped_responses(self) -> list[str]:
         """``module:function`` for every HTTP error body with no ``type``."""
-        return self._scan()[1]
+        return list(self._scan()[1])
 
     def require_typed_responses(self) -> None:
         """Fail when any HTTP error body cannot be branched on."""
@@ -56,6 +64,8 @@ class ErrorContractExtractor:
             )
 
     def _scan(self) -> tuple[list[ErrorDiscriminator], list[str]]:
+        if self._scanned is not None:
+            return self._scanned
         found: dict[str, ErrorDiscriminator] = {}
         untyped: list[str] = []
 
@@ -77,16 +87,17 @@ class ErrorContractExtractor:
             )
 
         for path in self._source_files():
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            tree = _parse_source(path)
             label = path.name
             self._scan_classes(tree, label, register)
             self._scan_emissions(tree, label, register, untyped)
             self._scan_literal_bodies(tree, label, register)
 
-        return (
+        self._scanned = (
             sorted(found.values(), key=lambda row: row.type),
             sorted(set(untyped)),
         )
+        return self._scanned
 
     def discriminators(self) -> list[str]:
         """Every error ``type``, sorted — the union a client branches on."""
@@ -104,9 +115,9 @@ class ErrorContractExtractor:
         one the application raises."""
         classes: dict[str, tuple[int | None, tuple[str, ...]]] = {}
         for path in self._files_in_root_order():
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            tree = _parse_source(path)
             for cls in (
-                node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+                node for node in _statements(tree) if isinstance(node, ast.ClassDef)
             ):
                 raw = _class_constant(cls, "status_code")
                 own = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
@@ -157,7 +168,7 @@ class ErrorContractExtractor:
         A class that declares ``status_code`` lends that status to the error
         bodies it builds, which is the only place those two facts sit together.
         """
-        for cls in (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)):
+        for cls in (node for node in _statements(tree) if isinstance(node, ast.ClassDef)):
             raw_status = _class_constant(cls, "status_code")
             status = raw_status if isinstance(raw_status, int) else None
             declared = _class_constant(cls, "error_type")
@@ -167,7 +178,7 @@ class ErrorContractExtractor:
                 value = _class_constant(cls, constant)
                 if isinstance(value, str):
                     register(f"{label}:{cls.name}", value, fallback_status)
-            for payload in (node for node in ast.walk(cls) if isinstance(node, ast.Dict)):
+            for payload in (node for node in _walk(cls) if isinstance(node, ast.Dict)):
                 error_type = _dict_string(payload, "type")
                 if error_type and _has_key(payload, "error"):
                     register(f"{label}:{cls.name}", error_type, status)
@@ -177,13 +188,13 @@ class ErrorContractExtractor:
         """Inline ``response.json({...}, 4xx)`` emitters, per function scope."""
         for fn in (
             node
-            for node in ast.walk(tree)
+            for node in _statements(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         ):
             # ``payload = {...}`` one line above the emission is the common
             # shape; resolve it so the body is still readable at the call.
             local_dicts: dict[str, ast.Dict] = {}
-            for node in ast.walk(fn):
+            for node in _statements(fn):
                 if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
                     node.value, ast.Dict
                 ):
@@ -194,7 +205,7 @@ class ErrorContractExtractor:
                         if isinstance(target, ast.Name):
                             local_dicts[target.id] = node.value
 
-            for call in (node for node in ast.walk(fn) if isinstance(node, ast.Call)):
+            for call in (node for node in _walk(fn) if isinstance(node, ast.Call)):
                 if not (
                     isinstance(call.func, ast.Attribute)
                     and call.func.attr == "json"
@@ -224,7 +235,7 @@ class ErrorContractExtractor:
         touching a status argument. The discriminator is still part of the
         contract, so it is collected with whatever status the hints settle.
         """
-        for payload in (node for node in ast.walk(tree) if isinstance(node, ast.Dict)):
+        for payload in (node for node in _walk(tree) if isinstance(node, ast.Dict)):
             error_type = _dict_string(payload, "type")
             if error_type and _has_key(payload, "error"):
                 register(label, error_type, None)

@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from cara.exceptions import InvalidArgumentException
+from cara.queues import QueuePayload
 from cara.queues.contracts import SerializesModels
 
 
@@ -199,6 +200,65 @@ class BaseNotification(ABC, SerializesModels):
             True if notification should be sent
         """
         return True
+
+    #: State ``BaseNotification.__init__`` owns. ``_delay`` and ``_queue``
+    #: are dispatch routing, applied before the job is queued.
+    _BASE_STATE = frozenset({"_id", "_data", "_delay", "_queue"})
+
+    def to_queue_payload(self) -> dict[str, Any]:
+        """This notification as plain data for a queued send.
+
+        The default carries the public attributes (the constructor state a
+        subclass keeps, such as ``self.order_id``) plus the id and data. A
+        model or other live object is refused with its field named — store
+        its id. A private attribute of the subclass is refused too: the
+        default rebuild could not restore it, and finding that out on the
+        worker would be too late. Override this and
+        :meth:`from_queue_payload` together for anything richer.
+        """
+        attributes: dict[str, Any] = {}
+        for name, value in vars(self).items():
+            if name in self._BASE_STATE:
+                continue
+            if name.startswith("_"):
+                raise InvalidArgumentException(
+                    f"notification_data.{name}: {type(self).__name__} keeps private "
+                    "state the default queue payload cannot restore. Override "
+                    "to_queue_payload()/from_queue_payload()."
+                )
+            attributes[name] = value
+        return QueuePayload.require_plain(
+            {"attributes": attributes, "id": self._id, "data": self._data},
+            "notification_data",
+        )
+
+    @classmethod
+    def from_queue_payload(cls, data: dict[str, Any]) -> BaseNotification:
+        """Rebuild the notification :meth:`to_queue_payload` produced.
+
+        The subclass constructor is NOT called — its arguments were never
+        queued; its resulting public state was. Base state is initialised by
+        ``BaseNotification.__init__`` and the queued attributes are restored
+        on top, which is the inverse of the default payload.
+        """
+        if not isinstance(data, dict):
+            raise InvalidArgumentException("Queued notification data must be an object.")
+        notification = cls.__new__(cls)
+        BaseNotification.__init__(notification)
+        for name, value in dict(data.get("attributes") or {}).items():
+            if (
+                not isinstance(name, str)
+                or not name.isidentifier()
+                or name.startswith("_")
+            ):
+                raise InvalidArgumentException(
+                    f"Queued notification attribute {name!r} is not a public name."
+                )
+            setattr(notification, name, value)
+        if data.get("id") is not None:
+            notification.id(data["id"])
+        notification._data = dict(data.get("data") or {})
+        return notification
 
     def __str__(self) -> str:
         """String representation for debugging."""

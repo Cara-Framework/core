@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from cara.context import ExecutionContext
 from cara.facades import Log
 from cara.queues.Bus import Bus
 
@@ -54,15 +55,23 @@ async def safe_dispatch(
     # callers to pay for the queue runtime even if they only ever use
     # ``safe_dispatch``.  This pattern matches the original app helper.
 
+    # In sync mode ``Bus.dispatch`` IS the execution, not a publish: there is
+    # no broker blip to ride out, and retrying here re-ran a failing job body
+    # ``max_retries`` times (27 times through three nested levels, with the
+    # back-off sleeps in between). Run it once and let its error propagate.
+    kwargs: dict = {}
+    if routing_key:
+        kwargs["routing_key"] = routing_key
+    if delay:
+        kwargs["delay"] = delay
+
+    if ExecutionContext.is_sync():
+        await Bus.dispatch(job, **kwargs)
+        return True
+
     last_exc: Exception | None = None
     for attempt in range(max_retries):
         try:
-            kwargs: dict = {}
-            if routing_key:
-                kwargs["routing_key"] = routing_key
-            if delay:
-                kwargs["delay"] = delay
-
             await Bus.dispatch(job, **kwargs)
             return True
 

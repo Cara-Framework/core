@@ -174,7 +174,7 @@ def test_quorum_priority_configuration_rejects_values_above_native_limit():
 def test_direct_push_prefers_job_stage_over_driver_default(monkeypatch):
     driver = AMQPDriver(_Application(), _options())
     captured = []
-    monkeypatch.setattr(driver, "_create_job_record", lambda *_args: 9)
+    monkeypatch.setattr(driver, "_create_job_record", lambda *_args, **_kwargs: 9)
     monkeypatch.setattr(
         driver.delivery_store,
         "register",
@@ -213,7 +213,7 @@ def test_direct_publish_rejects_oversized_body_before_queue_declare(
     job = PriorityJob(1)
     job.large_argument = "x" * 1024
     monkeypatch.setattr(SignedJsonJobSerializer, "MAX_PAYLOAD_BYTES", 512)
-    monkeypatch.setattr(driver, "_create_job_record", lambda *_args: 9)
+    monkeypatch.setattr(driver, "_create_job_record", lambda *_args, **_kwargs: 9)
     monkeypatch.setattr(
         driver.delivery_store,
         "register",
@@ -242,7 +242,7 @@ def test_direct_dispatch_rejects_missing_or_unknown_queue_before_persistence(
     monkeypatch.setattr(
         driver,
         "_create_job_record",
-        lambda *_args: (_ for _ in ()).throw(
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("invalid queue reached persistence")
         ),
     )

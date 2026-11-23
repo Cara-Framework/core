@@ -24,7 +24,10 @@ from cara.eloquent import (
 from cara.eloquent.ReadScope import read_only_statement, render_literals
 
 AT = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
-RELATION = ("SELECT h.* FROM public.product h WHERE h.tenant_id = %s AND h.at <= %s", [7, AT])
+RELATION = (
+    "SELECT h.* FROM public.product h WHERE h.tenant_id = %s AND h.at <= %s",
+    [7, AT],
+)
 
 
 def _scoped(sql: str) -> str:
@@ -93,8 +96,13 @@ def test_a_mentioned_name_reads_the_relation_and_nothing_else_changes():
     sql = 'SELECT "product".* FROM "product" WHERE "product"."tenant_id" = %s'
     scoped = _scoped(sql)
     assert scoped.endswith(sql)
-    assert scoped.startswith('WITH "product" AS NOT MATERIALIZED (SELECT h.* FROM public.product h')
-    assert "h.tenant_id = 7" in scoped and "'2026-11-20T12:00:00+00:00'::timestamptz" in scoped
+    assert scoped.startswith(
+        'WITH "product" AS NOT MATERIALIZED (SELECT h.* FROM public.product h'
+    )
+    assert (
+        "h.tenant_id = 7" in scoped
+        and "'2026-11-20T12:00:00+00:00'::timestamptz" in scoped
+    )
 
 
 def test_a_statement_with_its_own_with_keeps_it_and_its_recursion():
@@ -128,11 +136,16 @@ def test_what_is_not_a_read_of_the_name_is_left_as_it_is(sql):
 def test_a_name_that_begins_a_longer_one_is_told_apart():
     relations = {
         "product": RELATION,
-        "product_kit": ("SELECT k.* FROM public.product_kit k WHERE k.tenant_id = %s", [7]),
+        "product_kit": (
+            "SELECT k.* FROM public.product_kit k WHERE k.tenant_id = %s",
+            [7],
+        ),
     }
     with read_scope(relations) as scope:
         only_kit = scope.statement("SELECT * FROM product_kit WHERE tenant_id = %s")
-        both = scope.statement('SELECT * FROM "product" p JOIN product_kit k ON k.id = p.id')
+        both = scope.statement(
+            'SELECT * FROM "product" p JOIN product_kit k ON k.id = p.id'
+        )
     assert only_kit.startswith('WITH "product_kit" AS NOT MATERIALIZED (')
     assert '"product" AS' not in only_kit
     assert '"product" AS NOT MATERIALIZED (' in both and '"product_kit" AS' in both
@@ -153,7 +166,10 @@ def test_literals_render_once_and_never_leave_a_bind():
 
 
 def test_a_relation_that_renders_a_percent_is_refused():
-    with pytest.raises(ValueError, match="'%'"), read_scope({"product": ("SELECT %s", ["50%"])}):
+    with (
+        pytest.raises(ValueError, match="'%'"),
+        read_scope({"product": ("SELECT %s", ["50%"])}),
+    ):
         pass
 
 
@@ -164,8 +180,9 @@ def test_the_scope_is_ambient_nests_and_ends():
             assert inner.names() == ("listing", "product")
         assert current_read_scope().names() == ("product",)
     assert current_read_scope() is None
-    with pytest.raises(ValueError, match="plain relation name"), read_scope(
-        {"public.product": RELATION}
+    with (
+        pytest.raises(ValueError, match="plain relation name"),
+        read_scope({"public.product": RELATION}),
     ):
         pass
 
@@ -211,7 +228,10 @@ def test_the_clock_as_a_bound_is_bound_at_t_and_bounds_nothing_outside():
     sql = f"SELECT * FROM ledger(%s) h WHERE h.recorded_at <= {READ_CLOCK_BOUND_SQL}"
     assert "now(" not in READ_CLOCK_BOUND_SQL and "'infinity'" in READ_CLOCK_BOUND_SQL
     with read_scope(clock=AT) as scope:
-        assert scope.statement(sql) == f"SET LOCAL cara.read_clock = '{AT.isoformat()}'; {sql}"
+        assert (
+            scope.statement(sql)
+            == f"SET LOCAL cara.read_clock = '{AT.isoformat()}'; {sql}"
+        )
     with read_scope() as scope:
         assert scope.statement(sql) == f"SET LOCAL cara.read_clock = ''; {sql}"
 
@@ -223,7 +243,10 @@ def test_the_clock_is_ambient_aware_and_inherited():
         with read_scope({"product": RELATION}):
             assert current_read_clock() == AT
     assert current_read_clock() is None
-    with pytest.raises(ValueError, match="aware"), read_scope(clock=AT.replace(tzinfo=None)):
+    with (
+        pytest.raises(ValueError, match="aware"),
+        read_scope(clock=AT.replace(tzinfo=None)),
+    ):
         pass
 
 
@@ -249,10 +272,16 @@ def test_a_refused_relation_is_refused_in_any_read_and_nesting_adds_to_it():
         assert outer.statement("SELECT * FROM payout_summary_kind") == (
             "SELECT * FROM payout_summary_kind"
         )
-        assert outer.statement("SELECT s.payout_summary FROM s") == "SELECT s.payout_summary FROM s"
+        assert (
+            outer.statement("SELECT s.payout_summary FROM s")
+            == "SELECT s.payout_summary FROM s"
+        )
         with read_scope(refuse=("tenant_counter",)) as inner:
             assert inner.refused == ("payout_summary", "tenant_counter")
-    with pytest.raises(ValueError, match="plain relation name"), read_scope(refuse=("a.b",)):
+    with (
+        pytest.raises(ValueError, match="plain relation name"),
+        read_scope(refuse=("a.b",)),
+    ):
         pass
 
 
@@ -290,7 +319,12 @@ def test_autocommit_runs_the_statement_in_a_read_only_transaction():
     connection = _Connection(autocommit=True)
     with read_only_statement(connection):
         connection.log.append("statement")
-    assert connection.log == ["BEGIN TRANSACTION READ ONLY", "statement", "ROLLBACK", "close"]
+    assert connection.log == [
+        "BEGIN TRANSACTION READ ONLY",
+        "statement",
+        "ROLLBACK",
+        "close",
+    ]
 
 
 def test_an_open_transaction_runs_it_in_a_read_only_savepoint_and_keeps_going():

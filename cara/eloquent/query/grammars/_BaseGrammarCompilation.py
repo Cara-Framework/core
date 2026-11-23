@@ -5,6 +5,7 @@ from __future__ import annotations
 from cara.eloquent.expressions import (
     JoinClause,
 )
+from cara.exceptions import QueryException
 
 
 def _grammar_initialize(
@@ -124,6 +125,36 @@ def _compile_select(self, qmark=False):
     return self
 
 
+def _refuse_unexpressible_write_clauses(self, statement):
+    """Refuse a write whose builder narrows it in a way the statement drops.
+
+    The UPDATE / DELETE templates have no LIMIT, OFFSET or JOIN slot (neither
+    PostgreSQL nor a default SQLite build accepts them there), so the clauses
+    were silently discarded: ``Model.where(...).limit(1).delete()`` deleted
+    EVERY matching row. A write must never be wider than the call reads, so
+    the statement is refused, naming the clause. ORDER BY alone is still
+    accepted: it never changes which rows are written, only their order.
+    """
+    # ``False`` is the builder's "no clause" sentinel; compare by identity so
+    # ``limit(0)`` (write nothing) is refused rather than read as "no limit"
+    # (``0 == False``). ``offset(0)`` skips nothing, so dropping it is exact.
+    dropped = []
+    if self._limit is not False and self._limit is not None:
+        dropped.append("LIMIT")
+    if self._offset is not False and self._offset is not None and self._offset != 0:
+        dropped.append("OFFSET")
+    if self._joins:
+        dropped.append("JOIN")
+    if dropped:
+        clauses = ", ".join(dropped)
+        raise QueryException(
+            f"{statement} cannot express {clauses}: compiling it would drop the "
+            f"clause and write every matching row of {self.table!r}. Select the "
+            "primary keys with the narrowing clause first, then write "
+            "where_in(<primary key>, keys)."
+        )
+
+
 def _compile_update(self, qmark=False):
     """
     Compiles an update query statement.
@@ -134,6 +165,7 @@ def _compile_update(self, qmark=False):
     Returns:
         self
     """
+    _refuse_unexpressible_write_clauses(self, "UPDATE")
     self._sql = self.update_format().format(
         key_equals=self._compile_key_value_equals(qmark=qmark),
         table=self.process_table(self.table),
@@ -229,6 +261,7 @@ def _compile_delete(self, qmark=False):
     Returns:
         self
     """
+    _refuse_unexpressible_write_clauses(self, "DELETE")
     self._sql = self.delete_format().format(
         key_equals=self._compile_key_value_equals(qmark=qmark),
         table=self.process_table(self.table),
@@ -269,7 +302,11 @@ def _grammar_process_joins(self, qmark=False):
         if isinstance(join, JoinClause):
             on_string = ""
             for clause_idx, clause in enumerate(join.get_on_clauses()):
-                keyword = clause.operator.upper() if clause_idx else "ON"
+                # Further conditions join with the clause's BOOLEAN (AND).
+                # ``clause.operator`` is its comparison (``=``), so a second
+                # ``.on()`` compiled to ``ON a = b = c = d``: a syntax error
+                # on PostgreSQL, a chained comparison on SQLite.
+                keyword = (clause.boolean or "AND").upper() if clause_idx else "ON"
 
                 # ``JoinClause.on`` is the only producer of ON conditions, so
                 # every clause here is an ``OnClause``.

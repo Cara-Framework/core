@@ -28,9 +28,58 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from cara.architecture._ast_utils import module_object_names, parse, python_files, relpath
+from cara.architecture._ast_utils import (
+    IMPORT_NODE_TYPES,
+    module_object_names,
+    nodes_of,
+    parse,
+    python_files,
+    relpath,
+)
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
+
+_IMPORT_MODULE_CALLS = frozenset({"importlib.import_module", "import_module"})
+
+
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _call_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _deep_import_targets(tree: ast.Module) -> list[tuple[int, str, bool, str]]:
+    """``(line, module, all_private, spelling)`` of every absolute import FORM.
+
+    The rule read only ``from X import …``. The same deep reach spelled
+    ``import app.services.channels.ChannelService as X`` (a module-level
+    plain import) or ``importlib.import_module("app.services.…Leaf")`` with a
+    literal path (anywhere in the file: it runs whenever it is reached,
+    function-local or not) slipped it.
+    """
+    targets: list[tuple[int, str, bool, str]] = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            private = all(alias.name.startswith("_") for alias in node.names)
+            targets.append((node.lineno, node.module, private, "from {} import ..."))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                private = alias.name.rsplit(".", 1)[-1].startswith("_")
+                targets.append((node.lineno, alias.name, private, "import {}"))
+    for node in nodes_of(tree, (ast.Call,)):
+        if (
+            _call_name(node.func) in _IMPORT_MODULE_CALLS
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            module = node.args[0].value
+            private = module.rsplit(".", 1)[-1].startswith("_")
+            targets.append((node.lineno, module, private, 'import_module("{}")'))
+    return targets
 
 
 def _kernel_barrel_files(manifest: Manifest) -> frozenset[str]:
@@ -66,14 +115,7 @@ class ImportForm:
                 if tree is None:
                     continue
                 rel = relpath(path, manifest.roots.deployable)
-                for node in tree.body:
-                    if (
-                        not isinstance(node, ast.ImportFrom)
-                        or node.level != 0
-                        or not node.module
-                    ):
-                        continue
-                    module = node.module
+                for lineno, module, private, spelling in _deep_import_targets(tree):
                     matched_layer = next(
                         (
                             layer
@@ -86,7 +128,7 @@ class ImportForm:
                         continue
                     if rel.startswith(f"{path_prefix}/{matched_layer}/"):
                         continue  # sibling — direct path is the rule there
-                    if all(alias.name.startswith("_") for alias in node.names):
+                    if private:
                         continue  # private symbols deliberately have no barrel home
                     allowlist_key = (rel, module)
                     if allowlist_key in manifest.deep_import_allowlist:
@@ -101,8 +143,8 @@ class ImportForm:
                     findings.append(
                         Finding(
                             rel,
-                            node.lineno,
-                            f"deep import `from {module} import ...` — use the "
+                            lineno,
+                            f"deep import `{spelling.format(module)}` — use the "
                             f"{namespace}.{matched_layer} barrel",
                         )
                     )
@@ -158,11 +200,21 @@ class ImportForm:
                 tree = parse(path)
                 if tree is None:
                     continue
-                for node in ast.walk(tree):
+                for node in nodes_of(tree, (*IMPORT_NODE_TYPES, ast.Call)):
                     if isinstance(node, ast.ImportFrom) and node.level == 0:
                         bases = [node.module or ""]
                     elif isinstance(node, ast.Import):
                         bases = [a.name for a in node.names]
+                    elif (
+                        isinstance(node, ast.Call)
+                        and _call_name(node.func) in _IMPORT_MODULE_CALLS
+                        and len(node.args) == 1
+                        and isinstance(node.args[0], ast.Constant)
+                        and isinstance(node.args[0].value, str)
+                    ):
+                        # A literal ``import_module("commons.…")`` reaches the
+                        # kernel past the build's one swap point just the same.
+                        bases = [node.args[0].value]
                     else:
                         continue
                     for candidate in bases:

@@ -39,7 +39,8 @@ def test_default_read_rejects_corruption_and_disposable_read_opts_out(tmp_path) 
 
 def test_counter_rejects_corrupt_state(tmp_path) -> None:
     driver = FileCacheDriver(str(tmp_path), signing_key=_KEY)
-    driver.put("rate", "not-an-integer", ttl=60)
+    # The counter's own file: a ``put`` value is another namespace (as on Redis).
+    driver._write_file(driver._counter_path("rate"), None, "not-an-integer")
 
     with pytest.raises(CacheConfigurationException, match="non-integer"):
         driver.increment("rate", 1, ttl=60)
@@ -80,3 +81,42 @@ def test_file_ttl_rejects_coercive_values(tmp_path, ttl) -> None:
 
     with pytest.raises(CacheConfigurationException, match="TTL"):
         driver.put("authority", "value", ttl=ttl)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("search:q=red shoes", "search:q=red_shoes"),
+        ("page:/a/b", "page:_a_b"),
+        ("user:1|orders", "user:1_orders"),
+    ],
+)
+def test_keys_that_differ_only_in_sanitized_characters_do_not_alias(
+    tmp_path, first: str, second: str
+) -> None:
+    # Every unsafe character became "_" in the filename, so both keys shared
+    # one file: a read answered the other key's value, and ``add`` (the lock
+    # primitive) on one refused the other.
+    driver = FileCacheDriver(str(tmp_path), signing_key=_KEY)
+
+    driver.put(first, "first value", 60)
+
+    assert driver.get(second) is None
+    assert driver.add(second, "second value", 60) is True
+    assert driver.get(first) == "first value"
+    assert driver.get(second) == "second value"
+    assert driver.forget(first) is True
+    assert driver.get(second) == "second value"
+
+
+def test_pattern_invalidation_still_reaches_sanitized_keys(tmp_path) -> None:
+    driver = FileCacheDriver(str(tmp_path), signing_key=_KEY)
+    driver.put("page:/a/b", 1, 60)
+    driver.put("page:/a/c", 2, 60)
+    driver.put("page:plain", 3, 60)
+    driver.put("other:/a/b", 4, 60)
+
+    assert driver.forget_pattern("page:/a/b") == 1  # no trailing wildcard
+    assert driver.get("page:/a/b") is None
+    assert driver.forget_pattern("page:*") == 2
+    assert driver.get("other:/a/b") == 4

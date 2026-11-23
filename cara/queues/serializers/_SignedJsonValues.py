@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from re import Pattern
 from typing import Any
 
 from cara.exceptions import QueueException
+
+#: Exactly what ``hmac.new(..., sha256).hexdigest()`` writes.
+_SIGNATURE_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class _SignedJsonValues:
@@ -37,7 +42,8 @@ class _SignedJsonValues:
                 separators=(",", ":"),
                 sort_keys=True,
             ).encode("utf-8")
-        except (TypeError, ValueError) as exc:
+        # RecursionError: nesting the encoder cannot walk is bad input too.
+        except (TypeError, ValueError, RecursionError) as exc:
             raise QueueException(
                 f"AMQP job payload is not canonical JSON: {exc}"
             ) from exc
@@ -56,7 +62,7 @@ class _SignedJsonValues:
         if isinstance(value, float):
             if not math.isfinite(value):
                 raise QueueException(f"{path} contains a non-finite float.")
-            return value
+            return self.ledger_stable_float(value)
         if isinstance(value, (list, tuple)):
             return [
                 self.json_value(
@@ -88,6 +94,28 @@ class _SignedJsonValues:
         )
 
     @staticmethod
+    def ledger_stable_float(value: float) -> int | float:
+        """``value`` as the delivery ledger gives it back, so the signature holds.
+
+        The relay publishes the bytes it re-derives from the ``signed_envelope``
+        jsonb column, and jsonb keeps every number as ``numeric``: it has no
+        negative zero (``-0.0`` comes back ``0.0``) and it writes a float whose
+        repr carries a positive exponent (``1e+16`` and up, always a whole
+        number) as a bare integer. Signed as given, such an argument no longer
+        matched its own signature at publish: the relay dead-lettered the job
+        as an invalid envelope, with its terminal hooks skipped and its replay
+        refused, after the dispatch had reported success. Signing the ledger's
+        own spelling keeps the number and the signature. The integer is the
+        repr's digits, not ``int(value)``: those are the digits jsonb expands,
+        and they read back as the same float.
+        """
+        if value == 0.0:
+            return 0.0
+        if abs(value) >= 1e16:
+            return int(Decimal(repr(value)))
+        return value
+
+    @staticmethod
     def key_bytes(signing_key: str | bytes) -> bytes:
         key = signing_key.encode("utf-8") if isinstance(signing_key, str) else signing_key
         if not isinstance(key, bytes) or len(key) < 32:
@@ -105,6 +133,20 @@ class _SignedJsonValues:
     def required_string(value: Any, field: str) -> str:
         if not isinstance(value, str) or not value:
             raise QueueException(f"AMQP job field {field!r} must be a non-empty string.")
+        return value
+
+    @staticmethod
+    def required_signature(value: Any) -> str:
+        """The envelope's signature, proven to be a SHA-256 ``hexdigest``.
+
+        A length check alone let 64 non-ASCII characters through, and
+        ``hmac.compare_digest`` refuses those with a ``TypeError``: not the
+        ``QueueException`` every caller treats as "this envelope is invalid".
+        In the relay that failed the whole publish iteration instead of
+        quarantining the one row, and its batch stayed leased with it.
+        """
+        if not isinstance(value, str) or not _SIGNATURE_PATTERN.fullmatch(value):
+            raise QueueException("AMQP job signature has an invalid shape.")
         return value
 
     def required_key_id(self, value: Any) -> str:

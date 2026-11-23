@@ -88,6 +88,24 @@ class Configuration:
         or miss. The ORM once read ``app.timezone`` per datetime attribute, and
         a 30-day sales export spent 29 s on it (187,534 reads, 156 us each).
         """
+        # The common read — string keys down plain dicts — is walked here:
+        # Dotty re-parses the path (escape stamps, a fresh closure, a list
+        # ``pop(0)`` per level) on every call, ~1 us for a value read ten
+        # times per request. Nothing is memoised, so a section mutated in
+        # place (``config("mail")["x"] = y``, a test's ``setitem`` on the
+        # store) is read live exactly as before. Anything else — a list
+        # index, a non-string key, an escaped dot, a miss — is left to Dotty.
+        if type(path) is str and "\\" not in path:
+            node = getattr(self._config, "_data", None)
+            for part in path.split("."):
+                if type(node) is not dict or part not in node:
+                    break
+                node = node[part]
+                if node is None:
+                    # Dotty stops at a None and answers it, even mid-path.
+                    return None
+            else:
+                return node
         try:
             return _READ_PATH(self._config, path)
         except KeyError:

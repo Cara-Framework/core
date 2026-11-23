@@ -8,9 +8,10 @@ notification operations to the appropriate channel instances.
 from __future__ import annotations
 
 from cara.exceptions import DriverNotRegisteredException, InvalidArgumentException
-from cara.facades import Queue
+from cara.facades import DB, Queue
 from cara.notifications.contracts import NotificationChannel
 from cara.notifications.jobs import SendNotificationJob
+from cara.notifications.NothingDue import NothingDue
 from cara.queues.contracts import ShouldQueue
 
 
@@ -20,6 +21,9 @@ class Notification:
 
     Each notification declares its channels through ``via(notifiable)``.
     """
+
+    #: A send where ``should_send`` skipped every channel (see NothingDue).
+    NOTHING_DUE = NothingDue()
 
     def __init__(self):
         """Initialize an empty channel registry."""
@@ -103,10 +107,31 @@ class Notification:
         # Reject malformed/unknown delivery topology before acknowledging the
         # enqueue. Otherwise the caller receives True for a job that can only
         # fail after it leaves the request boundary.
-        for channel_name in self._get_channels(notifiable, notification):
+        channel_names = self._get_channels(notifiable, notification)
+        for channel_name in channel_names:
             self.channel(channel_name)
 
-        job = SendNotificationJob(notifiable, notification)
+        # Plain data, computed once: a notifiable or notification that cannot
+        # be expressed as plain data is refused here, naming the field.
+        notifiable_class, notifiable_data = SendNotificationJob.payload_of(
+            notifiable, "notifiable"
+        )
+        notification_class, notification_data = SendNotificationJob.payload_of(
+            notification, "notification"
+        )
+        # One job per channel: a retry replays its job's signed envelope
+        # unchanged, so only a job that owns a single channel can retry
+        # without re-delivering a sibling channel that already succeeded.
+        jobs = [
+            SendNotificationJob(
+                notifiable_class,
+                notifiable_data,
+                notification_class,
+                notification_data,
+                [channel_name],
+            )
+            for channel_name in channel_names
+        ]
 
         # Honor the notification's chainable queue/delay overrides
         # (``on_queue()`` / ``delay()``) — Laravel parity: they must
@@ -118,51 +143,104 @@ class Notification:
                 raise InvalidArgumentException(
                     "Notification queue must be a non-empty string."
                 )
-            queue_override = queue_override.strip()
-            job.on_queue(queue_override)
+            for job in jobs:
+                job.on_queue(queue_override.strip())
         delay_seconds = getattr(notification, "_delay", None)
         if delay_seconds is not None:
             self._require_positive_delay(delay_seconds)
-            Queue.dispatch_after(job, delay_seconds)
-        else:
-            Queue.dispatch(job)
+        self._dispatch_jobs(jobs, delay_seconds)
         return True
 
-    def _send_now(self, notifiable, notification) -> bool:
+    @staticmethod
+    def _dispatch_jobs(
+        jobs: list[SendNotificationJob], delay_seconds: int | None
+    ) -> None:
+        """Queue every channel's job, all or none where the driver allows it.
+
+        A transactional-outbox driver writes its delivery rows on the
+        caller's connection, so one transaction makes the fan-out atomic: a
+        failure on the third channel no longer leaves the first two queued
+        behind an exception that invites the caller to notify again.
+        """
+        driver_of = getattr(Queue, "driver", None)
+        driver = driver_of() if callable(driver_of) and len(jobs) > 1 else None
+        if getattr(driver, "durable_transactional_outbox", False):
+            with DB.transaction():
+                Notification._push_jobs(jobs, delay_seconds)
+            return
+        Notification._push_jobs(jobs, delay_seconds)
+
+    @staticmethod
+    def _push_jobs(jobs: list[SendNotificationJob], delay_seconds: int | None) -> None:
+        for job in jobs:
+            if delay_seconds is not None:
+                Queue.dispatch_after(job, delay_seconds)
+            else:
+                Queue.dispatch(job)
+
+    def _send_now(
+        self, notifiable, notification, *, only_channels: list[str] | None = None
+    ) -> bool | NothingDue:
         """
         Send a notification immediately (synchronously).
 
         Args:
             notifiable: The entity to notify
             notification: The notification to send
+            only_channels: Deliver on exactly these channels (a queued job's
+                own channel) instead of asking ``via()`` again.
 
         Returns:
-            True if sent successfully, False otherwise
+            True if every due channel delivered, False if one answered False,
+            :data:`NOTHING_DUE` (falsy) when ``should_send`` skipped them all.
         """
-        # Get channels for this notification
-        channels = self._get_channels(notifiable, notification)
+        # Get channels for this notification. Resolve EVERY channel before
+        # delivering on any: a miss is configuration damage, not an optional
+        # no-op, and finding it after earlier channels delivered would make
+        # each retry re-deliver them.
+        names = (
+            list(only_channels)
+            if only_channels is not None
+            else self._get_channels(notifiable, notification)
+        )
+        channels = [(channel_name, self.channel(channel_name)) for channel_name in names]
 
         # Send to each channel — ``should_send`` is consulted PER CHANNEL
         # (Laravel parity: shouldSend(notifiable, channel)), so a
         # notification can, e.g., skip mail but still hit the database.
-        results = []
-        for channel_name in channels:
-            # A miss is configuration damage, not an optional no-op. Silently
-            # skipping it reports success when another channel lands and loses
-            # the requested delivery forever.
-            channel = self.channel(channel_name)
-            if not self._should_send(notifiable, notification, channel_name):
+        # One channel failing must not cost its siblings their delivery: each
+        # is attempted, and the failures are raised once all have run.
+        results: list[bool] = []
+        failures: list[tuple[str, Exception]] = []
+        for channel_name, channel in channels:
+            try:
+                if not self._should_send(notifiable, notification, channel_name):
+                    continue
+                result = channel.send(notifiable, notification)
+                if not isinstance(result, bool):
+                    raise InvalidArgumentException(
+                        f"Notification channel {channel_name!r} send() must return a boolean."
+                    )
+            except Exception as exc:
+                failures.append((channel_name, exc))
                 continue
-            result = channel.send(notifiable, notification)
-            if not isinstance(result, bool):
-                raise InvalidArgumentException(
-                    f"Notification channel {channel_name!r} send() must return a boolean."
-                )
             results.append(result)
+
+        if len(failures) == 1:
+            # Exactly what the caller saw before: the channel's own exception.
+            raise failures[0][1]
+        if failures:
+            raise ExceptionGroup(
+                "notification channels failed: "
+                + ", ".join(name for name, _exc in failures),
+                [exc for _name, exc in failures],
+            )
 
         # Every requested, eligible delivery must succeed. Treating one success
         # as success for the whole fan-out loses the failed delivery forever.
-        return all(results) if results else False
+        # No eligible delivery at all is NOT a failure; it stays falsy so a
+        # bool-reading caller is unchanged, but it is its own value.
+        return all(results) if results else self.NOTHING_DUE
 
     def send_now(self, notifiable, notification) -> bool:
         """

@@ -46,6 +46,45 @@ _INDEX_HEADER_RE = re.compile(
 )
 
 
+def stored_name(name) -> str:
+    """``name`` as PostgreSQL stores it: cut to ``_MAX_IDENTIFIER_LENGTH`` bytes.
+
+    A CHECK named after its expression, an index or a composite FOREIGN KEY
+    on a long table, passes 63 bytes easily. Compared in full, such a name
+    matched nothing in the catalogue: every plan re-added the object (an ADD
+    that fails on the truncated twin already there) and dropped the live one
+    as an orphan. So EVERY declared name is passed through this before it is
+    compared with a catalogue name.
+
+    Cut in BYTES, the way the server does (``pg_mbcliplen``): a multi-byte
+    character that would straddle the limit is dropped whole, which is what
+    ``errors="ignore"`` does to the trailing partial sequence.
+    """
+    encoded = str(name).encode()
+    if len(encoded) <= _MAX_IDENTIFIER_LENGTH:
+        return str(name)
+    return encoded[:_MAX_IDENTIFIER_LENGTH].decode(errors="ignore")
+
+
+#: A name PostgreSQL reads back exactly as written when left unquoted.
+_PLAIN_IDENTIFIER_RE = re.compile(r"[a-z_][a-z0-9_$]*")
+
+
+def quoted_name(name) -> str:
+    """An index or constraint ``name`` spelled so the server keeps it as is.
+
+    Emitted bare, a declared ``ordersByTenant`` was case-folded to
+    ``ordersbytenant`` on CREATE, never matched its declaration again, and
+    every plan re-added it. Quoted the way ``quote_ident`` does — only when
+    the bare spelling would not survive — so an ordinary lower-case name
+    reads exactly as before; an embedded quote is doubled.
+    """
+    text = str(name)
+    if _PLAIN_IDENTIFIER_RE.fullmatch(text):
+        return text
+    return '"' + text.replace('"', '""') + '"'
+
+
 def _unique_index_preflight(
     up_sql: str, table: str, index_name: str
 ) -> tuple[str | None, str | None]:
@@ -72,8 +111,7 @@ def _blueprint_index_name(table: str, columns: list[str], unique: bool) -> str:
     planner ask "does the database already have this one?" — without it, a
     field-level index is invisible on the deployed side and never planned.
     """
-    name = f"{table}_{'_'.join(columns)}_{'unique' if unique else 'index'}"
-    return name[:_MAX_IDENTIFIER_LENGTH]
+    return stored_name(f"{table}_{'_'.join(columns)}_{'unique' if unique else 'index'}")
 
 
 def _declared_blueprint_indexes(
@@ -105,8 +143,9 @@ def _declared_blueprint_indexes(
             columns = list(declaration.get("columns") or [])
             if not columns:
                 continue
-            name = declaration.get("name") or _blueprint_index_name(
-                table, columns, unique
+            # An explicit name is stored truncated like a derived one.
+            name = stored_name(
+                declaration.get("name") or _blueprint_index_name(table, columns, unique)
             )
             declared[name] = (name, columns, unique)
 
@@ -162,7 +201,8 @@ class DeclaredIndex:
         return (
             f"CREATE {'UNIQUE ' if self.unique else ''}INDEX "
             f"{'CONCURRENTLY IF NOT EXISTS ' if concurrently else ''}"
-            f'{name or self.name} ON {"ONLY " if self.only else ""}"{table}"{self.rest}'
+            f"{quoted_name(name or self.name)} "
+            f'ON {"ONLY " if self.only else ""}"{table}"{self.rest}'
         )
 
 
@@ -184,7 +224,7 @@ def declared_indexes(model: dict, table: str) -> list[DeclaredIndex]:
         for match in _INDEX_HEADER_RE.finditer(up):
             if _unquote(match.group("table").split(".")[-1]) != table:
                 continue
-            name = _unquote(match.group("name"))
+            name = stored_name(_unquote(match.group("name")))
             if name in found:
                 continue
             rest = up[match.end() : _statement_end(up, match.end())].rstrip()
@@ -201,7 +241,7 @@ def declared_indexes_by_table(
     models: list[dict],
 ) -> dict[str, list[tuple[str, bool, str]]]:
     """``{table: [(name, unique, rest)]}`` — what
-    :func:`cara.schema.LiveSchema.normalize_declared_indexes` spells."""
+    :func:`cara.schema.DeclaredSpelling.normalize_declared_indexes` spells."""
     return {
         model["table"]: [
             (index.name, index.unique, index.rest)
@@ -242,4 +282,6 @@ __all__ = [
     "declared_indexes_by_table",
     "index_parts",
     "index_shape",
+    "quoted_name",
+    "stored_name",
 ]

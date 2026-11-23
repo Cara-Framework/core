@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
 
@@ -39,6 +40,35 @@ def _delivery_relay_lane_of(job: Any) -> str | None:
     return None if lane is None or str(lane) == "" else str(lane)
 
 
+def _canonical_envelope_and_digest(
+    body: bytes | str | dict[str, Any],
+) -> tuple[bytes, str]:
+    """The envelope's canonical bytes and ledger digest, from ONE parse.
+
+    Registration canonicalized the body and then handed the canonical bytes
+    to ``canonical_envelope_sha256``, which parsed and re-serialized them only
+    to hash the bytes it was given: a second ``json.loads`` + ``json.dumps``
+    of the whole envelope on every dispatch, inside the dispatch transaction.
+
+    ``payload_sha256`` is immutable and re-derived by the worker and the
+    relay, so the shortcut is taken only where it is provably the same value:
+    wire text (bytes / str) has string keys only, so its canonical form is a
+    fixed point of parse-then-canonicalize. The two inputs that are not keep
+    the old derivation: a ``dict`` that never crossed the wire may carry
+    non-string keys, which ``json.dumps`` orders BEFORE it stringifies them
+    (``2`` before ``10``; the re-read text orders ``"10"`` first), and a
+    canonical form that outgrew the wire limit (``1E5`` is written back as
+    ``100000.0``) must still be refused by the re-parse's size check.
+    """
+    canonical = SignedJsonJobSerializer.canonical_envelope_bytes(body)
+    if (
+        isinstance(body, dict)
+        or len(canonical) > SignedJsonJobSerializer.MAX_PAYLOAD_BYTES
+    ):
+        return canonical, SignedJsonJobSerializer.canonical_envelope_sha256(canonical)
+    return canonical, hashlib.sha256(canonical).hexdigest()
+
+
 def _delivery_register(
     self,
     *,
@@ -71,8 +101,7 @@ def _delivery_register(
     """
     database = db or self._db()
     self._require_ledger_schema(database)
-    canonical = SignedJsonJobSerializer.canonical_envelope_bytes(body)
-    digest = SignedJsonJobSerializer.canonical_envelope_sha256(canonical)
+    canonical, digest = _canonical_envelope_and_digest(body)
     job_id = str(payload["job_id"])
     db_job_id = self._bounded_int(
         payload.get("db_job_id"),

@@ -698,3 +698,72 @@ def test_neither_default_nor_backfill_is_still_refused():
     operations, refusals, _ = plan([model], _live({}))
     assert operations == []
     assert "backfill_from" in refusals[0]
+
+
+# ── a rename whose source this database never had ───────────────────────────
+
+
+def test_a_rename_target_is_added_when_the_old_column_never_existed():
+    """``__renamed_from__`` renames only where the OLD column is. On a table
+    that has neither name the declared column was excluded from the ADDs as
+    "spoken for by the rename" and from the renames as "nothing to rename":
+    an empty plan, no refusal, and a column every query then fails on."""
+    model = _model(
+        {"sku": _field("string", length=64, nullable=True)}, renamed={"sku": "code"}
+    )
+    operations, refusals, _ = plan([model], _live({}))
+
+    assert refusals == []
+    assert [op.kind for op in operations] == ["add_column"]
+    assert 'ADD COLUMN "sku" VARCHAR(64) NULL' in operations[0].forward_sql
+
+
+def test_a_performed_rename_still_adds_nothing():
+    model = _model(
+        {"sku": _field("string", length=64, nullable=True)}, renamed={"sku": "code"}
+    )
+    operations, _, _ = plan([model], _live({"code": _col(max_length=64)}))
+    assert [op.kind for op in operations] == ["rename_column"]
+
+
+# ── names past PostgreSQL's 63-byte identifier limit ────────────────────────
+
+
+def test_a_derived_check_name_is_compared_as_postgres_stores_it():
+    """An unnamed CHECK is named after its expression, which passes 63 bytes
+    easily. The catalogue holds the truncated name, so the full one matched
+    nothing: every plan re-added the CHECK and dropped the live one."""
+    table = "subscription_plan_change"
+    expression = "status IN ('pending','scheduled','applied','cancelled','failed')"
+    full = (
+        "subscription_plan_change_status_in_pending_scheduled_applied_"
+        "cancelled_failed_check"
+    )
+    assert len(full) > 63
+    model = {**_model({}, table=table), "checks": [{"expression": expression}]}
+    live = _live({}, checks=[full[:63]], table=table)
+
+    operations, refusals, _ = plan([model], live)
+
+    assert refusals == []
+    assert operations == []
+
+
+def test_a_derived_foreign_key_name_is_compared_as_postgres_stores_it():
+    from cara.schema import declared_foreign_keys
+
+    table = "subscription_plan_change_request"
+    model = {
+        **_model({}, table=table),
+        "composite_foreign_keys": [
+            {
+                "columns": ["subscription_plan_change_id", "tenant_id"],
+                "references": ["id", "tenant_id"],
+                "on": "subscription_plan_change",
+            }
+        ],
+    }
+    (key,) = declared_foreign_keys(model, table)
+    full = f"{table}_subscription_plan_change_id_tenant_id_foreign"
+    assert len(full) > 63
+    assert key["name"] == full[:63]

@@ -36,6 +36,8 @@ from cara.broadcasting.helpers import bind_socket_loop
 from cara.broadcasting.SocketRetirement import SocketRetirement
 from cara.facades import Log
 
+from . import _FanOut
+
 
 class ConnectionManager:
     """In-process connection registry.
@@ -48,7 +50,9 @@ class ConnectionManager:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
 
-        # connection_id → websocket-like object (anything with .send_json).
+        # connection_id → websocket-like object (anything with .send_json;
+        # one that also has .send_text gets fan-out frames encoded once for
+        # the whole channel, see ``_send_frame``).
         self.connections: dict[str, Any] = {}
 
         # Reverse index: which connection_ids are subscribed to a channel.
@@ -430,103 +434,9 @@ class ConnectionManager:
             connection_ids, message, skip_conn_id=skip_conn_id, label=f"user:{user_id}"
         )
 
-    async def _fan_out_send(
-        self,
-        connection_ids: list[str],
-        message: dict[str, Any],
-        *,
-        skip_conn_id: str | None,
-        label: str,
-    ) -> int:
-        """Concurrently dispatch ``message`` to every connection id.
-
-        Shared between channel + user-channel fan-out. ``label`` is
-        only used for diagnostics so the log line carries the channel
-        / user id that fanned out.
-        """
-        # Pair each (connection_id, websocket) so we can map gather
-        # results back to ids without re-looking-up after the await.
-        targets: list[tuple] = []
-        for connection_id in connection_ids:
-            if skip_conn_id and connection_id == skip_conn_id:
-                continue
-            ws = self.connections.get(connection_id)
-            if ws is None:
-                # Stale entry — was removed between snapshot and now.
-                continue
-            targets.append((connection_id, ws))
-
-        if not targets:
-            return 0
-
-        # ``return_exceptions=True`` so a single dead client never
-        # tears down the whole fan-out — we collect failures and
-        # remove them after. Each send is bounded by
-        # ``_broadcast_send_timeout``: a client whose TCP send window is full
-        # would otherwise stall its ``send_json`` indefinitely, and ``gather``
-        # would not resolve until it did — holding the broadcast caller (and,
-        # on the Redis driver, the cross-pod publish gated behind it) hostage to
-        # the single slowest socket. A timed-out send is collected as a failure
-        # and the connection is reaped below, same as any other dead client.
-        results = await asyncio.gather(
-            *(
-                asyncio.wait_for(
-                    ws.send_json(message), timeout=self._broadcast_send_timeout
-                )
-                for _, ws in targets
-            ),
-            return_exceptions=True,
-        )
-
-        delivered = 0
-        failed: list[tuple[str, Any]] = []
-        for (connection_id, ws), result in zip(targets, results, strict=False):
-            if isinstance(result, Exception):
-                if _is_connection_closed_error(result):
-                    Log.debug(
-                        "Subscriber %s closed mid-send on %s",
-                        connection_id,
-                        label,
-                        category="cara.broadcasting",
-                    )
-                else:
-                    Log.warning(
-                        "Send to %s on %s failed: %s",
-                        connection_id,
-                        label,
-                        result,
-                        category="cara.broadcasting",
-                    )
-                failed.append((connection_id, ws))
-            else:
-                delivered += 1
-
-        # Remove dead connections in parallel too — a 100-subscriber
-        # broadcast where 50 failed would otherwise serially walk
-        # the cleanup, holding the broadcast caller for the duration.
-        if failed:
-            await asyncio.gather(
-                *(self.remove_connection(cid) for cid, _ in failed),
-                return_exceptions=True,
-            )
-            await SocketRetirement.settle(
-                [
-                    self._retirement.begin(
-                        ws, SocketRetirement.CLOSE_UNRESPONSIVE, "Send timed out"
-                    )
-                    for _, ws in failed
-                ]
-            )
-
-        if delivered:
-            Log.debug(
-                "Delivered to %s/%s on %s",
-                delivered,
-                len(targets),
-                label,
-                category="cara.broadcasting",
-            )
-        return delivered
+    # The fan-out itself (encode once, send to all, reap the dead) lives in
+    # ``_FanOut``; bound here so both fan-out doors above share one method.
+    _fan_out_send = _FanOut._fan_out_send
 
     # ------------------------------------------------------------------
     # Read-only accessors
@@ -573,7 +483,7 @@ class ConnectionManager:
                         timeout=self._broadcast_send_timeout,
                     )
                 except Exception as e:
-                    if _is_connection_closed_error(e):
+                    if _FanOut._is_connection_closed_error(e):
                         Log.debug(
                             "Heartbeat: %s closed",
                             connection_id,
@@ -671,22 +581,3 @@ class ConnectionManager:
         self.user_connections.clear()
         self.socket_ids.clear()
         self.connections_by_socket_id.clear()
-
-
-# Surface-level pattern matching for "the client just dropped" errors.
-# Centralised here so heartbeat / broadcast send paths share the same
-# benign-error filter.
-_CONNECTION_CLOSED_MARKERS = (
-    "ConnectionClosed",
-    "WebSocket is closed",
-    "Connection closed",
-    "ClientDisconnected",
-    "Connection is closed",
-    "websocket.close",
-    "ASGI message",
-)
-
-
-def _is_connection_closed_error(exc: Exception) -> bool:
-    msg = str(exc)
-    return any(marker in msg for marker in _CONNECTION_CLOSED_MARKERS)

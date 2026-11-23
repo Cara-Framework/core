@@ -10,14 +10,12 @@ import contextlib
 import importlib.util
 import logging
 import os
-import platform
 import select
 import signal
 import socket
 import subprocess
 import sys
 import time
-from multiprocessing import cpu_count
 from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
@@ -26,6 +24,8 @@ from cara.decorators import command
 from cara.environment import LoadEnvironment
 from cara.exceptions import InvalidArgumentException
 from cara.support import LogColors
+
+from . import _ServeBanner
 
 _logger = logging.getLogger("cara.serve")
 
@@ -121,7 +121,7 @@ class ServeCommand(CommandBase):
             server_config = self._prepare_server_config(host, port, workers)
         except InvalidArgumentException as e:
             self.error(f"× Configuration error: {e}")
-            return
+            return 1
 
         # Show configuration
         self._show_server_config(server_config)
@@ -129,11 +129,15 @@ class ServeCommand(CommandBase):
         # Show routes
         self._show_routes_compact()
 
-        # Start server
+        # Start server. An int returned here is the process exit status
+        # (``CommandRunner``): this command is the production API launcher,
+        # and it exited 0 when the server crashed or never started, which a
+        # supervisor, a deploy script or CI reads as a clean stop.
         try:
-            self._start_server(server_config)
+            return self._start_server(server_config)
         except Exception as e:
             self.error(f"× Server error: {e}")
+            return 1
 
     def _prepare_server_config(
         self, host: str | None, port: str | None, workers: str | None
@@ -292,15 +296,15 @@ class ServeCommand(CommandBase):
         except OSError:
             return False
 
-    def _start_server(self, config: dict) -> None:
-        """Start the development server."""
+    def _start_server(self, config: dict) -> int | None:
+        """Start the server; its exit status, or None after a requested stop."""
         if self._port_has_listener(config["host"], config["port"]):
             self.error(
                 f"× Port {config['port']} already has a live listener — refusing to "
                 "start a second server on it (two versions would split traffic). "
                 f"Free it first: lsof -ti :{config['port']} | xargs kill -9"
             )
-            return
+            return 1
 
         self.console.print()
         self.console.print("[bold #e5c07b]┌─ Starting Server[/bold #e5c07b]")
@@ -366,7 +370,7 @@ class ServeCommand(CommandBase):
             )
 
             # Monitor process with output capture for colorization
-            self._monitor_server_process(process, config)
+            return self._monitor_server_process(process, config)
 
         except FileNotFoundError:
             self.error(
@@ -394,6 +398,8 @@ class ServeCommand(CommandBase):
                         OSError, RuntimeError, AttributeError, ConnectionError
                     ):
                         process.stdout.close()
+        # Only the two failed-to-start branches above fall through to here.
+        return 1
 
     @staticmethod
     def _terminate_server_tree(process: subprocess.Popen) -> bool:
@@ -586,62 +592,15 @@ class ServeCommand(CommandBase):
 
         return [str(path) for path in sorted(excluded, key=str)]
 
-    def _show_additional_metrics(self, cfg: dict) -> None:
-        """Show extra runtime and integration metrics helpful during development."""
-        self.console.print()
-        self.console.print("[bold #e5c07b]┌─ Runtime & Integrations[/bold #e5c07b]")
+    def _monitor_server_process(
+        self, process: subprocess.Popen, config: dict
+    ) -> int | None:
+        """Monitor server output; return the server's own exit status.
 
-        # Runtime
-        py_ver = platform.python_version()
-        os_name = platform.system()
-        os_rel = platform.release()
-        cpu_cores = cpu_count()
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]Python:[/white] [dim]{py_ver}[/dim]"
-        )
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]Platform:[/white] [dim]{os_name} {os_rel}[/dim]"
-        )
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]CPU Cores:[/white] [dim]{cpu_cores}[/dim]"
-        )
-
-        # App integrations
-        queue_default = config("queue.default", "unknown")
-        db_default = config("database.default", "unknown")
-        cache_default = config("cache.default", "unknown")
-        bc_default = config("broadcasting.default", "unknown")
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]Database:[/white] [dim]{db_default}[/dim]  [white]Queue:[/white] [dim]{queue_default}[/dim]"
-        )
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]Cache:[/white] [dim]{cache_default}[/dim]   [white]Broadcasting:[/white] [dim]{bc_default}[/dim]"
-        )
-
-        # Features
-        # Lowercase path — Configuration.load lower-cases module attribute names.
-        ws_enabled = bool(config("broadcasting.websocket.enabled", True))
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]WebSocket:[/white] [{'#30e047' if ws_enabled else '#E21102'}]{'✓' if ws_enabled else '×'}[/{'#30e047' if ws_enabled else '#E21102'}]"
-        )
-
-        # Logging snapshot
-        log_stack = config("logging.default", "daily")
-        console_level = config("logging.channels.console.LEVEL", "DEBUG")
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]Log Stack:[/white] [dim]{log_stack}[/dim]  [white]Console Level:[/white] [dim]{console_level}[/dim]"
-        )
-
-        # App URL (useful for callbacks)
-        app_url = config("app.url", "not set")
-        self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]App URL:[/white] [dim]{app_url}[/dim]"
-        )
-
-        self.console.print("[#e5c07b]└─[/#e5c07b]")
-
-    def _monitor_server_process(self, process: subprocess.Popen, config: dict) -> None:
-        """Monitor server process output and handle shutdown."""
+        None after a requested shutdown (Ctrl+C, SIGTERM, SIGHUP): stopping
+        on request is a clean exit. A signal death follows the shell's
+        ``128 + N``.
+        """
         try:
             start_time = time.time()
 
@@ -669,7 +628,8 @@ class ServeCommand(CommandBase):
                     # What it wrote last is usually the traceback saying why.
                     stop_reading_at = time.monotonic() + _EXIT_DRAIN_SECONDS
             _emit(partial)
-            process.wait()
+            status = process.wait()
+            return status if status >= 0 else 128 - status
 
         except KeyboardInterrupt:
             self.console.print()
@@ -696,3 +656,5 @@ class ServeCommand(CommandBase):
             )
             self.console.print("[#e5c07b]└─[/#e5c07b]")
             self.console.print()
+
+    _show_additional_metrics = _ServeBanner._serve_show_additional_metrics

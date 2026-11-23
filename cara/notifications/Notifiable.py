@@ -9,9 +9,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.exceptions import CaraException, DriverNotRegisteredException
+from cara.exceptions import (
+    CaraException,
+    DriverNotRegisteredException,
+    InvalidArgumentException,
+)
 from cara.facades import Notification as NotificationFacade
 from cara.notifications.contracts import NotifiableContract
+from cara.queues import QueuePayload
 
 
 class Notifiable(NotifiableContract):
@@ -142,6 +147,42 @@ class Notifiable(NotifiableContract):
         raise CaraException(
             "Notifiable entities must expose a stable id or pk notification key."
         )
+
+    def to_queue_payload(self) -> dict[str, Any]:
+        """This notifiable as plain data for a queued notification: its key.
+
+        The worker loads it fresh through the class's ``find`` (an Eloquent
+        model's), so a queued notification reads the row as it is when it is
+        delivered, never a stale or pickled copy. A notifiable class without
+        ``find`` is refused here, at dispatch, rather than on the worker.
+        """
+        if not callable(getattr(type(self), "find", None)):
+            raise InvalidArgumentException(
+                f"Notifiable {type(self).__name__} cannot be queued: it has no "
+                "find(key). Override to_queue_payload()/from_queue_payload()."
+            )
+        return {
+            "key": QueuePayload.require_plain(
+                self.get_notification_key(), "notifiable_data.key"
+            )
+        }
+
+    @classmethod
+    def from_queue_payload(cls, data: dict[str, Any]) -> Notifiable:
+        """Load the notifiable :meth:`to_queue_payload` named.
+
+        A row deleted since dispatch is refused without a retry: no later
+        attempt will find it.
+        """
+        key = data.get("key") if isinstance(data, dict) else None
+        found = cls.find(key) if key is not None else None
+        if found is None:
+            error = CaraException(
+                f"Queued notification target {cls.__name__} #{key!r} no longer exists."
+            )
+            error.do_not_retry = True
+            raise error
+        return found
 
     def get_notification_type(self) -> str:
         """

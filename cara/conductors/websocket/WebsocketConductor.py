@@ -11,9 +11,9 @@ import contextlib
 import inspect
 from typing import Any
 
+from cara.conductors._MiddlewareStackCache import _MiddlewareStackCache
 from cara.exceptions import (
     MethodNotAllowedException,
-    MiddlewareNotFoundException,
     RouteNotFoundException,
     WebSocketException,
 )
@@ -44,6 +44,13 @@ class WebsocketConductor:
         """Initialize conductor with application instance."""
         self.application = application
         self.router = None
+        # Resolved, ordered middleware stacks (see ``_MiddlewareStackCache``).
+        self._stacks = _MiddlewareStackCache()
+
+    def _stack_cache(self) -> _MiddlewareStackCache:
+        # Through ``vars(self)`` so a conductor assembled without ``__init__``
+        # (``__new__`` in tests and tooling) still caches.
+        return vars(self).setdefault("_stacks", _MiddlewareStackCache())
 
     async def handle(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         """
@@ -196,31 +203,19 @@ class WebsocketConductor:
         so no route-specific filtering is needed here.
         """
         capsule = self.application.make("middleware_ws")
-        return capsule.get_global_middleware()
+        return self._stack_cache().global_stack(capsule)
 
     def get_route_middleware(self, route):
         """
         Returns resolved route-specific middleware.
 
         If route middleware contains same class as global middleware,
-        the route middleware (with parameters) takes priority.
+        the route middleware (with parameters) takes priority. Resolved once
+        per declaration and capsule registration version (see
+        ``_MiddlewareStackCache``).
         """
         capsule = self.application.make("middleware_ws")
-        route_middleware = []
-
-        for mw in route.get_middleware():
-            resolved = capsule.resolve_middleware(mw)
-            if resolved is None:
-                raise MiddlewareNotFoundException(
-                    f"Middleware alias or group '{mw}' could not be resolved."
-                )
-            if isinstance(resolved, list):
-                route_middleware.extend(resolved)
-            else:
-                route_middleware.append(resolved)
-
-        # Apply Laravel-style priority ordering
-        return capsule.sort_by_priority(route_middleware)
+        return self._stack_cache().route_stack(capsule, route.get_middleware())
 
     async def _run_terminable_middleware(
         self,

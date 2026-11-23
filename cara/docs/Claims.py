@@ -456,7 +456,12 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                     continue
                 elsewhere = None
                 for sibling in roots[1:]:
-                    inventories.setdefault(sibling, command_names(sibling))
+                    # Not ``setdefault(sibling, command_names(sibling))``: its
+                    # argument is evaluated before the lookup, so the
+                    # neighbour's whole command tree was re-read for every
+                    # claim and the result thrown away.
+                    if sibling not in inventories:
+                        inventories[sibling] = command_names(sibling)
                     if command in inventories[sibling]:
                         elsewhere = sibling.parent.name
                 if elsewhere is None and absent_neighbour:

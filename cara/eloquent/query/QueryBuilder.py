@@ -30,6 +30,11 @@ class QueryBuilder(ObservesEvents):
     Dependency Inversion: Depends on abstractions (DatabaseManager, Grammar)
     """
 
+    #: The wrapper ``new_connection()`` resolved itself, as opposed to one a
+    #: caller set on ``_connection``. Declared on the class so a builder made
+    #: without ``__init__`` (``deepcopy``) never reaches ``__getattr__`` for it.
+    _resolved_connection: Any = None
+
     def __init__(
         self,
         grammar: Any = None,
@@ -268,6 +273,7 @@ class QueryBuilder(ObservesEvents):
     first_or_fail = _QueryResults._qb_first_or_fail
     get_primary_key = _QueryResults._qb_get_primary_key
     prepare_result = _QueryResults._qb_prepare_result
+    load_eagers_onto = _QueryResults._qb_load_eagers_onto
     _normalize_eager_specs = staticmethod(_QueryResults._qb_normalize_eager_specs)
     _register_relationships_to_model = _QueryResults._qb_register_relationships_to_model
     _map_related = _QueryResults._qb_map_related

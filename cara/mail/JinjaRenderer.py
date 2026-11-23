@@ -27,6 +27,32 @@ from cara.support import paths
 _ENV_CACHE: dict[tuple[str, ...], jinja2.Environment] = {}
 
 
+#: Wrapper suffixes that say "Jinja source" and nothing about the output.
+_TEMPLATE_WRAPPERS = (".jinja2", ".jinja", ".j2")
+#: Output types that are NOT markup — escaping them would print ``&amp;``.
+_PLAIN_TEXT_OUTPUTS = (".txt", ".text")
+
+
+def _autoescape(template_name: str | None) -> bool:
+    """Escape by the template's real OUTPUT type, not its last suffix.
+
+    ``select_autoescape(["html", "htm", "xml"])`` keyed on the last suffix,
+    yet ``render_mail_view`` also loads ``.jinja`` / ``.j2`` templates as the
+    HTML body — so a value in ``digest.j2`` reached the mail unescaped
+    (stored XSS in mail). Strip the Jinja wrapper first: ``name.txt.j2`` is
+    plain text and stays unescaped; ``name.html.j2``, ``name.j2`` and every
+    other template rendered here is an HTML mail body and escapes.
+    """
+    if template_name is None:
+        return True
+    name = template_name.lower()
+    for wrapper in _TEMPLATE_WRAPPERS:
+        if name.endswith(wrapper):
+            name = name[: -len(wrapper)]
+            break
+    return not name.endswith(_PLAIN_TEXT_OUTPUTS)
+
+
 def _view_dirs(application) -> list[str]:
     """Resolve template search dir(s), preferring the bound view service.
 
@@ -56,8 +82,8 @@ def _environment(application) -> jinja2.Environment:
             loader=jinja2.FileSystemLoader(list(key)),
             # HTML mail: autoescape so user-supplied text ("Sons & Co",
             # "<3 promos") can't inject markup — mirrors the legacy engine's
-            # always-escape policy.
-            autoescape=jinja2.select_autoescape(["html", "htm", "xml"]),
+            # always-escape policy. Decided per template (includes too).
+            autoescape=_autoescape,
             # Tolerate a missing optional var inside an attribute chain
             # (``record.image_url`` when ``record`` is absent) instead of
             # raising; templates still guard with ``| default`` / ``{% if %}``.

@@ -287,7 +287,9 @@ def test_a_dict_entry_forwards_catch_up_and_executor(monkeypatch) -> None:
 
 
 def test_the_driver_puts_a_named_executor_on_the_engine_job() -> None:
-    driver = _EngineFreeDriver()
+    driver = _EngineFreeDriver(
+        {"executors": {"probes": {"type": "threadpool", "max_workers": 2}}}
+    )
     driver.schedule_job(
         "sweep_queue_outbox_health",
         lambda: None,

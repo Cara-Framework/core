@@ -27,6 +27,9 @@ from types import SimpleNamespace
 import pendulum
 import pytest
 
+from cara.commands.core.ActiveJobCancellationRegistry import (
+    ActiveJobCancellationRegistry,
+)
 from cara.commands.core.JobProcessor import JobProcessor
 from cara.configuration import Configuration
 from cara.queues.delivery import DeliveryClaim
@@ -147,11 +150,22 @@ class _BlockingPull:
         time.sleep(self.seconds)
 
 
-class _CancelledPull:
+class _ShutdownPull:
+    """Running when the worker shuts down: the worker's registry cancels it.
+
+    A ``CancelledError`` with no shutdown behind it is the job's own failure
+    (it spends an attempt), so the shutdown is requested for real, through
+    ``cancel_all`` on the registry the run is registered with.
+    """
+
     queue = "sync"
 
+    def __init__(self, registry):
+        self.registry = registry
+
     async def handle(self):
-        raise asyncio.CancelledError()
+        assert self.registry.cancel_all() == 1
+        await asyncio.Event().wait()  # until the shutdown cancel lands
 
 
 class _Tracker:
@@ -196,7 +210,7 @@ class _DeliveryStore:
         self.events.append("abandon")
 
 
-def _run_worker(monkeypatch, job, store, tracker):
+def _run_worker(monkeypatch, job, store, tracker, cancellation_registry=None):
     execution = importlib.import_module("cara.commands.core._JobExecution")
     payload = {
         "job_id": _JOB_ID,
@@ -246,6 +260,7 @@ def _run_worker(monkeypatch, job, store, tracker):
         SimpleNamespace(delivery_tag=7),
         b"signed-envelope",
         queue_name="sync",
+        cancellation_registry=cancellation_registry,
     )
     return outcome, settled
 
@@ -270,8 +285,10 @@ def test_shutdown_cancellation_releases_the_row_and_the_tracker(monkeypatch):
     store = _DeliveryStore()
     tracker = _Tracker()
 
+    registry = ActiveJobCancellationRegistry()
+
     with pytest.raises(asyncio.CancelledError):
-        _run_worker(monkeypatch, _CancelledPull(), store, tracker)
+        _run_worker(monkeypatch, _ShutdownPull(registry), store, tracker, registry)
 
     assert store.events == ["claim", "abandon"]
     # The claim stamped ``processing`` inside its own transaction; the worker

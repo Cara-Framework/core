@@ -58,7 +58,6 @@ import json
 import tempfile
 from pathlib import Path
 
-import cara.schema.Scratch as Scratch
 from cara.commands.CommandBase import CommandBase
 from cara.configuration import config
 from cara.decorators import command
@@ -70,6 +69,7 @@ from cara.schema import (
     LEDGER_TABLE,
     LOCKING,
     STATUS_APPLIED,
+    Scratch,
     as_dict,
     declared_checks_by_table,
     declared_indexes_by_table,

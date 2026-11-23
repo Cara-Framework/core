@@ -36,6 +36,7 @@ data, and a structure-only rehearsal — no rows — would answer it wrong.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -191,12 +192,44 @@ def plan_id(operations: list[Operation]) -> str:
     the same plan resumes the same rows instead of opening a second,
     half-empty record of the same work — and it is what lets apply tell "this
     artifact still describes the database" from "the database moved".
+
+    The inputs ARE the review contract: everything a reviewer approved — the
+    statement, its safety class, its reverse, its preflight, whether it runs
+    outside a transaction, whether its rollback restores data, how a backfill
+    is sliced. Hashing only the forward statement let a re-derived plan whose
+    reverse or safety class had changed since review pass as "unchanged" and
+    apply under an approval nobody gave. Prose (``reason``, ``notes``, the
+    preflight's failure wording) is left out: rewording it changes nothing a
+    reviewer signed off on. Each operation is hashed as one canonical JSON
+    record, so no two different field sequences can concatenate to the same
+    bytes.
     """
     digest = hashlib.sha256()
     for operation in operations:
-        digest.update(operation.key.encode())
-        digest.update(operation.forward_sql.encode())
+        digest.update(
+            json.dumps(review_contract(operation), separators=(",", ":")).encode()
+        )
+        digest.update(b"\n")
     return digest.hexdigest()[:16]
+
+
+def review_contract(operation: Operation) -> tuple:
+    """What a reviewer approved about one operation — see :func:`plan_id`.
+
+    One definition, used both by the id and by apply's resume check, so a
+    resumed plan is held to the same contract as a fresh one.
+    """
+    return (
+        operation.kind,
+        operation.key,
+        operation.forward_sql,
+        operation.safety,
+        operation.reverse_sql,
+        operation.preflight_sql,
+        operation.transactional,
+        operation.restores_data,
+        operation.batch_column,
+    )
 
 
 _CREATES_TRIGGER = re.compile(
@@ -438,5 +471,6 @@ __all__ = [
     "is_validation",
     "migration_to_run",
     "reverse_preflight",
+    "review_contract",
     "sort_operations",
 ]

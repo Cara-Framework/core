@@ -27,7 +27,11 @@ def scheduled(
     """Decorator to attach scheduling metadata to a class or function."""
 
     def decorator(target: Any):
-        specs = getattr(target, "_schedule_specs", [])
+        # A COPY, never the list ``getattr`` found: on a subclass that list is
+        # the parent's class attribute, and appending to it put the child's
+        # schedule on the parent and on every sibling. The copy still starts
+        # from the inherited specs, so a subclass keeps its parent's.
+        specs = list(getattr(target, "_schedule_specs", ()))
         provided = [
             cron is not None,
             daily is not None,

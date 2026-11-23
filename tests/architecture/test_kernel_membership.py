@@ -154,7 +154,7 @@ def test_gate_persistence_locked_sql_read_is_an_atomic_invariant(tmp_path):
         tmp_path / "commons" / "gates" / "persistence" / "DueRepository.py",
         "class DueRepository:\n"
         "    def lock_due(self, row_id):\n"
-        "        return DB.select_one(\"SELECT * FROM tenant WHERE id = %s \"\n"
+        '        return DB.select_one("SELECT * FROM tenant WHERE id = %s "\n'
         '            "FOR NO KEY UPDATE", [row_id])\n',
     )
 

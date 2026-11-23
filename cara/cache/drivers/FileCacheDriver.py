@@ -18,6 +18,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from cara.cache.codecs import JsonCacheCodec
@@ -39,6 +40,15 @@ _UNSAFE_PATTERN_CHARS = re.compile(r"[^A-Za-z0-9._:\-\*\?\[\]]")
 # Filename length cap (most filesystems error around 255 bytes; reserve
 # room for the ``.cache`` suffix and any hash suffix we append).
 _MAX_FILENAME_LEN = 200
+# Hex digits of the key hash appended to a filename that does not spell its
+# key exactly (the key was sanitized or truncated).
+_DIGEST_HEX = 32
+# Counters (``increment``) live in their own file namespace, as Redis keeps
+# them under its ``c:`` prefix beside the ``v:`` values: ``get(key)`` never
+# sees a counter and ``increment(key)`` never sees a ``put`` value. ``=`` is
+# outside ``_UNSAFE_KEY_CHARS``'s whitelist, so no value filename carries it.
+_COUNTER_SUFFIX = "=c.cache"
+_VALUE_SUFFIX = ".cache"
 
 _MAX_FILE_BYTES = (
     len(JsonCacheCodec.MAGIC)
@@ -86,8 +96,21 @@ class FileCacheDriver(CacheContract):
         with self._exclusive():
             return self._get_unlocked(key, default, strict=strict)
 
+    def many(
+        self, keys: Iterable[str], default: Any = None, *, strict: bool = True
+    ) -> dict[str, Any]:
+        """Read several keys under ONE lock acquisition — a consistent
+        snapshot, and one process file lock instead of one per key."""
+        with self._exclusive():
+            return {key: self._get_unlocked(key, default, strict=strict) for key in keys}
+
     def _get_unlocked(self, key: str, default: Any = None, *, strict: bool = True) -> Any:
-        file_path = self._file_path(key)
+        return self._read_live(self._file_path(key), key, default, strict=strict)
+
+    def _read_live(
+        self, file_path: str, key: str, default: Any = None, *, strict: bool = True
+    ) -> Any:
+        """The unexpired value stored at ``file_path``, else ``default``."""
         if not os.path.exists(file_path):
             return default
 
@@ -125,9 +148,14 @@ class FileCacheDriver(CacheContract):
             self._write_file(file_path, None, value, strict=True)
 
     def forget(self, key: str) -> bool:
+        """Delete the value AND the counter under ``key`` (Redis ``forget``
+        deletes both namespaces too)."""
         file_path = self._file_path(key)
+        counter_path = self._counter_path(key)
         with self._exclusive():
-            return self._delete_file(file_path)
+            deleted_value = self._delete_file(file_path)
+            deleted_counter = self._delete_file(counter_path)
+            return deleted_value or deleted_counter
 
     def pull(self, key: str, default: Any = None) -> Any:
         """Atomically return and delete a file-backed cache entry.
@@ -158,22 +186,24 @@ class FileCacheDriver(CacheContract):
                     self._delete_file(full_path)
 
     def has(self, key: str) -> bool:
-        """Check if a key exists in cache."""
-        file_path = self._file_path(key)
+        """Check if a value or a counter exists under ``key`` (Redis checks
+        both namespaces)."""
         with self._exclusive():
-            if not os.path.exists(file_path):
-                return False
+            return self._has_unlocked(self._file_path(key), key) or self._has_unlocked(
+                self._counter_path(key), key
+            )
 
-            ok, expires_at, _ = self._read_file(file_path)
-            if not ok:
-                raise CacheConfigurationException(
-                    f"Unreadable cache value for key '{key}'"
-                )
-            if expires_at is None or expires_at >= time.time():
-                return True
-
-            self._delete_file(file_path)
+    def _has_unlocked(self, file_path: str, key: str) -> bool:
+        if not os.path.exists(file_path):
             return False
+        ok, expires_at, _ = self._read_file(file_path)
+        if not ok:
+            raise CacheConfigurationException(f"Unreadable cache value for key '{key}'")
+        if expires_at is None or expires_at >= time.time():
+            return True
+
+        self._delete_file(file_path)
+        return False
 
     def add(
         self,
@@ -232,7 +262,11 @@ class FileCacheDriver(CacheContract):
         ):
             yield
 
-    def _file_path(self, key: str) -> str:
+    def _counter_path(self, key: str) -> str:
+        """Where ``increment`` keeps the counter for ``key``."""
+        return self._file_path(key, suffix=_COUNTER_SUFFIX)
+
+    def _file_path(self, key: str, *, suffix: str = _VALUE_SUFFIX) -> str:
         prefixed_key = f"{self._prefix}{key}"
         # Whitelist sanitize — replacing only "/" was insufficient. A key
         # like "../etc/passwd" with the previous implementation became
@@ -240,12 +274,18 @@ class FileCacheDriver(CacheContract):
         # NUL injection would still escape on non-POSIX layers. Strict
         # whitelist closes the class entirely.
         sanitized = _UNSAFE_KEY_CHARS.sub("_", prefixed_key)
-        if len(sanitized) > _MAX_FILENAME_LEN:
+        if sanitized != prefixed_key or len(sanitized) > _MAX_FILENAME_LEN:
             # Long keys get truncated + hashed so collisions stay
-            # vanishingly improbable while filenames remain bounded.
-            digest = hashlib.sha256(prefixed_key.encode("utf-8")).hexdigest()[:32]
-            sanitized = f"{sanitized[: _MAX_FILENAME_LEN - 33]}_{digest}"
-        candidate = os.path.join(self.cache_directory, f"{sanitized}.cache")
+            # vanishingly improbable while filenames remain bounded. A key the
+            # sanitizer CHANGED is hashed too: replacing every unsafe character
+            # with ``_`` mapped ``search:q=red shoes`` and ``search:q=red_shoes``
+            # (or ``a/b`` and ``a_b``) to one file, so one key was served the
+            # other's value and a lock on one refused the other.
+            digest = hashlib.sha256(prefixed_key.encode("utf-8")).hexdigest()[
+                :_DIGEST_HEX
+            ]
+            sanitized = f"{sanitized[: _MAX_FILENAME_LEN - _DIGEST_HEX - 1]}_{digest}"
+        candidate = os.path.join(self.cache_directory, f"{sanitized}{suffix}")
         # Defense in depth: reject any resolved path that escapes the
         # cache directory. ``realpath`` collapses symlinks too, so a
         # cache_directory containing a symlinked subdir can't be abused
@@ -332,7 +372,10 @@ class FileCacheDriver(CacheContract):
 
         Compound counter updates are serialized between threads and processes.
         Invalid input or stored state raises instead of resetting an authority
-        counter to a weaker value.
+        counter to a weaker value. The counter is kept in its own namespace
+        (``_COUNTER_SUFFIX``), as Redis keeps it: ``get(key)`` afterwards
+        misses, exactly as it does on the production driver, instead of
+        answering an int no Redis deployment would ever return.
         """
         if isinstance(amount, bool) or not isinstance(amount, int):
             raise TypeError("Cache counter amount must be an integer")
@@ -345,9 +388,10 @@ class FileCacheDriver(CacheContract):
             raise CacheConfigurationException(
                 "Cache counters require a positive expiration"
             )
+        counter_path = self._counter_path(key)
         with self._exclusive():
             sentinel = object()
-            current = self._get_unlocked(key, sentinel, strict=True)
+            current = self._read_live(counter_path, key, sentinel, strict=True)
             is_new = current is sentinel
             if not is_new and (isinstance(current, bool) or not isinstance(current, int)):
                 raise CacheConfigurationException(
@@ -361,10 +405,10 @@ class FileCacheDriver(CacheContract):
             if is_new:
                 effective_ttl = ttl
             else:
-                remaining = self._ttl_unlocked(key)
+                remaining = self._ttl_at(counter_path, key)
                 effective_ttl = remaining if remaining is not None else ttl
             expires_at = self._compute_expiration(effective_ttl)
-            self._write_file(self._file_path(key), expires_at, new_val, strict=True)
+            self._write_file(counter_path, expires_at, new_val, strict=True)
             return new_val
 
     def throttle(
@@ -385,10 +429,15 @@ class FileCacheDriver(CacheContract):
                 raise CacheConfigurationException(
                     f"Cache throttle {name} must be a positive integer"
                 )
+        # The cell lives in the COUNTER namespace, as Redis keeps it (an
+        # INCRBY-style integer under the counter prefix): a ``put`` / ``get``
+        # of the same key never reads or overwrites the bucket, and
+        # ``forget`` / ``ttl`` see it exactly as they do on Redis.
+        cell_path = self._counter_path(key)
         with self._exclusive():
             now = int(time.time() * 1000)
             sentinel = object()
-            stored = self._get_unlocked(key, sentinel, strict=True)
+            stored = self._read_live(cell_path, key, sentinel, strict=True)
             if stored is not sentinel and (
                 isinstance(stored, bool) or not isinstance(stored, int)
             ):
@@ -404,7 +453,7 @@ class FileCacheDriver(CacheContract):
                 return False, remaining, allow_at - now, tat - now
             full_after = next_tat - now
             self._write_file(
-                self._file_path(key),
+                cell_path,
                 self._compute_expiration(math.ceil(full_after / 1000)),
                 next_tat,
                 strict=True,
@@ -462,17 +511,19 @@ class FileCacheDriver(CacheContract):
     def ttl(self, key: str) -> int | None:
         """Remaining time-to-live for ``key`` in seconds.
 
-        Mirrors ``RedisCacheDriver.ttl``: returns ``None`` when the
-        file is missing or has no expiry, otherwise the integer
-        seconds until expiration. Used by the throttle middleware to
-        report an accurate ``Retry-After`` header instead of the full
-        window.
+        Mirrors ``RedisCacheDriver.ttl``: the counter's expiry when a
+        counter exists under ``key``, else the value's; ``None`` when
+        neither exists or it has no expiry, otherwise the integer seconds
+        until expiration. Used by the throttle middleware to report an
+        accurate ``Retry-After`` header instead of the full window.
         """
         with self._exclusive():
-            return self._ttl_unlocked(key)
+            counter_path = self._counter_path(key)
+            if os.path.exists(counter_path):
+                return self._ttl_at(counter_path, key)
+            return self._ttl_at(self._file_path(key), key)
 
-    def _ttl_unlocked(self, key: str) -> int | None:
-        file_path = self._file_path(key)
+    def _ttl_at(self, file_path: str, key: str) -> int | None:
         if not os.path.exists(file_path):
             return None
         ok, expires_at, _ = self._read_file(file_path)
@@ -502,9 +553,29 @@ class FileCacheDriver(CacheContract):
         sanitized_pattern = _UNSAFE_PATTERN_CHARS.sub("_", prefixed_pattern)
         file_pattern = os.path.join(self.cache_directory, f"{sanitized_pattern}.cache")
 
+        # A key the sanitizer changed is stored as ``<name>_<hash>``; a
+        # pattern that does not end in ``*`` must still reach it.
+        hashed_pattern = os.path.join(
+            self.cache_directory,
+            f"{sanitized_pattern}_{'[0-9a-f]' * _DIGEST_HEX}.cache",
+        )
+        # Counters too, as the Redis driver's one ``[vc]`` walk deletes both
+        # namespaces. (A pattern ending in ``*`` already reaches them.)
+        counter_patterns = [
+            os.path.join(self.cache_directory, f"{sanitized_pattern}{_COUNTER_SUFFIX}"),
+            os.path.join(
+                self.cache_directory,
+                f"{sanitized_pattern}_{'[0-9a-f]' * _DIGEST_HEX}{_COUNTER_SUFFIX}",
+            ),
+        ]
+
         deleted_count = 0
         with self._exclusive():
-            matching_files = glob.glob(file_pattern)
+            matching_files = {
+                *glob.glob(file_pattern),
+                *glob.glob(hashed_pattern),
+                *(path for pattern in counter_patterns for path in glob.glob(pattern)),
+            }
             for file_path in matching_files:
                 if self._delete_file(file_path):
                     deleted_count += 1

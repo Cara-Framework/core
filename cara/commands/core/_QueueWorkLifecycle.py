@@ -91,7 +91,9 @@ def _queue_work_force_terminate_for_redelivery(
     cancellation would otherwise leave its delivery row ``processing``, its
     idempotency lease and its concurrency slots held until they lapse. A
     released delivery row cannot be re-run early: its broker copy stays
-    unacknowledged until this exit closes the connection.
+    unacknowledged until this exit closes the connection. A release refunds
+    the run's attempt unless the run had outlived its own timeout: that one
+    hangs, and stays counted (``_DeliveryLease._RunBudget``).
     """
     Log.error("Worker forced shutdown: %s; unacked jobs will redeliver", reason)
     released = LeaseHeartbeat.release_all(timeout_seconds=_RELEASE_BEFORE_EXIT_SECONDS)

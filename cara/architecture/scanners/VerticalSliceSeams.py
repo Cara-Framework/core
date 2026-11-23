@@ -51,7 +51,13 @@ import ast
 import re
 from pathlib import Path
 
-from cara.architecture._ast_utils import docstring_node_ids, parse, python_files, relpath
+from cara.architecture._ast_utils import (
+    all_nodes,
+    docstring_node_ids,
+    parse,
+    python_files,
+    relpath,
+)
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -126,7 +132,7 @@ def _identifier_hits(rel: str, tree: ast.Module, token_re: re.Pattern[str]) -> l
                 scan_assigns(stmt.body)
 
     scan_assigns(tree.body)
-    for node in ast.walk(tree):
+    for node in all_nodes(tree):
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             if token_re.search(node.name):
                 hits.append(f"def {node.name} (line {node.lineno})")
@@ -186,7 +192,7 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
         return None
 
     hits: list[str] = []
-    for node in ast.walk(tree):
+    for node in all_nodes(tree):
         if isinstance(node, ast.Compare):
             for operand in (node.left, *node.comparators):
                 text = literal(operand)

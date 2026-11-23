@@ -285,10 +285,27 @@ class Socket:
                 self._receive(), timeout=self.receive_timeout
             )
         except TimeoutError:
-            self._closed = True
+            # Close WITH the documented 4000 before reporting the timeout.
+            # Marking the socket closed first turned the caller's later
+            # ``close()`` into a no-op, so no close frame was ever sent and
+            # the client saw an abnormal 1006 instead of 4000. ``close()``
+            # marks the socket closed itself, even when the send fails; the
+            # bound keeps a peer that stopped reading from holding us here.
+            try:
+                await asyncio.wait_for(
+                    self.close(4000, "idle timeout"), timeout=self.send_timeout
+                )
+            except Exception as close_error:
+                # The peer may already be gone; the timeout is still the
+                # error to report, so the close failure is only logged.
+                Log.debug(
+                    "WebSocket idle close frame not delivered: %s",
+                    close_error,
+                    category="cara.websocket",
+                )
             raise WebSocketException(
                 f"Client idle for {self.receive_timeout}s, closing", 4000
-            )
+            ) from None
         except Exception as e:
             raise WebSocketException(f"Failed to receive message: {e}", 4002) from e
 

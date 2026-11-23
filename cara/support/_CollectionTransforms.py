@@ -84,7 +84,9 @@ def _collection_flatten(self, depth=float("inf")):
         A new Collection instance with the flattened items.
     """
 
-    def _flatten(items, current_depth=0):
+    # The collection itself is not a level: ``flatten(1)`` removes ONE
+    # level of nesting. Counting it as level 0 made ``flatten(1)`` a no-op.
+    def _flatten(items, current_depth=-1):
         if current_depth >= depth:
             yield items
             return
@@ -254,7 +256,9 @@ def _collection_implode(self, glue=",", key=None):
     """
     first = self.first()
     if not isinstance(first, str) and key:
-        return glue.join(self.pluck(key))
+        # ``str()`` like the branch below: plucked ids are ints, and
+        # ``str.join`` raises on anything that is not already a string.
+        return glue.join([str(x) for x in self.pluck(key)])
     return glue.join([str(x) for x in self])
 
 

@@ -207,10 +207,57 @@ def _qb_get_table_name(self):
 
 
 def _qb_begin(self):
-    """Begin a new database transaction."""
-    self._connection = self.new_connection()
-    self._connection.begin()
+    """Begin (or nest) a database transaction through the connection resolver.
+
+    ROOT CAUSE: this used to ``begin()`` a private wrapper and the matching
+    ``commit()`` / ``rollback()`` called the wrapper directly, bypassing the
+    resolver. A wrapper only hands its pool permit back from ``query()`` at
+    level 0 or from the resolver's outermost commit/rollback, so every builder
+    transaction with no trailing query kept its permit for the life of the
+    process — the leak ``Atomic`` and ``DB.transaction()`` had (fixed there in
+    ``ConnectionResolver``). The wrapper was not pinned either, so the
+    ``Model.create(...)`` calls of ``with Model.query().transaction():`` ran
+    outside it. It now opens through ``DatabaseManager.begin_transaction``,
+    the same door as ``DB.transaction()``: pinned to this context, nested as a
+    savepoint inside an open transaction, released at the outermost level.
+    """
+    self._connection = self._db_manager.begin_transaction(self.connection)
     return self._connection
+
+
+def _qb_finish_transaction(self, *, commit: bool) -> None:
+    """Commit or roll back this builder's level through the resolver.
+
+    A failed COMMIT is unwound exactly as ``DB.transaction()`` and ``atomic()``
+    unwind it (``ConnectionResolver.rollback_failed_commit``), so the wrapper
+    never stays pinned with its permit. Once the outermost level has closed,
+    the builder drops the closed wrapper; ``new_connection()`` would otherwise
+    keep handing it back as caller-managed.
+    """
+    if not hasattr(self, "_connection") or self._connection is None:
+        verb = "commit" if commit else "roll back"
+        raise QueryException(f"No active transaction to {verb}.")
+    manager = self._db_manager
+    # Resolved through public API: ``_db_manager`` is often the ``DB`` facade,
+    # which does not forward private names. ``None`` and ``"default"`` mean
+    # the default connection, as in ``DatabaseManager._resolve_connection_name``.
+    name = self.connection
+    if name is None or name == "default":
+        name = manager.get_default_connection()
+    resolver = manager.get_resolver()
+    connection = self._connection
+    try:
+        if commit:
+            try:
+                resolver.commit(name)
+            except BaseException:
+                resolver.rollback_failed_commit(name)
+                raise
+        else:
+            resolver.rollback(name)
+    finally:
+        if int(getattr(connection, "transaction_level", 0) or 0) <= 0:
+            self._connection = None
 
 
 def _qb_get_schema_builder(self):
@@ -223,16 +270,13 @@ def _qb_get_schema_builder(self):
 
 def _qb_commit(self):
     """Commit the active database transaction."""
-    if not hasattr(self, "_connection") or self._connection is None:
-        raise QueryException("No active transaction to commit.")
-    return self._connection.commit()
+    _qb_finish_transaction(self, commit=True)
+    return self
 
 
 def _qb_rollback(self) -> Self:
     """Roll back the active database transaction."""
-    if not hasattr(self, "_connection") or self._connection is None:
-        raise QueryException("No active transaction to roll back.")
-    self._connection.rollback()
+    _qb_finish_transaction(self, commit=False)
     return self
 
 
@@ -258,11 +302,15 @@ def _qb_transaction(self, callback=None):
     self.begin()
     try:
         result = callback()
-        self.commit()
-        return result
-    except Exception:
+    except BaseException:
+        # ``BaseException`` like ``ConnectionResolver.transaction``: a
+        # cancelled task or Ctrl-C must still unpin and hand the permit back.
         self.rollback()
         raise
+    # Outside the ``try``: ``commit()`` unwinds its own failure, and rolling
+    # back again here would ask for a level that no longer exists.
+    self.commit()
+    return result
 
 
 def _qb_set_scope(self, name, callable) -> Self:

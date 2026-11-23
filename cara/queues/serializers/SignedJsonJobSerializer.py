@@ -293,9 +293,7 @@ class SignedJsonJobSerializer:
         kid = _SIGNED_JSON_VALUES.required_key_id(envelope["kid"])
         if kid not in signing_keys:
             raise QueueException(f"Unknown AMQP signing key id: {kid!r}.")
-        signature = envelope["signature"]
-        if not isinstance(signature, str) or len(signature) != 64:
-            raise QueueException("AMQP job signature has an invalid shape.")
+        signature = _SIGNED_JSON_VALUES.required_signature(envelope["signature"])
         signed = {key: envelope[key] for key in cls._SIGNED_ENVELOPE_KEYS}
         expected = hmac.new(
             _SIGNED_JSON_VALUES.key_bytes(signing_keys[kid]),
@@ -536,7 +534,9 @@ class SignedJsonJobSerializer:
                 raise QueueException("AMQP job payload must be bytes, text or JSON.")
             try:
                 envelope = json.loads(raw, object_pairs_hook=cls._unique_object)
-            except (json.JSONDecodeError, TypeError) as exc:
+            # Untrusted bytes, not faults: an integer past the interpreter's
+            # digit limit is a bare ValueError, nesting past the stack recurses.
+            except (ValueError, TypeError, RecursionError) as exc:
                 raise QueueException("AMQP job payload is not valid JSON.") from exc
         if not isinstance(envelope, dict) or set(envelope) != cls._ENVELOPE_KEYS:
             raise QueueException("AMQP job envelope has an invalid shape.")

@@ -331,10 +331,23 @@ class TestSyncWrapper:
 
 
 class TestAsyncWrapper:
-    """Coroutine callbacks take a separate branch — same contract."""
+    """A coroutine callback reaches the mutex already run to completion.
+
+    ``schedule_job`` turns an async callable into a sync one before any
+    wrapper sees it (the engine's executors drop a returned coroutine), so
+    the mutex has one path and the same contract holds for both.
+    """
+
+    @staticmethod
+    def _locked(identifier: str, callback) -> Any:
+        return _wrap_without_overlapping(
+            identifier,
+            driver_module._run_to_completion(identifier, callback),
+            lock_timeout=60,
+        )
 
     def test_a_free_slot_runs_and_releases(self, cache) -> None:
-        """The async branch must await the callback, not return the coroutine."""
+        """The coroutine is awaited, not returned."""
         ran: list[str] = []
 
         async def _callback() -> str:
@@ -342,14 +355,13 @@ class TestAsyncWrapper:
             ran.append("hit")
             return "async-ok"
 
-        wrapped = _wrap_without_overlapping("job:async", _callback, lock_timeout=60)
+        wrapped = self._locked("job:async", _callback)
 
-        assert asyncio.run(wrapped()) == "async-ok"
+        assert wrapped() == "async-ok"
         assert ran == ["hit"]
         assert not cache.has("scheduler:lock:job:async")
 
     def test_a_held_slot_skips_without_running(self, cache) -> None:
-        """Skipping must still be awaitable — the caller awaits either way."""
         ran: list[str] = []
 
         async def _callback() -> str:
@@ -357,9 +369,9 @@ class TestAsyncWrapper:
             return "async-ok"
 
         cache.add("scheduler:lock:job:async-held", "peer-owner", 60)
-        wrapped = _wrap_without_overlapping("job:async-held", _callback, lock_timeout=60)
+        wrapped = self._locked("job:async-held", _callback)
 
-        assert asyncio.run(wrapped()) is None
+        assert wrapped() is None
         assert ran == []
 
     def test_a_crashed_run_still_releases(self, cache) -> None:
@@ -368,8 +380,8 @@ class TestAsyncWrapper:
         async def _boom() -> None:
             raise RuntimeError("kaboom")
 
-        wrapped = _wrap_without_overlapping("job:async-crashy", _boom, lock_timeout=60)
+        wrapped = self._locked("job:async-crashy", _boom)
 
         with pytest.raises(RuntimeError):
-            asyncio.run(wrapped())
+            wrapped()
         assert not cache.has("scheduler:lock:job:async-crashy")

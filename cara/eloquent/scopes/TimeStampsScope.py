@@ -103,7 +103,14 @@ class TimeStampsScope(BaseScope):
             return builder
 
         for update in builder._updates:
-            if builder._model.date_updated_at in update.column:
+            # A dict update names its columns as keys; a counter update
+            # (increment / decrement) names ONE column as a string — where
+            # ``in`` is a substring test, so ``updated_count`` read as "this
+            # write already stamps ``updated``" and the row kept its old
+            # timestamp.
+            column = update.column
+            named = column if isinstance(column, dict) else (column,)
+            if builder._model.date_updated_at in named:
                 return
 
         # Use model's cast system for timestamp values

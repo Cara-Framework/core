@@ -147,6 +147,22 @@ class Route:
     def matches(self, path: str, method: str) -> bool:
         return self.compiler.matches(path) and method.lower() in self.request_method
 
+    def match(self, path: str, method: str) -> dict[str, Any] | None:
+        """The parameters ``path`` binds on this route, or ``None`` on no match.
+
+        ``matches`` and ``extract_parameters`` in one regex match. The result
+        belongs to the caller: nothing is stored on the route, which every
+        concurrent request shares.
+
+        A subclass with its own ``matches`` keeps deciding the match; its
+        parameters are then extracted separately, as they always were.
+        """
+        if type(self).matches is not Route.matches:
+            return self.extract_parameters(path) if self.matches(path, method) else None
+        if method.lower() not in self.request_method:
+            return None
+        return self.compiler.match(path)
+
     @classmethod
     def factory(
         cls,

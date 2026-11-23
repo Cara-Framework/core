@@ -211,6 +211,12 @@ class _MockBase:
             # Dispatch a clear failure on the actual call so the
             # traceback points at the call site.
             def _fail(*args: Any, **kwargs: Any) -> Any:
+                # Recorded BEFORE it raises: ``AssertionError`` is an
+                # ``Exception``, so code under test that wraps the call in
+                # ``except Exception`` swallows this failure whole — and an
+                # unrecorded call then let ``assert_not_called(name)`` pass
+                # for a method that had just been called.
+                self._calls[name].append(_Call(args, kwargs))
                 raise AssertionError(
                     f"Unexpected call to {name}() on strict Mock"
                     + (f"({self._contract.__name__})" if self._contract else "")

@@ -15,6 +15,7 @@ the retry attempts reserved for jobs that ran and blew up.
 from __future__ import annotations
 
 import asyncio
+import importlib
 
 import pytest
 
@@ -22,6 +23,7 @@ from cara.commands.core.JobProcessor import JobProcessor
 from cara.queues.contracts.JobCancelledException import JobCancelledException
 from cara.queues.contracts.JobThrottledException import JobThrottledException
 from cara.queues.middleware.RateLimited import RateLimited
+from tests.queues._shared_rate_store import install
 
 
 class _Job:
@@ -32,7 +34,8 @@ async def _body(job):  # pragma: no cover - must never run in these tests
     raise AssertionError("the job body must not run when the gate is closed")
 
 
-def test_rate_limited_raises_instead_of_returning() -> None:
+def test_rate_limited_raises_instead_of_returning(monkeypatch) -> None:
+    install(monkeypatch, importlib.import_module(RateLimited.__module__))
     mw = RateLimited(max_attempts=1, decay_seconds=60, key="probe-raises")
 
     ran: list[str] = []

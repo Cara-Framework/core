@@ -88,6 +88,8 @@ def _qb_update(
     force: bool = False,
     cast: bool = True,
     ignore_mass_assignment: bool = False,
+    *,
+    returning: tuple[str, ...] = (),
 ):
     """
     Specifies columns and values to be updated.
@@ -98,6 +100,9 @@ def _qb_update(
         force {bool, optional}: Force an update statement to be executed even if nothing was changed
         cast {bool, optional}: Run all values through model's casters
         ignore_mass_assignment {bool, optional}: Whether the update should ignore mass assignment on the model
+        returning {tuple, optional}: Columns (or ``"*"``) an update with no loaded instance reads back
+            from the rows it wrote, in the same statement. It then answers with those rows (a list,
+            empty when none matched) instead of the count, and fires ``updated`` only when it wrote one.
 
     Returns:
         A loaded model's update answers with the model, refreshed with the
@@ -195,7 +200,7 @@ def _qb_update(
     self.set_action("update")
     # Set before the dry return so a dry run shows the statement that runs.
     read_back = _read_back_columns(model, updates) if loaded else ()
-    self._returning = read_back
+    self._returning = read_back if loaded else tuple(returning)
     if dry or self.dry:
         return self
 
@@ -231,6 +236,11 @@ def _qb_update(
         # left the model claiming values no row holds. It stays as it was
         # read, fires no ``updated``, and ``save()`` keeps its change pending.
         return None
+    if returning and not loaded and not result:
+        # The caller asked for the written rows and there are none: nothing
+        # was updated, so no ``updated`` is announced for a row that does not
+        # exist (``update_or_create`` goes on to INSERT it).
+        return result
     if model:
         written = {**materialized, **_returned_values(model, read_back, result)}
         model.fill(written)
@@ -311,39 +321,11 @@ def _qb_increment(self, column, value=1, dry=False):
         value {int} -- The value to increment by. (default: {1})
 
     Returns:
-        self
+        A loaded model's increment answers with the column's new value, read
+        back from the row; any other increment answers ``None``. The compiled
+        SQL for a dry run.
     """
-    model = None
-    id_key = "id"
-    id_value = None
-
-    additional = {}
-
-    if self._model:
-        model = self._model
-        id_value = self._model.get_primary_key_value()
-
-    if model and model.is_loaded():
-        self.where(
-            model.get_primary_key(),
-            model.get_primary_key_value(),
-        )
-        additional.update({model.get_primary_key(): model.get_primary_key_value()})
-
-        self.observe_events(model, "updating")
-
-    self._updates += (UpdateQueryExpression(column, value, update_type="increment"),)
-
-    if dry or self.dry:
-        return self.get_grammar().compile("update").to_sql()
-
-    _refuse_unbounded_counter(self, "increment")
-    self.set_action("update")
-    results = self.new_connection().query(self.to_qmark(), self._bindings)
-    processed_results = self.get_processor().get_column_value(
-        self, column, results, id_key, id_value
-    )
-    return processed_results
+    return _run_counter(self, column, value, "increment", dry)
 
 
 def _qb_decrement(self, column, value=1, dry=False):
@@ -357,39 +339,54 @@ def _qb_decrement(self, column, value=1, dry=False):
         value {int} -- The value to decrement by. (default: {1})
 
     Returns:
-        self
+        As :func:`_qb_increment`.
     """
-    model = None
-    id_key = "id"
-    id_value = None
+    return _run_counter(self, column, value, "decrement", dry)
 
-    additional = {}
 
-    if self._model:
-        model = self._model
-        id_value = self._model.get_primary_key_value()
+def _run_counter(self, column, value, verb: str, dry: bool):
+    """The one body of ``increment`` and ``decrement``.
 
-    if model and model.is_loaded():
+    ROOT CAUSE (three defects of the two copies this replaces):
+
+    * Both read ``model.get_primary_key_value()`` for ANY model builder, so
+      ``Model.where(...).increment("n")`` — whose model is the query's
+      throwaway instance — raised ``AttributeError`` before writing.
+    * A loaded model's new value was re-read by a second SELECT in the post
+      processor, which then asked ``column in result`` of the hydrated MODEL.
+      A model has no ``__contains__``, so Python iterated it by integer index
+      and ``loaded.increment("n")`` raised ``TypeError: attribute name must
+      be string`` AFTER the UPDATE had landed: the counter moved and the
+      caller saw a failure.
+    * That re-read hard-coded ``id`` as the key column, so a model keyed on
+      anything else failed with "no such column" after its write.
+
+    The loaded model now reads the value back in the same statement
+    (``RETURNING``, as ``update()`` does) — one round trip instead of two.
+    """
+    model = self._model or None
+    loaded = bool(model and model.is_loaded())
+
+    if loaded:
         self.where(
             model.get_primary_key(),
             model.get_primary_key_value(),
         )
-        additional.update({model.get_primary_key(): model.get_primary_key_value()})
-
         self.observe_events(model, "updating")
 
-    self._updates += (UpdateQueryExpression(column, value, update_type="decrement"),)
+    self._updates += (UpdateQueryExpression(column, value, update_type=verb),)
 
     if dry or self.dry:
         return self.get_grammar().compile("update").to_sql()
 
-    _refuse_unbounded_counter(self, "decrement")
+    _refuse_unbounded_counter(self, verb)
     self.set_action("update")
-    result = self.new_connection().query(self.to_qmark(), self._bindings)
-    processed_results = self.get_processor().get_column_value(
-        self, column, result, id_key, id_value
-    )
-    return processed_results
+    if loaded:
+        self._returning = (column,)
+    results = self.new_connection().query(self.to_qmark(), self._bindings)
+    if loaded and isinstance(results, list) and results:
+        return dict(results[0]).get(column)
+    return None
 
 
 def _refuse_unbounded_counter(self, verb: str) -> None:
@@ -586,12 +583,30 @@ def _qb_run_aggregate(self, function, column, dry=False):
     if dry or self.dry:
         return self
 
+    # ROOT CAUSE (two defects in the old save/restore):
+    # * Explicit select columns stayed beside the aggregate, so
+    #   ``select("id", "name").count()`` compiled ``SELECT id, name,
+    #   COUNT(*)``. SQLite answers it; PostgreSQL refuses it ("must appear
+    #   in the GROUP BY clause"). An ungrouped aggregate selects the
+    #   aggregate alone, like Laravel. A grouped or DISTINCT query keeps its
+    #   columns: there they define the groups being aggregated.
+    # * ``_order_by`` was put back in a ``finally`` — AFTER ``to_qmark()``
+    #   had reset the builder — so the caller's ORDER BY leaked into the
+    #   next query built on a reused builder, alone, without its wheres.
+    #   The state is restored only when compiling failed, i.e. when the
+    #   builder was never reset and still holds the rest of the query.
     saved_order_by = self._order_by
+    saved_columns = self._columns
     self._order_by = ()
+    if not self._group_by and not self._distinct:
+        self._columns = ()
     try:
-        result = self.new_connection().query(self.to_qmark(), self._bindings, results=1)
-    finally:
+        sql = self.to_qmark()
+    except BaseException:
         self._order_by = saved_order_by
+        self._columns = saved_columns
+        raise
+    result = self.new_connection().query(sql, self._bindings, results=1)
 
     if result is None:
         return 0 if function == "COUNT" else None

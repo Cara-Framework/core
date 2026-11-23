@@ -143,3 +143,26 @@ def test_an_unrelated_package_import_is_left_alone(tmp_path: Path) -> None:
     # ``app.jobs`` is fully loaded before ``app.services`` asks for a name from
     # it — a cross-package barrel import is the SANCTIONED form (§5.1).
     assert _messages(tmp_path) == []
+
+
+def test_a_checkout_under_a_directory_named_tests_is_still_scanned(
+    tmp_path: Path,
+) -> None:
+    """The test-file skip asked ``"tests" in path.parts`` of the ABSOLUTE path,
+    so a deployable checked out anywhere below a directory called ``tests``
+    had every file skipped and passed without being read."""
+    deployable = tmp_path / "tests" / "api"
+    package = _package(deployable, CLASS_BARREL)
+    write(
+        package / "Export.py",
+        "from app.services import Report\n\n\nclass Export:\n    pass\n",
+    )
+
+    assert any("binds a half-built module" in m for m in _messages(deployable))
+
+
+def test_a_tests_directory_inside_the_product_is_still_skipped(tmp_path: Path) -> None:
+    package = _package(tmp_path, CLASS_BARREL)
+    write(package / "tests" / "test_export.py", "from app.services import Report\n")
+
+    assert _messages(tmp_path) == []

@@ -73,6 +73,38 @@ class DistinctRule(BaseRule):
         if not isinstance(node, list):
             return True
 
+        collected, occurrences = self._siblings(params, tuple(base_path), leaf, node)
+        try:
+            return occurrences.get(value, 0) <= 1
+        except TypeError:
+            # An unhashable value (a list or an object) has no tally entry;
+            # compare it against its siblings directly, as before.
+            return collected.count(value) <= 1
+
+    @staticmethod
+    def _siblings(
+        params: dict[str, Any],
+        base_path: tuple[str, ...],
+        leaf: str | None,
+        node: list,
+    ) -> tuple[list, dict[Any, int]]:
+        """The sibling values of one wildcard collection and how often each occurs.
+
+        Read ONCE per collection per ``Validation.make`` (``params["_memo"]``).
+        The wildcard form runs this rule for every element, and each run used
+        to rebuild the sibling list and ``count`` through it: quadratic in the
+        array a client sends. 8,000 short ids — a 120 KB body — held the event
+        loop for 1.1 s, 50,000 for most of a minute, and the parent's own
+        ``max:100`` did not help because every field's rules still run.
+
+        Equality is ``list.count``'s: a dict keyed by the value groups ``1``,
+        ``1.0`` and ``True`` together exactly as ``==`` does.
+        """
+        memo = params.get("_memo")
+        key = ("distinct", base_path, leaf)
+        if memo is not None and key in memo:
+            return memo[key]
+
         collected = []
         for item in node:
             if leaf is not None and isinstance(item, dict):
@@ -80,7 +112,18 @@ class DistinctRule(BaseRule):
             else:
                 collected.append(item)
 
-        return collected.count(value) <= 1
+        occurrences: dict[Any, int] = {}
+        for item in collected:
+            try:
+                occurrences[item] = occurrences.get(item, 0) + 1
+            except TypeError:
+                # Unhashable: left to the direct comparison in ``validate``.
+                continue
+
+        siblings = (collected, occurrences)
+        if memo is not None:
+            memo[key] = siblings
+        return siblings
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)

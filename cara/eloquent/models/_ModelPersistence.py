@@ -117,12 +117,18 @@ def _model_boot(self) -> None:
     snapshot = _BOOT_SNAPSHOTS.get(type(self))
     if snapshot is not None:
         passthrough, scopes, macros = snapshot
+        # Written straight into ``__dict__`` like the stores in
+        # ``Model.__init__``: these are per-instance bookkeeping, not column
+        # values, and ``Model.__setattr__`` would only route them here.
+        state = self.__dict__
         self.observe_events(self, "booting")
-        self._booted = True
+        state["_booted"] = True
         self.observe_events(self, "booted")
         self.append_passthrough(passthrough)
-        self._global_scopes = {action: dict(names) for action, names in scopes.items()}
-        self._macros = dict(macros)
+        state["_global_scopes"] = {
+            action: dict(names) for action, names in scopes.items()
+        }
+        state["_macros"] = dict(macros)
         return
     if not self._booted:
         self.observe_events(self, "booting")
@@ -392,15 +398,15 @@ def _model_get_table_name(cls) -> str:
     return cls.__table__ or tableize(cls.__name__)
 
 
-def _model_table(cls, table) -> str:
-    """
-    Gets the table name.
+def _model_table(cls, table) -> QueryBuilder:
+    """A builder for this model reading ``table``, for this one query.
 
-    Returns:
-        str
+    It used to assign ``cls.__table__`` and return the class, so one
+    ``Model.table("x")`` re-pointed EVERY later query of that model in the
+    process — other requests and other tenants included — at ``x``. The
+    class is left untouched now; only the returned builder carries the table.
     """
-    cls.__table__ = table
-    return cls
+    return cls().get_builder().table(table)
 
 
 def _model_find(

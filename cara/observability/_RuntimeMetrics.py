@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import errno
-import importlib
 import threading
 import time
 
@@ -13,6 +12,7 @@ from prometheus_client.exposition import CONTENT_TYPE_LATEST
 
 import cara.facades as facades
 from cara.configuration import config
+from cara.eloquent import database_pool_stats
 from cara.exceptions import InvalidConfigurationSetupException
 
 _build_info_lock = threading.Lock()
@@ -22,33 +22,28 @@ _http_server_lock = threading.Lock()
 
 
 def _read_db_pool_stats() -> dict[str, int] | None:
-    postgres = importlib.import_module("cara.eloquent.connections.PostgresConnection")
-    if not getattr(postgres, "_pool_initialized", False):
-        return None
-    semaphore = getattr(postgres, "_pool_semaphore", None)
-    if semaphore is None:
-        return None
-    free = getattr(semaphore, "_value", None)
-    if type(free) is not int or free < 0:
-        raise RuntimeError("Database pool semaphore exposes an invalid free-slot count")
-    pool = getattr(postgres, "CONNECTION_POOL", None)
-    if not isinstance(pool, list):
-        raise RuntimeError("Database pool storage is not initialized correctly")
-    idle = len(pool)
-    total = _configured_db_pool_max()
-    if total < free:
-        raise RuntimeError("Database pool free-slot count exceeds its configured maximum")
-    return {"in_use": total - free, "idle": idle, "max": total}
+    """The pool gauges' figures, summed over every configured connection
+    (``cara.eloquent.database_pool_stats``), or None before a first pool
+    exists. The ORM keeps one pool per connection; the gauges stay the
+    process-wide totals they always were.
 
-
-def _configured_db_pool_max() -> int:
-    postgres = importlib.import_module("cara.eloquent.connections.PostgresConnection")
-    raw = getattr(postgres, "_pool_max_size", None)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+    Figures that cannot be true raise instead of being published: a gauge
+    that reports a nonsense saturation is worse than a failed scrape.
+    """
+    stats = database_pool_stats()
+    if stats is None:
+        return None
+    figures = {name: stats.get(name) for name in ("in_use", "idle", "max")}
+    for name, value in figures.items():
+        if type(value) is not int or value < 0:
+            raise RuntimeError(f"Database pool publishes an invalid '{name}' figure")
+    if figures["max"] <= 0:
         raise RuntimeError(
             "Initialized database pool must publish a positive integer maximum."
         )
-    return raw
+    if figures["in_use"] > figures["max"]:
+        raise RuntimeError("Database pool in-use count exceeds its configured maximum")
+    return figures
 
 
 def _sample_db_pool_metrics(metrics_cls: type) -> None:

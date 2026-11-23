@@ -125,7 +125,7 @@ not contain a concrete plug-in token.
 | `raw_sql_homes` | POSIX path fragments that legitimately own raw SQL, matched against a contiguous run of path parts. Defaults: `repositories`, `commons/gates/persistence`. |
 | `model_import_roots` | Import roots whose names are ORM model classes. Defaults: `app.models`, `models.core`. |
 | `http_import_prefixes` | Import prefixes carrying HTTP transport types. Defaults: `cara.http`, `cara.request`, `cara.response`. |
-| `env_read_exempt_environ_attrs` | `os.environ` methods that snapshot the whole mapping rather than read one variable. Default: `copy`. |
+| `env_read_exempt_environ_attrs` | `os.environ` methods that snapshot the whole mapping rather than read one variable. Default: `copy`; while `copy` is listed, `dict(os.environ)` and `{**os.environ, ...}` count as the same snapshot. |
 | `registry_size_bounds` | Optional `(low, high)` budget for the combined `domains` + `flows` entry count. `None` (default) leaves size a review threshold, per §3. |
 | `single_layer_domains` | Domains that legitimately live in exactly one domain layer. Both an unpinned single-layer domain and a pin whose domain grew a second layer fail. |
 
@@ -194,24 +194,40 @@ new import.
 Enforces three import shapes:
 
 1. Consumers outside a layer use its layer/domain barrel, not a leaf module.
+   Three spellings of the reach are read: a module-level `from app.L.x.Leaf
+   import ...`, a module-level `import app.L.x.Leaf` (with or without
+   `as X`), and `importlib.import_module("app.L.x.Leaf")` /
+   `import_module("app.L.x.Leaf")` with ONE literal string argument anywhere
+   in the file, function bodies included — it runs whenever it is reached.
+   A target that is a package directory, a leaf its package binds as a module
+   object, or a private name (last segment, or every imported name, starting
+   with `_`) is legal. A computed path (`import_module(name)`) is not read.
 2. Siblings inside a layer import each other's direct submodule, not their own
    partially initialized layer barrel.
 3. Deployable code consumes the dev-only kernel through `app.*` barrels; only
-   the kernel barrel files may import `commons.*`.
+   the kernel barrel files may import `commons.*`. Every import statement in
+   the file counts (function-local included), and so does a literal
+   `import_module("commons...")` / `importlib.import_module("commons...")`:
+   it reaches the kernel past the build's one swap point just the same.
 
 Violation:
 
 ```python
 # app/controllers/catalog/ProductController.py
 from app.services.catalog.ProductService import ProductService
+import app.services.catalog.PriceService as prices
 from commons.models import Product
+
+
+def load_rules():
+    return importlib.import_module("commons.gates.Rules")
 ```
 
 Clean:
 
 ```python
 from app.models import Product
-from app.services.catalog import ProductService
+from app.services.catalog import PriceService, ProductService
 ```
 
 Inside `app/services/catalog/`, the clean sibling form is instead
@@ -426,6 +442,39 @@ legal repository exception is a fully-contained atomic persistence primitive
 named exactly in `atomic_repository_methods`; stale declarations fail. Existing
 violations use an exact per-file `transaction_ownership` census.
 
+Counted operations: `transaction`, `begin`, `begin_transaction`, `commit`,
+`rollback`, `commit_open_transactions` and `after_commit`, plus Cara's
+`atomic()` (imported from `cara.eloquent`, aliases included). The receiver
+need not be the `DB` facade. An injected manager counts the same:
+
+- a receiver named `db`, `database`, `connection`, `conn`, `db_manager`,
+  `database_manager`, `connection_manager`, `db_connection` or
+  `database_connection`, or one ending `_db` / `_connection` or starting
+  `db_` (leading underscores and case ignored) — `self.db.transaction()`,
+  `db.commit()` on a parameter, `self._connection.rollback()`,
+  `self.db.connection("x").commit()`;
+- a parameter or attribute annotated with a `DatabaseManager`, `Connection`
+  or `ConnectionResolver` type, or with `DB`;
+- a name bound to a container lookup of `"DB"` (`make("DB")` /
+  `resolve("DB")`, e.g. `self.manager = app().make("DB")`), or that lookup
+  used directly as the receiver.
+
+Violation:
+
+```python
+# app/repositories/OrderRepository.py
+class OrderRepository:
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    def close(self, order_id: int) -> None:
+        with self.db.transaction():
+            ...
+```
+
+Clean: the use-case service opens the transaction and calls the repository
+inside it.
+
 ### `write_ownership`
 
 Requires one declared owner for every model-backed table and scans direct ORM
@@ -460,7 +509,12 @@ tree uses the exact, shrink-only `raw_sql_home` census.
 ORM builder calls on a model imported from `model_import_roots`, anywhere the
 product declares that data access must go through a repository. The whole call
 chain counts, so `Model.without_scope().first()` cannot hide behind a
-non-ORM head. Carve-outs: a single-argument primary-key `find` and a query inside
+non-ORM head. A model reached through an imported models MODULE counts the
+same as one imported by name: `import app.models as m` then
+`m.Product.where(...)`, `from app import models` then
+`models.Product.where(...)`, and a plain `import app.models` then
+`app.models.Product.where(...)`. The first class-cased segment after the
+model root is the model. Carve-outs: a single-argument primary-key `find` and a query inside
 the row-locking statement of a `DB.transaction()`. Whole-file debt is the exact, shrink-only
 `model_query_discipline` census — never a silently skipped subtree.
 
@@ -474,8 +528,33 @@ code is the edge's job.
 
 `env()`, `os.getenv` and `os.environ` reads belong to `config/`. Names imported
 from `os` or `cara.environment` are tracked, so a bare `getenv("X")` cannot slip
-past. `env_read_exempt_environ_attrs` (default `copy`) allows a whole-mapping
-snapshot handed to a subprocess.
+past, and so is every name the `os` module is bound to (`import os as _os`).
+Importing `cara.environment` itself (`import cara.environment`,
+`from cara import environment`) is a finding.
+
+Besides `os.getenv(...)`, `os.environ[...]` reads and `os.environ.<method>(...)`
+calls, a BARE reference to `os.environ` is a finding: `"X" in os.environ`,
+`env = os.environ`, `for key in os.environ`, or passing the mapping on — each
+hands the code the whole environment to read from. Writes and deletes
+(`os.environ["X"] = ...`, `del os.environ["X"]`) are not reads and are not
+reported.
+
+`env_read_exempt_environ_attrs` (default `copy`) allows a whole-mapping
+snapshot handed to a subprocess. While `copy` is exempt, `dict(os.environ)`
+and `{**os.environ, "X": "1"}` are the same snapshot and pass too.
+
+Violation:
+
+```python
+if "SENTRY_DSN" in os.environ:
+    ...
+```
+
+Clean:
+
+```python
+subprocess.run(cmd, env={**os.environ, "LC_ALL": "C"})
+```
 
 ### `silent_except_swallow`
 

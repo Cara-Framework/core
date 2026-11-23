@@ -13,15 +13,34 @@ published contract to runtime wiring.
 from __future__ import annotations
 
 import ast
+import atexit
 import re
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+from .Sources import _parse_source, _statements, _walk
+
 # ``types/Base.py`` imports nothing, so the no-boot promise in this module's
 # docstring survives joining the taxonomy.
 
 _ACTION_FUNCTIONS = tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]
+# ``controllers_dir -> (the trees it was resolved from, the actions)``. One
+# spec build asks for the same directory's actions six times — the resource,
+# meta and contract mappers, the cursor and null-data readers, the product's
+# own summaries — and each used to re-read, re-parse and re-resolve every
+# controller. The answer depends on the trees alone, so it is kept for as
+# long as the directory still parses to the very same trees
+# (``_parse_source`` hands back the same tree only for the same text).
+_ACTIONS: dict[
+    Path, tuple[tuple[ast.Module, ...], list[tuple[str, str, _ACTION_FUNCTIONS]]]
+] = {}
+# A build reads one controllers tree; a process that keeps reading new ones
+# (a test session) starts over instead of holding every tree it ever saw.
+_ACTIONS_LIMIT = 32
+# Dropped before the interpreter shuts down, like the trees themselves
+# (``Sources._PARSED``).
+atexit.register(_ACTIONS.clear)
 _DECLARED_RESOURCE = re.compile(r"@resource\(\s*(\w+)\s*(\[\])?\s*\)")
 _DECLARED_META = re.compile(r"@meta\(\s*(\w+)\s*\)")
 # ``@raises(InvalidInput, ConflictException)``: the typed exceptions an action
@@ -63,12 +82,22 @@ def controller_action_functions(
     transitively. Base classes contribute their methods in Python's own
     resolution order, so a mixin split changes nothing about the result.
     """
+    trees = tuple(
+        _parse_source(path)
+        for path in sorted(controllers_dir.rglob("*.py"))
+        if path.name != "__init__.py"
+    )
+    resolved = _ACTIONS.get(controllers_dir)
+    if (
+        resolved is not None
+        and len(resolved[0]) == len(trees)
+        and all(known is tree for known, tree in zip(resolved[0], trees, strict=True))
+    ):
+        return list(resolved[1])
+
     classes: dict[str, ast.ClassDef] = {}
-    for path in sorted(controllers_dir.rglob("*.py")):
-        if path.name == "__init__.py":
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
+    for tree in trees:
+        for node in _statements(tree):
             if isinstance(node, ast.ClassDef):
                 classes[node.name] = node
 
@@ -100,7 +129,7 @@ def controller_action_functions(
         for action, entrypoint in methods.items():
             if action.startswith("_"):
                 continue
-            resolved: list[Any] = []
+            delegates: list[Any] = []
             pending = [entrypoint]
             visited: set[str] = set()
             while pending:
@@ -108,9 +137,9 @@ def controller_action_functions(
                 if method.name in visited:
                     continue
                 visited.add(method.name)
-                resolved.append(method)
+                delegates.append(method)
                 for call in (
-                    item for item in ast.walk(method) if isinstance(item, ast.Call)
+                    item for item in _walk(method) if isinstance(item, ast.Call)
                 ):
                     func = call.func
                     if (
@@ -120,8 +149,11 @@ def controller_action_functions(
                         and func.attr in methods
                     ):
                         pending.append(methods[func.attr])
-            actions.append((controller, action, tuple(resolved)))
-    return actions
+            actions.append((controller, action, tuple(delegates)))
+    if len(_ACTIONS) >= _ACTIONS_LIMIT:
+        _ACTIONS.clear()
+    _ACTIONS[controllers_dir] = (trees, actions)
+    return list(actions)
 
 
 def null_data_actions(controllers_dir: Path) -> set[str]:
@@ -137,7 +169,7 @@ def null_data_actions(controllers_dir: Path) -> set[str]:
             and isinstance(sub.args[0], ast.Constant)
             and sub.args[0].value is None
             for fn in functions
-            for sub in ast.walk(fn)
+            for sub in _walk(fn)
         ):
             actions.add(f"{controller}@{action}")
     return actions
@@ -168,7 +200,7 @@ def cursor_paginated_actions(
                         and sub.func.attr == _PAGE_RESPONSE_METHOD
                     )
                 )
-                for sub in ast.walk(fn)
+                for sub in _walk(fn)
             )
             for fn in functions
         ):
@@ -216,12 +248,33 @@ def _status_values(
     return set()
 
 
+def _self_calls(functions: _ACTION_FUNCTIONS) -> dict[str, list[ast.Call]]:
+    """Every ``self.<method>(...)`` call in an action's functions, by the
+    method it names. Read once per action: looking for each function's
+    callers by walking all of them again was a walk per PAIR of functions."""
+    calls: dict[str, list[ast.Call]] = {}
+    for caller in functions:
+        for call in _walk(caller):
+            if not isinstance(call, ast.Call):
+                continue
+            target = call.func
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+            ):
+                calls.setdefault(target.attr, []).append(call)
+    return calls
+
+
 def _status_bindings(
-    function: ast.FunctionDef | ast.AsyncFunctionDef, functions: _ACTION_FUNCTIONS
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    calls: dict[str, list[ast.Call]],
 ) -> dict[str, set[int]]:
     """The statuses each name in ``function`` can hold: its parameter defaults,
-    what the action's own calls pass it, and its local assignments. A status
-    is often one argument of a shared ``_respond(..., status=201)`` helper."""
+    what the action's own calls pass it (``calls``: ``_self_calls`` of the
+    action), and its local assignments. A status is often one argument of a
+    shared ``_respond(..., status=201)`` helper."""
     bindings: dict[str, set[int]] = {}
 
     def bind(name: str, value: ast.AST | None) -> None:
@@ -238,23 +291,14 @@ def _status_bindings(
     ):
         bind(parameter.arg, default)
 
-    for caller in functions:
-        for call in (item for item in ast.walk(caller) if isinstance(item, ast.Call)):
-            target = call.func
-            if not (
-                isinstance(target, ast.Attribute)
-                and isinstance(target.value, ast.Name)
-                and target.value.id == "self"
-                and target.attr == function.name
-            ):
-                continue
-            for keyword in call.keywords:
-                if keyword.arg is not None:
-                    bind(keyword.arg, keyword.value)
-            for parameter, value in zip(positional[1:], call.args, strict=False):
-                bind(parameter.arg, value)
+    for call in calls.get(function.name, ()):
+        for keyword in call.keywords:
+            if keyword.arg is not None:
+                bind(keyword.arg, keyword.value)
+        for parameter, value in zip(positional[1:], call.args, strict=False):
+            bind(parameter.arg, value)
 
-    for node in ast.walk(function):
+    for node in _statements(function):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1

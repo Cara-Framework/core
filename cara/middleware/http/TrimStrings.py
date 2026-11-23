@@ -18,8 +18,15 @@ class TrimStrings(Middleware):
         self, request: Request, next_fn: Callable[..., Awaitable[Any]]
     ) -> Response:
         if hasattr(request, "_input") and request._input is not None:
-            for k, v in request._input.all().items():
-                if isinstance(v, str):
-                    request._input.set(k, v.strip())
+            # Written back by KEY, not through ``InputBag.set``: ``set`` reads
+            # a dot in the name as a path, so trimming ``?utm.source=x`` tried
+            # to create ``utm → source`` while this loop was iterating the
+            # same dict ("dictionary changed size during iteration"), and
+            # ``?a=1&a.b=x`` tried to index into the string ``"1"``. Either
+            # was a 500 any caller could trigger with a dotted parameter name.
+            inputs = request._input.all()
+            for name, value in inputs.items():
+                if isinstance(value, str):
+                    inputs[name] = value.strip()
 
         return await next_fn(request)

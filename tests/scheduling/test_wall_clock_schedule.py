@@ -149,3 +149,16 @@ def test_the_registration_runs_an_hour_less_cron_every_hour(register):
 
 def test_a_sub_minute_tick_is_still_registered_as_an_interval(register):
     assert register({"trigger": "interval", "seconds": 30})["type"] == "interval"
+
+
+def test_a_period_declared_in_weeks_is_counted_whole():
+    """``weeks`` was missing from the unit table, so a week-and-six-hours
+    entry read as six hours and was rewritten to a ``*/6`` cron."""
+    entry = {"id": "weekly_digest", "weeks": 1, "hours": 6}
+
+    assert declared_interval_seconds(entry) == 604800 + 6 * 3600
+    assert on_wall_clock(entry) == entry
+    assert declared_interval_seconds({"weeks": 2}) == 2 * 604800
+    # A multi-week period is nothing the clock divides: it stays an interval.
+    fortnight = {"id": "fortnight", "weeks": 2}
+    assert on_wall_clock(fortnight) == fortnight

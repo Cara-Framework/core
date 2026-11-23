@@ -18,6 +18,7 @@ from typing import Any
 
 from cara.facades import Log
 from cara.http import Request, Response
+from cara.logging import CategoryFilter
 from cara.middleware.http.PathRedaction import PathRedaction
 from cara.middleware.Middleware import Middleware
 from cara.support import mask_ip
@@ -91,16 +92,23 @@ def _redact_query_string(query: str) -> str:
 # inject terminal sequences. Non-control Unicode (Turkish chars,
 # emoji, accented letters) passes through unchanged — they're not
 # injection vectors.
+#
+# One compiled character class rather than a per-character Python loop: this
+# runs over the path and the query string of EVERY request (and over every
+# header value when the header dump is on), and almost none of them contain a
+# control character — the regex answers that in one C-level scan.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _percent_encode(match: re.Match[str]) -> str:
+    return f"%{ord(match.group()):02X}"
+
+
 def _sanitize_log_path(value: str) -> str:
     """Return ``value`` with C0/DEL/C1 control chars %-encoded."""
     if not value:
         return value
-    return "".join(
-        f"%{ord(c):02X}"
-        if (ord(c) < 0x20 or ord(c) == 0x7F or 0x80 <= ord(c) <= 0x9F)
-        else c
-        for c in value
-    )
+    return _CONTROL_CHARS.sub(_percent_encode, value)
 
 
 def _redact_headers(headers: list) -> dict:
@@ -194,12 +202,29 @@ class LogHttpRequests(Middleware):
         Log.info(colored_message, category="cara.http.requests")
 
         # At debug level, include redacted request headers for diagnostics.
+        # The dump is built only when that level is on for this category: it
+        # decodes and sanitizes every header, ~30 us on a browser request, and
+        # the access-log category runs at INFO in every deployed environment,
+        # where the logger dropped the finished line on every request.
         raw_headers = request.scope.get("headers", [])
-        if raw_headers:
+        if raw_headers and self._header_dump_wanted():
             safe_headers = _redact_headers(raw_headers)
             Log.debug("  Headers: %s", safe_headers, category="cara.http.requests")
 
         return response
+
+    @staticmethod
+    def _header_dump_wanted() -> bool:
+        """Whether a DEBUG line in the access-log category would be written.
+
+        The logger's own rule (``CategoryFilter``), asked before the work
+        instead of after it. If the rule cannot be read, build the line and
+        let the logger decide, as before.
+        """
+        try:
+            return CategoryFilter.should_log("DEBUG", "cara.http.requests")
+        except Exception:
+            return True
 
     def _logged_path(self, request: Request) -> str:
         """The path and query string as the access log writes them.

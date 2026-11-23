@@ -53,39 +53,67 @@ def _model_first_or_new(cls, wheres, values: dict | None = None) -> Any:
 def _model_update_or_create(cls, wheres, updates) -> Any:
     """Upsert: update if a matching row exists, else create.
 
-    Same TOCTOU race as ``first_or_create`` — the SELECT-then-
-    INSERT path can lose to a concurrent inserter. When the loser
-    catches a UNIQUE violation, re-query and apply the update
-    (the merge semantics of an upsert) so both racing requests
-    converge on a single row with the latest payload.
+    ONE round trip when the row exists: the UPDATE runs first and hands the
+    row it wrote back (``RETURNING``). It used to be three — a SELECT to
+    look, the UPDATE, a SELECT to read the result — although the UPDATE's own
+    answer says both whether a row was there and what it now holds. A missing
+    row costs what it did: the UPDATE that matches nothing, the INSERT, the
+    read-back.
+
+    The race is ``first_or_create``'s: the INSERT can lose to a concurrent
+    inserter. The loser catches the UNIQUE violation and applies its UPDATE
+    again (the merge semantics of an upsert), so both racing requests
+    converge on a single row with the latest payload. If the row vanished
+    again (a race against a delete) that UPDATE matches nothing and the
+    original error surfaces.
     """
-    self = cls()
-    record = self.where(wheres).first()
     total = {}
     total.update(updates)
     total.update(wheres)
-    if not record:
-        try:
-            # A unique-race loser must roll back its failed INSERT before the
-            # existence check and UPDATE can reuse the surrounding PostgreSQL
-            # session. Nested callers get a savepoint from this boundary.
-            with DB.transaction(getattr(cls, "__connection__", None)):
-                return self.create(total, id_key=cls.get_primary_key()).fresh()
-        except Exception as exc:
-            if not is_unique_violation(exc):
-                raise
-            # Concurrent insert beat us. Fall through to the
-            # UPDATE branch so the loser's payload still lands
-            # — that's the "upsert" the function name promises.
-            # If the row vanished again (race against delete),
-            # the UPDATE matches 0 rows and the final SELECT
-            # returns None; bubble the original error in that
-            # case to surface the real failure.
-            if cls().where(wheres).first() is None:
-                raise
 
-    self.where(wheres).update(total)
-    return self.where(wheres).first()
+    record = _update_matching(cls, wheres, total)
+    if record is not None:
+        return record
+    try:
+        # A unique-race loser must roll back its failed INSERT before the
+        # UPDATE can reuse the surrounding PostgreSQL session. Nested
+        # callers get a savepoint from this boundary.
+        with DB.transaction(getattr(cls, "__connection__", None)):
+            return cls.create(total, id_key=cls.get_primary_key()).fresh()
+    except Exception as exc:
+        if not is_unique_violation(exc):
+            raise
+        record = _update_matching(cls, wheres, total)
+        if record is None:
+            raise
+        return record
+
+
+def _update_matching(cls, wheres, total) -> Any:
+    """UPDATE the rows matching ``wheres`` and answer with the first row
+    written, as a loaded model — or None when there is no such row.
+
+    A fresh instance per statement: a model query's ``update`` fills the
+    instance it ran on, and a filled instance reads as a LOADED one, whose
+    next ``update`` is keyed to its primary key instead of ``wheres``.
+    """
+    # A model that reads a chosen column list (``__selects__``) is handed
+    # back in that shape, which only its own SELECT produces.
+    selects = bool(cls().get_selects())
+    rows = (
+        cls()
+        .where(wheres)
+        .update(total, returning=(cls.get_primary_key(),) if selects else ("*",))
+    )
+    if not isinstance(rows, list):
+        # No statement ran: mass assignment left nothing to write (or a dry
+        # run). Whether the row exists is then the SELECT's to say.
+        return cls().where(wheres).first()
+    if not rows:
+        return None
+    if selects:
+        return cls().where(wheres).first()
+    return cls().get_builder().prepare_result(dict(rows[0]))
 
 
 def _model_truncate(cls, foreign_keys=False) -> None:

@@ -125,3 +125,15 @@ def test_a_non_ascii_token_is_a_plain_no_not_a_crash(mangled) -> None:
     """A mangled link carries non-ASCII; ``compare_digest`` raises on a
     non-ASCII ``str``, which would turn "not valid" into a 500."""
     assert not matches(mangled, _PUBLIC_ID, _EMAIL, _SECRET)
+
+
+def test_a_secret_with_surrounding_whitespace_verifies_its_own_links() -> None:
+    """A mounted secret file ends in a newline. Every issuer keys by the raw
+    secret (the frozen format), and ``MailChannel`` once keyed by the
+    stripped one; the verifier must accept both or those links die."""
+    padded = f"  {_SECRET}\n"
+    assert matches(mint(_PUBLIC_ID, _EMAIL, padded), _PUBLIC_ID, _EMAIL, padded)
+    assert matches(mint(_PUBLIC_ID, _EMAIL, _SECRET), _PUBLIC_ID, _EMAIL, padded)
+    # The format itself is unchanged: the raw key still mints the raw token.
+    assert mint(_PUBLIC_ID, _EMAIL, padded) != _EXPECTED
+    assert not matches(mint(_PUBLIC_ID, _EMAIL, "other"), _PUBLIC_ID, _EMAIL, padded)

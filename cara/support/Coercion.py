@@ -66,7 +66,9 @@ def safe_int(value: Any) -> int | None:
         return None
     try:
         return int(value)
-    except TypeError, ValueError:
+    except OverflowError, TypeError, ValueError:
+        # ``int(float("inf"))`` is an OverflowError, and JSON spells infinity
+        # as ``1e999``: a payload number must not escape a "never raises" helper.
         return None
 
 

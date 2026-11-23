@@ -12,10 +12,13 @@ per process, so one switchboard works for the whole test suite.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+import cara.facades as _facades
+from cara.exceptions import InvalidArgumentException
 from cara.facades import Facade as _FacadeMeta
 
 # Class-level dict of ``key -> fake instance``. Empty in normal runs.
@@ -55,8 +58,48 @@ def uninstall_patch() -> None:
     _FAKES.clear()
 
 
+def _facade_keys(modules) -> set[str]:
+    keys: set[str] = set()
+    for module in modules:
+        for value in list(getattr(module, "__dict__", {}).values()):
+            if isinstance(value, _FacadeMeta) and value.key:
+                keys.add(value.key)
+    return keys
+
+
+def _framework_facade_keys() -> set[str]:
+    """The container key of every facade the framework ships."""
+    keys: set[str] = set()
+    for name in _facades.__all__:
+        facade = getattr(_facades, name)
+        if isinstance(facade, _FacadeMeta) and facade.key:
+            keys.add(facade.key)
+    return keys
+
+
+def _require_facade_key(key: str) -> None:
+    """Refuse a key no facade resolves through.
+
+    ``_patched_getattr`` serves a fake only when a facade's ``key`` matches,
+    so ``register("event", fake)`` (the facade key is ``"events"``) swapped
+    nothing: the test believed it faked the facade while every call went to
+    the real service. A key is valid when a framework facade, or any facade
+    class already imported (an application's own), carries it.
+    """
+    known = _framework_facade_keys()
+    if key in known:
+        return
+    known |= _facade_keys(list(sys.modules.values()))
+    if key in known:
+        return
+    raise InvalidArgumentException(
+        f"No facade resolves through key {key!r}; valid keys: {', '.join(sorted(known))}"
+    )
+
+
 def register(key: str, fake: Any) -> None:
     """Bind ``fake`` to be served whenever facade ``key`` is accessed."""
+    _require_facade_key(key)
     install_patch()
     _FAKES[key] = fake
 
@@ -72,6 +115,7 @@ def reset() -> None:
 @contextmanager
 def swap(key: str, fake: Any) -> Iterator[Any]:
     """Context-manager form: ``with swap("mail", MailFake()) as m: ...``."""
+    _require_facade_key(key)
     install_patch()
     previous = _FAKES.get(key)
     _FAKES[key] = fake

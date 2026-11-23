@@ -243,7 +243,15 @@ class TreeField:
             return None
         # KIND_DATE
         if operator == OP_LAST_DAYS:
-            if not values[0].isdigit() or not 1 <= int(values[0]) <= LAST_DAYS_MAX:
+            # ``isascii`` too: ``str.isdigit`` is also True for digits
+            # ``int()`` cannot read ("²", "①"), and the ``int()`` beside it
+            # then raised ``ValueError`` — a 500 for a malformed filter that
+            # every other branch answers with a validation message.
+            if (
+                not values[0].isascii()
+                or not values[0].isdigit()
+                or not 1 <= int(values[0]) <= LAST_DAYS_MAX
+            ):
                 return f"'{self.id}' expects a day count between 1 and {LAST_DAYS_MAX}."
             return None
         for value in values:

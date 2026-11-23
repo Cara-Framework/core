@@ -3,18 +3,15 @@
 ``schema:check`` (report) and ``schema:plan`` (act) must be looking at the
 same database in the same way, so the queries live here once. Everything is
 SELECT-only by construction — nothing in this module can change a schema. The
-one write is the probe behind :func:`normalize_declared_checks` and
-:func:`normalize_declared_indexes`: a TEMP table in its own session, which no
-other session can see and which is dropped before the connection goes back.
+one write introspection needs, the TEMP-table probe that has the server spell
+the model's declarations, lives in :mod:`cara.schema.DeclaredSpelling`.
 """
 
 from __future__ import annotations
 
 import re
-from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from cara.schema.DeclaredIndex import index_parts
 from cara.schema.LivePartitions import read_partitioning, without_partitions
 from cara.schema.Vocabulary import ADD_COLUMN_RE, PSEUDO_FIELD_EXPANSIONS
 
@@ -201,7 +198,17 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         run(
             "SELECT table_name, column_name, data_type, is_nullable, "
             "character_maximum_length, numeric_precision, numeric_scale, "
-            "column_default, udt_name "
+            "column_default, udt_name, "
+            # The full spelling, element modifier included: ``udt_name`` of a
+            # ``varchar(20)[]`` is ``_varchar`` and information_schema has no
+            # element length anywhere.
+            "(SELECT pg_catalog.format_type(a.atttypid, a.atttypmod) "
+            "FROM pg_catalog.pg_attribute a "
+            "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = columns.table_schema "
+            "AND c.relname = columns.table_name "
+            "AND a.attname = columns.column_name) AS formatted_type "
             "FROM information_schema.columns "
             f"WHERE table_schema = '{sql_literal(target)}' "
             "ORDER BY table_name, ordinal_position"
@@ -225,6 +232,7 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
             # An array's element (``_int8``) or an enum's name: what a dropped
             # column's reverse needs to come back as the same type.
             "udt_name": row.get("udt_name"),
+            "formatted_type": row.get("formatted_type"),
         }
 
     checks: dict[str, set[str]] = {}
@@ -404,233 +412,6 @@ def constraint_body(definition: str | None) -> str:
     return _NOT_VALID.sub("", str(definition or "")).strip()
 
 
-def normalize_declared_checks(
-    live_schema,
-    live: LiveSchema,
-    declared: dict[str, list[tuple[str, str]]],
-    schema_name: str | None = None,
-    reshapes: dict[str, list[str]] | None = None,
-) -> LiveSchema:
-    """Have the server spell the model's CHECKs, so they compare to the live ones.
-
-    ``reshapes`` (``cara.schema.ConstraintDrift.probe_reshapes``) gives the
-    probe the POST-plan columns first, so a CHECK naming a column the same
-    plan renames or adds is spelled rather than skipped.
-
-    ``declared`` is ``{table: [(name, expression), ...]}``. For each table the
-    database has, a session TEMP table copies its columns (``LIKE``) and takes
-    each declared CHECK — that the database also has — ``NOT VALID``, and
-    ``pg_get_constraintdef`` reads it back in exactly the spelling the live
-    constraint has. Nothing touches the real table: the probe is a temporary
-    relation in this one session, dropped before the connection goes back.
-
-    It runs on ONE connection, because a temp table lives in its session and
-    the query executor hands out a fresh one per query. Best effort: a role
-    without TEMP, or an expression the probe cannot attach, leaves that CHECK
-    out — and a CHECK left out is never called changed.
-
-    The same fixpoint as :func:`normalize_declared_indexes`, for the same
-    reason: the declaration is spelled twice and the live definition once
-    more, so a CHECK that went through ``pg_dump`` reads the same as one that
-    never did.
-    """
-    target = schema_name or live_schema.get_schema() or "public"
-    manager = live_schema.query_executor.connection_manager
-    connection = manager.create_connection_instance()
-    found: dict[str, dict[str, str]] = {}
-    respelled: dict[str, dict[str, str]] = {}
-    try:
-        for table, checks in sorted(declared.items()):
-            present = live.checks.get(table, set())
-            wanted = [(name, expr) for name, expr in checks if name in present]
-            live_bodies = live.constraint_definitions.get(table, {})
-            if not wanted or table not in live.tables:
-                continue
-            probe = f"_cara_check_probe_{abs(hash(table)) % 10**8}"
-            try:
-                connection.query(
-                    f'CREATE TEMP TABLE "{probe}" '
-                    f'(LIKE "{sql_literal(target)}"."{table}")',
-                    (),
-                )
-            except Exception:
-                continue
-            try:
-                for clause in (reshapes or {}).get(table, []):
-                    with suppress(Exception):
-                        connection.query(f'ALTER TABLE "{probe}" {clause}', ())
-                for position, (name, expression) in enumerate(wanted):
-                    spelled = _spell_check(
-                        connection, probe, f"{probe}_d{position}", f"CHECK ({expression})"
-                    )
-                    spelled = (
-                        _spell_check(
-                            connection,
-                            probe,
-                            f"{probe}_e{position}",
-                            constraint_body(spelled),
-                        )
-                        or spelled
-                    )
-                    if spelled:
-                        found.setdefault(table, {})[name] = spelled
-                    again = _spell_check(
-                        connection,
-                        probe,
-                        f"{probe}_l{position}",
-                        constraint_body(live_bodies.get(name)),
-                    )
-                    if again:
-                        respelled.setdefault(table, {})[name] = again
-            finally:
-                with suppress(Exception):
-                    connection.query(f'DROP TABLE IF EXISTS "{probe}"', ())
-    finally:
-        manager.release(connection)
-    # The snapshot is frozen: the spelled CHECKs come back on a copy.
-    return replace(
-        live,
-        declared_check_definitions=found,
-        respelled_check_definitions=respelled,
-    )
-
-
-def _spell_check(connection, probe: str, label: str, body: str) -> str | None:
-    """Attach ``body`` as ``label`` on the probe table; the server's
-    ``pg_get_constraintdef`` of it, or None when it would not attach."""
-    if not body:
-        return None
-    try:
-        connection.query(
-            f'ALTER TABLE "{probe}" ADD CONSTRAINT "{label}" {body} NOT VALID',
-            (),
-        )
-        rows = connection.query(
-            "SELECT pg_get_constraintdef(oid) AS definition "
-            "FROM pg_constraint WHERE conrelid = %s::regclass AND conname = %s",
-            (f'pg_temp."{probe}"', label),
-        )
-    except Exception:
-        return None
-    row = rows[0] if isinstance(rows, list) and rows else rows
-    if isinstance(row, dict) and row.get("definition"):
-        return str(row["definition"])
-    return None
-
-
-def normalize_declared_indexes(
-    live_schema,
-    live: LiveSchema,
-    declared: dict[str, list[tuple[str, bool, str]]],
-    schema_name: str | None = None,
-) -> LiveSchema:
-    """Have the server spell the model's indexes, so they compare to the live ones.
-
-    ``declared`` is ``{table: [(name, unique, rest), ...]}`` — ``rest`` being
-    everything after the table in the model's ``CREATE INDEX`` (``("a", "b")``,
-    ``USING gin (...) WHERE ...``). Same mechanism as
-    :func:`normalize_declared_checks`: each declaration the database also has
-    BY NAME is built on a session TEMP table copying the real one's columns,
-    and ``pg_get_indexdef`` reads it back in exactly the spelling the live
-    index has — casts, ``USING btree``, opclasses, ``INCLUDE``, the
-    parenthesised predicate. Nothing touches the real table.
-
-    The server deparsing BOTH sides is the point. Normalising the model's DDL
-    by hand would be a second SQL parser (``lower((counterparty)::text)`` is
-    what ``LOWER(counterparty)`` reads back as), and comparing structured
-    ``pg_index`` columns cannot reach a raw ``__indexes__`` statement without
-    parsing it first. Best effort, like the CHECK probe: a declaration the
-    probe cannot build is left out, and one left out is never called changed.
-
-    One server spelling is not yet a fixpoint. Re-parsing a STORED
-    definition can move a cast — ``(ARRAY['a'::varchar])::text[]`` comes
-    back as ``ARRAY[('a'::varchar)::text]`` — and an index rebuilt by
-    ``ALTER COLUMN TYPE`` or restored from a dump stores the re-parsed form.
-    So the declaration is spelled twice (built, read back, built from what
-    was read), the live definition once more, and the two compare at that
-    fixpoint: the same index never reads as changed because of its history.
-    """
-    target = schema_name or live_schema.get_schema() or "public"
-    manager = live_schema.query_executor.connection_manager
-    connection = manager.create_connection_instance()
-    found: dict[str, dict[str, str]] = {}
-    respelled: dict[str, dict[str, str]] = {}
-    try:
-        for table, indexes in sorted(declared.items()):
-            present = live.index_definitions.get(table, {})
-            wanted = [entry for entry in indexes if entry[0] in present]
-            if not wanted or table not in live.tables:
-                continue
-            probe = f"_cara_index_probe_{abs(hash(table)) % 10**8}"
-            try:
-                connection.query(
-                    f'CREATE TEMP TABLE "{probe}" '
-                    f'(LIKE "{sql_literal(target)}"."{table}")',
-                    (),
-                )
-            except Exception:
-                continue
-            try:
-                for position, (name, unique, rest) in enumerate(wanted):
-                    spelled = _spell_index(
-                        connection, probe, f"{probe}_d{position}", (unique, rest)
-                    )
-                    spelled = (
-                        _spell_index(
-                            connection,
-                            probe,
-                            f"{probe}_e{position}",
-                            index_parts(spelled),
-                        )
-                        or spelled
-                    )
-                    if spelled:
-                        found.setdefault(table, {})[name] = spelled
-                    again = _spell_index(
-                        connection,
-                        probe,
-                        f"{probe}_l{position}",
-                        index_parts(present[name]),
-                    )
-                    if again:
-                        respelled.setdefault(table, {})[name] = again
-            finally:
-                with suppress(Exception):
-                    connection.query(f'DROP TABLE IF EXISTS "{probe}"', ())
-    finally:
-        manager.release(connection)
-    return replace(
-        live,
-        declared_index_definitions=found,
-        respelled_index_definitions=respelled,
-    )
-
-
-def _spell_index(
-    connection, probe: str, label: str, parts: tuple[bool, str] | None
-) -> str | None:
-    """Build ``(unique, rest)`` as ``label`` on the probe table; the server's
-    ``pg_get_indexdef`` of it, or None when it would not build."""
-    if parts is None:
-        return None
-    unique, rest = parts
-    try:
-        connection.query(
-            f'CREATE {"UNIQUE " if unique else ""}INDEX "{label}" ON "{probe}"{rest}',
-            (),
-        )
-        rows = connection.query(
-            "SELECT pg_get_indexdef(%s::regclass) AS definition",
-            (f'pg_temp."{label}"',),
-        )
-    except Exception:
-        return None
-    row = rows[0] if isinstance(rows, list) and rows else rows
-    if isinstance(row, dict) and row.get("definition"):
-        return str(row["definition"])
-    return None
-
-
 def declared_columns(model: dict) -> dict[str, dict]:
     """Flatten a model's declared fields into concrete columns.
 
@@ -693,8 +474,6 @@ __all__ = [
     "LiveSchema",
     "declared_columns",
     "introspect",
-    "normalize_declared_checks",
-    "normalize_declared_indexes",
     "raw_sql_columns",
     "sql_literal",
 ]

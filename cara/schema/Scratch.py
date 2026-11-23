@@ -48,6 +48,8 @@ from cara.exceptions import ScratchDatabaseException
 #: Scratch names are interpolated into DDL as identifiers; keep them boring
 #: instead of quoting our way around exotic ones.
 SAFE_DB_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+#: NAMEDATALEN - 1: the longest identifier the server stores uncut.
+_MAX_IDENTIFIER_BYTES = 63
 
 
 def derive_name(configured: str, suffix: str) -> str:
@@ -87,6 +89,15 @@ def validate_name(scratch: str, configured: str) -> None:
         raise ScratchDatabaseException(
             f"Scratch database name '{scratch}' is not a plain lowercase "
             f"identifier — refusing to interpolate it into DDL."
+        )
+    # The server cuts an identifier to 63 bytes, so a scratch derived from a
+    # 63-byte configured name plus a suffix IS the configured name once
+    # stored — and everything here ends in DROP DATABASE.
+    if len(scratch.encode()) > _MAX_IDENTIFIER_BYTES:
+        raise ScratchDatabaseException(
+            f"Scratch database name '{scratch}' is longer than "
+            f"{_MAX_IDENTIFIER_BYTES} bytes; PostgreSQL would store it cut "
+            f"short, possibly as another database's name. Name a shorter one."
         )
 
 
@@ -128,7 +139,9 @@ def migrations_fingerprint(directory: str | os.PathLike) -> str:
         (eloquent / "schema", (".py",)),
     ]
     for root, suffixes in roots:
-        for path in sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in suffixes):
+        for path in sorted(
+            p for p in root.rglob("*") if p.is_file() and p.suffix in suffixes
+        ):
             if "__pycache__" in path.parts:
                 continue
             digest.update(str(path.relative_to(root)).encode() + b"\0")

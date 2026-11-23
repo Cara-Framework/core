@@ -27,11 +27,15 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 import threading
+import types
 
 import pytest
 
-from ._fixtures import install_fake_psycopg2
+from cara.eloquent.connections import PostgresPool
+
+from ._fixtures import install_fake_psycopg2, pool_of
 
 PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
 ResolverModule = importlib.import_module("cara.eloquent.connections.ConnectionResolver")
@@ -39,12 +43,24 @@ PostgresConnection = PGModule.PostgresConnection
 ConnectionResolver = ResolverModule.ConnectionResolver
 
 
-def _fresh_pool(monkeypatch, *, size: int) -> threading.Semaphore:
-    sem = threading.Semaphore(size)
-    monkeypatch.setattr(PGModule, "_pool_initialized", True)
-    monkeypatch.setattr(PGModule, "_pool_semaphore", sem)
-    monkeypatch.setattr(PGModule, "CONNECTION_POOL", [])
-    return sem
+@pytest.fixture(autouse=True)
+def _no_pools():
+    """Every test starts and ends with no pool registered."""
+    PostgresPool.reset_all(close=False)
+    yield
+    PostgresPool.reset_all(close=False)
+
+
+class _Permits:
+    """The free permits of one connection's pool."""
+
+    def __init__(self, connection: PostgresConnection):
+        self._pool = pool_of(connection)
+
+    @property
+    def free(self) -> int:
+        stats = self._pool.stats()
+        return stats["max"] - stats["in_use"]
 
 
 def _make_pc(size: int) -> PostgresConnection:
@@ -127,40 +143,75 @@ def driver(monkeypatch):
 
 
 def test_rolling_back_a_dead_session_releases_its_permit(monkeypatch, driver):
-    sem = _fresh_pool(monkeypatch, size=3)
     pc = _make_pc(3)
+    permits = _Permits(pc)
     pc.begin()
-    assert sem._value == 2
+    assert permits.free == 2
     driver.sessions[-1].kill()
 
     pc.rollback()  # the server already ended the transaction: nothing to raise
 
     assert pc.transaction_level == 0
-    assert sem._value == 3, "the dead session kept its pool permit"
+    assert permits.free == 3, "the dead session kept its pool permit"
     assert pc._connection is None
 
 
 def test_nested_rollback_on_a_dead_session_unwinds_one_level_at_a_time(
     monkeypatch, driver
 ):
-    sem = _fresh_pool(monkeypatch, size=3)
     pc = _make_pc(3)
+    permits = _Permits(pc)
     pc.begin()
     pc.begin()  # SAVEPOINT sp_1
     driver.sessions[-1].kill()
 
     pc.rollback()  # inner: the enclosing transaction still owns the handle
     assert pc.transaction_level == 1
-    assert sem._value == 2
+    assert permits.free == 2
 
     pc.rollback()  # outer: now the dead handle and its permit go
     assert pc.transaction_level == 0
-    assert sem._value == 3
+    assert permits.free == 3
+
+
+def test_a_statement_after_the_session_died_does_not_reconnect_mid_transaction(
+    monkeypatch, driver
+):
+    """The first statement on the dead session fails; a caller that swallows
+    it and carries on must not get a fresh AUTOCOMMIT session for the rest of
+    the block — the writes after the loss would commit one by one while the
+    writes before it are gone."""
+    pc = _make_pc(3)
+    permits = _Permits(pc)
+    pc.begin()
+    driver.sessions[-1].kill()
+
+    for _ in range(2):  # every later statement of the block, not only the first
+        with pytest.raises(PGModule.DatabaseUnavailableException):
+            pc.query("UPDATE t SET n = 1", ())
+
+    assert len(driver.sessions) == 1, "a second session was opened mid-transaction"
+    assert pc.transaction_level == 1
+
+    pc.rollback()
+    assert pc.transaction_level == 0
+    assert permits.free == 3
+
+
+def test_a_statement_outside_a_transaction_still_reconnects(monkeypatch, driver):
+    monkeypatch.setitem(
+        sys.modules, "psycopg2.extras", types.SimpleNamespace(RealDictCursor=object)
+    )
+    pc = _make_pc(3)
+    pc.make_connection()
+    driver.sessions[-1].kill()
+
+    assert pc.query("UPDATE t SET n = 1", ()) == 0
+    assert len(driver.sessions) == 2
 
 
 def test_a_live_rollback_failure_still_raises(monkeypatch, driver):
     """Only a DEAD session is excused: a live one that refuses ROLLBACK raises."""
-    _fresh_pool(monkeypatch, size=3)
     pc = _make_pc(3)
     pc.begin()
 
@@ -188,12 +239,12 @@ def _resolver_with(pc) -> ConnectionResolver:
 
 def test_resolver_unpins_and_frees_the_permit_when_rollback_raises(monkeypatch, driver):
     """Belt: a rollback that raises (any reason) still unpins at level 0."""
-    sem = _fresh_pool(monkeypatch, size=2)
+    permits = _Permits(_make_pc(2))
     ResolverModule.reset_registry()
     pc = _make_pc(2)
     resolver = _resolver_with(pc)
     resolver.begin_transaction("app")
-    assert sem._value == 1
+    assert permits.free == 1
 
     def _refuse():
         raise RuntimeError("rollback refused")
@@ -203,12 +254,12 @@ def test_resolver_unpins_and_frees_the_permit_when_rollback_raises(monkeypatch, 
         resolver.rollback("app")
 
     assert "app" not in ResolverModule._get_registry()
-    assert sem._value == 2, "a failed rollback kept the transaction's pool permit"
+    assert permits.free == 2, "a failed rollback kept the transaction's pool permit"
 
 
 def test_dead_sessions_in_fresh_contexts_never_drain_the_pool(monkeypatch, driver):
     """The live failure: one killed session per job context, more kills than permits."""
-    sem = _fresh_pool(monkeypatch, size=3)
+    permits = _Permits(_make_pc(3))
 
     def _one_job():
         ResolverModule.reset_registry()  # what every queue job gets
@@ -224,7 +275,7 @@ def test_dead_sessions_in_fresh_contexts_never_drain_the_pool(monkeypatch, drive
         worker.start()
         worker.join()
 
-    assert sem._value == 3, f"{3 - sem._value} pool permit(s) leaked to dead sessions"
+    assert permits.free == 3, f"{3 - permits.free} pool permit(s) leaked to dead sessions"
 
 
 _integration = pytest.mark.skipif(
@@ -238,14 +289,8 @@ _integration = pytest.mark.skipif(
 def test_postgres_terminated_sessions_mid_transaction_keep_the_pool_whole(monkeypatch):
     import psycopg2
 
-    sem = _fresh_pool(monkeypatch, size=2)
-    side = psycopg2.connect(dbname=os.environ["DB_DATABASE"])
-    side.autocommit = True
-    errors: list[str] = []
-
-    def _one_job():
-        ResolverModule.reset_registry()  # what every queue job gets
-        pc = PostgresConnection(
+    def _live_pc() -> PostgresConnection:
+        return PostgresConnection(
             host=os.getenv("DB_HOST", "127.0.0.1"),
             database=os.environ["DB_DATABASE"],
             user=os.getenv("DB_USERNAME", "postgres"),
@@ -256,6 +301,15 @@ def test_postgres_terminated_sessions_mid_transaction_keep_the_pool_whole(monkey
                 "connection_pooling_max_size": 2,
             },
         )
+
+    permits = _Permits(_live_pc())
+    side = psycopg2.connect(dbname=os.environ["DB_DATABASE"])
+    side.autocommit = True
+    errors: list[str] = []
+
+    def _one_job():
+        ResolverModule.reset_registry()  # what every queue job gets
+        pc = _live_pc()
         resolver = _resolver_with(pc)
         try:
             with resolver.transaction("app"):
@@ -278,4 +332,4 @@ def test_postgres_terminated_sessions_mid_transaction_keep_the_pool_whole(monkey
         side.close()
 
     assert errors == ["OperationalError"] * 4
-    assert sem._value == 2
+    assert permits.free == 2

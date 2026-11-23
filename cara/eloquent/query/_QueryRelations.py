@@ -511,49 +511,56 @@ def _qb_get_relation(self, relationship, builder=None):
     return rel
 
 
-def _qb_has(self, *relationships) -> Self:
+def _relation_exists(self, relationship, first_method, callback=None) -> None:
+    """Constrain ``self`` on a relation path (``"author"``, ``"author.posts"``).
+
+    The one body of the ``has`` / ``doesnt_have`` / ``where_has`` families.
+    ``first_method`` (``where_exists``, ``or_where_not_exists``, ...) joins
+    the FIRST relation's subquery onto this builder; every deeper relation is
+    a plain ``EXISTS`` inside its parent's subquery, the last one narrowed by
+    ``callback`` — Laravel's ``hasNested``.
+
+    ROOT CAUSE (each family carried its own copy of the dotted walk):
+
+    * every copy started from ``self._model.builder`` instead of ``self``.
+      That is the same object only for a builder that came straight from the
+      model: on a ``clone()`` the constraint landed on the ORIGINAL builder
+      (the clone ran without it), and inside a ``where(lambda q: ...)``
+      group it landed on the outer query, outside the group;
+    * ``where_doesnt_have("a.b", cb)`` negated the LAST level as well —
+      ``NOT EXISTS (a WHERE NOT EXISTS (b AND cb))``, "every a has such a
+      b" — while ``doesnt_have("a.b")`` compiled the correct
+      ``NOT EXISTS (a WHERE EXISTS (b))``;
+    * a path of three or more repeated the OR / NOT variant on the middle
+      levels, OR-ing a subquery's correlation with its own child.
+    """
+    builder = self
+    parts = relationship.split(".")
+    for index, name in enumerate(parts):
+        related = builder.get_relation(name)
+        method = first_method if index == 0 else "where_exists"
+        if callback is not None and index + 1 == len(parts):
+            builder = related.query_where_exists(builder, callback, method=method)
+        else:
+            builder = related.query_has(builder, method=method)
+
+
+def _require_model(self, family: str) -> None:
     if not self._model:
         raise AttributeError(
-            "You must specify a model in order to use 'has' relationship methods"
+            f"You must specify a model in order to use {family} relationship methods"
         )
 
+
+def _qb_has(self, *relationships) -> Self:
+    _require_model(self, "'has'")
     for relationship in relationships:
-        if "." in relationship:
-            last_builder = self._model.builder
-            for split_relationship in relationship.split("."):
-                related = last_builder.get_relation(split_relationship)
-                last_builder = related.query_has(last_builder)
-        else:
-            related = self._resolve_relation_descriptor(relationship)
-            related.query_has(self)
+        _relation_exists(self, relationship, "where_exists")
     return self
 
 
 def _qb_or_has(self, *relationships) -> Self:
-    if not self._model:
-        raise AttributeError(
-            "You must specify a model in order to use 'has' relationship methods"
-        )
-
+    _require_model(self, "'has'")
     for relationship in relationships:
-        if "." in relationship:
-            last_builder = self._model.builder
-            split_count = len(relationship.split("."))
-            for index, split_relationship in enumerate(relationship.split(".")):
-                related = last_builder.get_relation(split_relationship)
-
-                if index + 1 == split_count:
-                    last_builder = related.query_has(
-                        last_builder,
-                        method="where_exists",
-                    )
-                    continue
-
-                last_builder = related.query_has(
-                    last_builder,
-                    method="or_where_exists",
-                )
-        else:
-            related = self._resolve_relation_descriptor(relationship)
-            related.query_has(self, method="or_where_exists")
+        _relation_exists(self, relationship, "or_where_exists")
     return self

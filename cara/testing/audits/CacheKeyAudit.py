@@ -59,7 +59,12 @@ class CacheKeyAudit:
             tree = ast.parse(source)
         except SyntaxError:
             return []
-        findings: list[CacheKeyFinding] = []
+        # One finding per CALL SITE. A call inside a nested function is
+        # reached by walking every function that encloses it, so it used to
+        # be reported once per parameterized ancestor ("Found 2 constant
+        # cache key(s)" for one line). ``ast.walk`` yields the outer function
+        # first, so the innermost parameterized one names the finding.
+        findings: dict[int, CacheKeyFinding] = {}
         for function in ast.walk(tree):
             if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -71,10 +76,10 @@ class CacheKeyAudit:
                     continue
                 key = self._constant_key(node)
                 if key is not None:
-                    findings.append(
-                        CacheKeyFinding(path, node.lineno, key, function.name, parameters)
+                    findings[id(node)] = CacheKeyFinding(
+                        path, node.lineno, key, function.name, parameters
                     )
-        return sorted(findings, key=lambda finding: finding.line)
+        return sorted(findings.values(), key=lambda finding: finding.line)
 
     def _is_remember(self, call: ast.Call) -> bool:
         return (

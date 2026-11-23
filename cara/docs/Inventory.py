@@ -32,7 +32,14 @@ from pathlib import Path
 
 from cara.docs.DocsManifest import DocsManifest
 from cara.docs.Queues import gen_queues
-from cara.docs.Support import Say, header, md_escape, read, write_if_changed
+from cara.docs.Support import (
+    Say,
+    _class_ends,
+    header,
+    md_escape,
+    read,
+    write_if_changed,
+)
 
 # ---------------------------------------------------------------- routes
 
@@ -204,12 +211,21 @@ def gen_routes(manifest: DocsManifest, now: str, say: Say) -> None:
 # ---------------------------------------------------------------- models / jobs / commands
 
 
+# How far past a ``class`` line the attribute patterns read when the file
+# does not parse and the class's own extent is therefore unknown.
+_UNPARSED_WINDOW = 2500
+
+
 def scan_classes(dirs: list[Path], attr_patterns: dict[str, str], base: Path):
     """Collects class definitions + requested class attrs via regex.
 
     ``base`` is the root the reported file paths are relative to; it is a
     parameter (not always the product root) because the claim verifier reuses
     this to read a NEIGHBOURING checkout's command inventory.
+
+    Each pattern is matched against the class's own source, to its end
+    (``_class_ends``); a file that does not parse falls back to a fixed
+    window after the ``class`` line.
     """
     rows = []
     for directory in dirs:
@@ -223,9 +239,11 @@ def scan_classes(dirs: list[Path], attr_patterns: dict[str, str], base: Path):
             dm = re.match(r'\s*(?:"""|\'\'\')\s*(.+?)[.\n]', src)
             if dm:
                 module_doc = dm.group(1).strip()
+            ends = _class_ends(src)
             for cm in re.finditer(r"^class\s+(\w+)\s*\(([^)]*)\)\s*:", src, re.M):
                 cls, bases = cm.group(1), cm.group(2)
-                block = src[cm.end() : cm.end() + 2500]
+                line = src.count("\n", 0, cm.start()) + 1
+                block = src[cm.end() : ends.get(line, cm.end() + _UNPARSED_WINDOW)]
                 attrs = {}
                 for key, pattern in attr_patterns.items():
                     am = re.search(pattern, block, re.M)
@@ -299,7 +317,12 @@ def gen_jobs(manifest: DocsManifest, now: str, say: Say) -> None:
             "queue_prefix": r'^\s*queue_prefix(?:\s*:[^=]+)?\s*=\s*["\']([^"\']+)["\']',
             "queue": r'^\s*queue(?:\s*:[^=]+)?\s*=\s*["\']([^"\']+)["\']',
             "routing": r'^\s*routing_prefix(?:\s*:[^=]+)?\s*=\s*["\']([^"\']+)["\']',
-            "timeout": r"^\s*timeout(?:\s*:[^=]+)?\s*=\s*(\d+)",
+            # A literal number of seconds and nothing after it. The pattern
+            # used to stop at the first digits it met, so ``timeout = 60 * 60``
+            # was published as a 60-second budget and
+            # ``4 * MARKETPLACE_CALL_SECONDS`` as 4. A computed budget is not
+            # a number this page can print.
+            "timeout": r"^\s*timeout(?:\s*:[^=]+)?\s*=\s*(\d[\d_]*)\s*(?:#.*)?$",
         },
         base=root,
     )

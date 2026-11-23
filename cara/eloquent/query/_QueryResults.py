@@ -60,20 +60,19 @@ def _qb_first_or_create(self, wheres, creates: dict | None = None):
         creates = {}
 
     record = self.where(wheres).first()
-    total = {}
     if record:
-        if hasattr(record, "serialize"):
-            total.update(record.serialize())
-        else:
-            total.update(record)
+        # Returned as found. The found record used to be ``serialize()``d
+        # into the create payload first — every cast, every loaded relation
+        # and every ``__appends__`` accessor (which may lazy-load) — only
+        # for that payload to be thrown away by this return.
+        return record
 
+    total = {}
     total.update(creates)
     total.update(wheres)
 
     total.update(self._creates_related)
 
-    if record:
-        return record
     try:
         with self._db_manager.transaction(self.connection):
             return self.create(total, id_key=self.get_primary_key())
@@ -261,61 +260,8 @@ def _qb_prepare_result(self, result, collection=False):
         # eager load here
         hydrated_model = self._model.hydrate(result)
 
-        if (
-            self._eager_relation.relations
-            or self._eager_relation.nested_eagers
-            or self._eager_relation.callback_eagers
-        ) and hydrated_model:
-            # Normalize every registered eager spec — raw strings
-            # ("author"), dotted nested strings ("author.profile",
-            # "author.parent.owner"), lists/tuples, and dicts
-            # (``{"author": callback_fn}``) — into an ordered map of
-            # ``{top_level_relation: [nested_path_strings...]}``. The
-            # nested paths are passed to each relationship's
-            # ``get_related(..., eagers=[...])`` so the chain continues
-            # recursively: BelongsTo/HasMany/HasOne all
-            # call ``builder.with_(eagers)`` internally, which rebuilds
-            # the same EagerRelations → QueryBuilder pipeline for the
-            # next level. Laravel parity: eager-load `author.profile`
-            # loads `author`, then eager-loads `profile` on that
-            # related model in a second query.
-            normalized, callbacks = self._normalize_eager_specs(
-                self._eager_relation.get_relations()
-            )
-            # Merge any pre-registered callback_eagers (from
-            # register(dict) path) into callbacks map.
-            for rel_name, cb in getattr(
-                self._eager_relation, "callback_eagers", {}
-            ).items():
-                head = rel_name.split(".")[0] if rel_name else rel_name
-                if head and callable(cb):
-                    callbacks.setdefault(head, cb)
-
-            for relation, nested in normalized.items():
-                try:
-                    if inspect.isclass(self._model):
-                        related = getattr(self._model, relation)
-                        if callable(related) and not hasattr(related, "get_related"):
-                            related = related()
-                    else:
-                        related = self._model.get_related(relation)
-
-                    result_set = related.get_related(
-                        self,
-                        hydrated_model,
-                        eagers=nested,
-                        callback=callbacks.get(relation),
-                    )
-
-                    self._register_relationships_to_model(
-                        related,
-                        result_set,
-                        hydrated_model,
-                        relation_key=relation,
-                    )
-                except Exception as e:
-                    Log.error("Error processing eager %s: %s", relation, str(e))
-                    raise
+        if hydrated_model:
+            self.load_eagers_onto(hydrated_model)
 
         if collection:
             # Tag every row as collection-hydrated so the strict
@@ -335,6 +281,71 @@ def _qb_prepare_result(self, result, collection=False):
         return Collection(result) if result else Collection([])
     else:
         return result or None
+
+
+def _qb_load_eagers_onto(self, hydrated_model) -> None:
+    """Run this builder's registered eager loads onto already-hydrated models.
+
+    ``hydrated_model`` is one model or a ``Collection`` of them. Split out of
+    ``prepare_result`` so ``Model.load()`` can eager-load onto the instance it
+    already holds: it used to re-SELECT its own row first, one wasted round
+    trip per ``load()`` (and a trashed or out-of-scope instance loaded nothing).
+    """
+    if not (
+        self._eager_relation.relations
+        or self._eager_relation.nested_eagers
+        or self._eager_relation.callback_eagers
+    ):
+        return
+
+    # Normalize every registered eager spec — raw strings
+    # ("author"), dotted nested strings ("author.profile",
+    # "author.parent.owner"), lists/tuples, and dicts
+    # (``{"author": callback_fn}``) — into an ordered map of
+    # ``{top_level_relation: [nested_path_strings...]}``. The
+    # nested paths are passed to each relationship's
+    # ``get_related(..., eagers=[...])`` so the chain continues
+    # recursively: BelongsTo/HasMany/HasOne all
+    # call ``builder.with_(eagers)`` internally, which rebuilds
+    # the same EagerRelations → QueryBuilder pipeline for the
+    # next level. Laravel parity: eager-load `author.profile`
+    # loads `author`, then eager-loads `profile` on that
+    # related model in a second query.
+    normalized, callbacks = self._normalize_eager_specs(
+        self._eager_relation.get_relations()
+    )
+    # Merge any pre-registered callback_eagers (from
+    # register(dict) path) into callbacks map.
+    for rel_name, cb in getattr(self._eager_relation, "callback_eagers", {}).items():
+        head = rel_name.split(".")[0] if rel_name else rel_name
+        if head and callable(cb):
+            callbacks.setdefault(head, cb)
+
+    for relation, nested in normalized.items():
+        try:
+            if inspect.isclass(self._model):
+                related = getattr(self._model, relation)
+                if callable(related) and not hasattr(related, "get_related"):
+                    related = related()
+            else:
+                related = self._model.get_related(relation)
+
+            result_set = related.get_related(
+                self,
+                hydrated_model,
+                eagers=nested,
+                callback=callbacks.get(relation),
+            )
+
+            self._register_relationships_to_model(
+                related,
+                result_set,
+                hydrated_model,
+                relation_key=relation,
+            )
+        except Exception as e:
+            Log.error("Error processing eager %s: %s", relation, str(e))
+            raise
 
 
 def _qb_normalize_eager_specs(raw_list):
@@ -483,13 +494,31 @@ def _qb_get(self, selects: list[str] | None = None) -> Any:
 
 
 def _qb_new_connection(self) -> Any:
-    if self._connection:
-        return self._connection
+    # ROOT CAUSE: the first wrapper a builder resolved was kept for the life
+    # of the builder, and a model instance keeps its builder between calls
+    # (``model.update()``, ``model.where(...)``). A wrapper resolved OUTSIDE
+    # a transaction is a plain autocommit one, so a later write through the
+    # same instance INSIDE ``DB.transaction()`` went out on a sibling
+    # session and survived the rollback; a wrapper resolved inside one
+    # transaction likewise bypassed the next. The manager is asked again for
+    # every statement: it answers with the context's pinned transaction
+    # wrapper, or a fresh unopened one.
+    held = self._connection
+    if held is not None and (
+        # Set by the caller (a stub, a hand-built wrapper): theirs to manage.
+        held is not self._resolved_connection
+        # An open transaction — this builder's own (``begin()``) or the
+        # context's — owns its wrapper until it ends.
+        or int(getattr(held, "transaction_level", 0) or 0) > 0
+    ):
+        return held
 
     # Unopened: ``query()`` or ``begin()`` opens it inside the block that
     # returns it, so compiling the SQL after this call holds no permit.
-    self._connection = self._db_manager.create_connection_instance(
-        self.connection, self._schema, connect=False
+    self._connection = self._resolved_connection = (
+        self._db_manager.create_connection_instance(
+            self.connection, self._schema, connect=False
+        )
     )
     return self._connection
 

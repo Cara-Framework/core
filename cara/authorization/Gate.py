@@ -22,6 +22,7 @@ Design
 
 from __future__ import annotations
 
+import inspect
 import sys
 from collections.abc import Callable
 from typing import Any
@@ -314,6 +315,21 @@ class Gate(GateContract):
     def _normalize(result: Any) -> AuthorizationResponse:
         if isinstance(result, AuthorizationResponse):
             return result
+        if inspect.isawaitable(result):
+            # The gate is synchronous. An ``async def`` ability, policy
+            # method or hook hands back a coroutine object, and a coroutine
+            # is TRUTHY: ``bool(result)`` read every such check as "allowed"
+            # without running one line of it — a deny-first ``before`` hook
+            # written async let everyone through. Nothing was decided, so
+            # the answer is the fail-closed one.
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()  # never awaited by design; silence the warning
+            Gate._log(
+                "authorization check returned an awaitable — abilities, policy "
+                "methods and gate hooks must be synchronous; denying"
+            )
+            return AuthorizationResponse(False, "Authorization check failed.")
         return AuthorizationResponse(bool(result))
 
     @staticmethod

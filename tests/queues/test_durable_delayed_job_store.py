@@ -137,8 +137,12 @@ class _Driver:
             raise QueueException("tenant id required")
         return {"_tenant_mode": "tenant", "_tenant": tenant_id}
 
+    #: The queue each tracker row was told its delivery is routed to.
+    tracked_queues: list = []
+
     @staticmethod
-    def _create_job_record(_job, _job_id, _options):
+    def _create_job_record(_job, _job_id, _options, queue=None):
+        _Driver.tracked_queues.append(queue)
         return 9
 
 
@@ -224,6 +228,23 @@ def test_a_retry_waits_in_its_channels_lane_not_the_sellers_shared_one():
     )
 
     assert ledger.registered[0]["lane_key"] == "channel:1922"
+
+
+def test_the_tracker_row_is_told_the_queue_the_delayed_delivery_is_routed_to():
+    """The tracker row fell back to ``job.queue``, so a delayed job or retry
+    sent to an explicit queue was tracked under another one."""
+    _Driver.tracked_queues.clear()
+    store, ledger = _store(_DB())
+
+    with Tenancy.central():
+        store.schedule(
+            CentralDelayedJob(17),
+            pendulum.now("UTC").add(seconds=30),
+            {"deduplication_key": "retry:routed-1:1", "queue": "connector"},
+        )
+
+    assert ledger.registered[0]["payload"]["queue"] == "connector"
+    assert _Driver.tracked_queues == ["connector"]
 
 
 def test_schedule_of_a_central_job_persists_the_central_tenant_stamp():

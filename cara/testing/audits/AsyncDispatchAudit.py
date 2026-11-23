@@ -56,22 +56,41 @@ class AsyncDispatchAudit:
 
     def __init__(self, calls: Iterable[str] = DISPATCH_CALLS) -> None:
         self._calls = frozenset(calls)
+        #: ``Event`` / ``Bus`` / ``safe_dispatch``: what an import can rename.
+        self._heads = frozenset(call.split(".", 1)[0] for call in self._calls)
 
     def scan_source(self, source: str, path: str) -> list[DispatchFinding]:
         try:
             tree = ast.parse(source)
         except SyntaxError:
             return []
+        renamed = self._renamed_imports(tree)
         findings: list[DispatchFinding] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
                 continue
-            name = self._matched_call(node.value)
+            name = self._matched_call(node.value, renamed)
             if name is not None:
                 findings.append(DispatchFinding(path, node.lineno, name))
         return findings
 
-    def _matched_call(self, call: ast.Call) -> str | None:
+    def _renamed_imports(self, tree: ast.AST) -> dict[str, str]:
+        """Local name -> the watched name it was imported AS.
+
+        ``from cara.facades import Event as Ev`` makes ``Ev.fire(...)`` the
+        same discarded coroutine under a name no suffix can match.
+        """
+        return {
+            alias.asname: alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+            if alias.asname and alias.name in self._heads
+        }
+
+    def _matched_call(
+        self, call: ast.Call, renamed: dict[str, str] | None = None
+    ) -> str | None:
         """The dispatch this bare statement discards, if it discards one.
 
         A consumer wrapping the dispatch (``asyncio.create_task(Event.fire(...))``)
@@ -81,6 +100,9 @@ class AsyncDispatchAudit:
         name = _dotted_name(call.func)
         if name is None:
             return None
+        head, dot, rest = name.partition(".")
+        if renamed and head in renamed:
+            name = f"{renamed[head]}{dot}{rest}"
         # Suffix match so an aliased receiver (``self.safe_dispatch``,
         # ``cara.facades.Event.fire``) is the same call as the bare form.
         if any(

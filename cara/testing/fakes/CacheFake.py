@@ -6,6 +6,14 @@ TTL isn't time-driven (tests shouldn't rely on wall clock); it's
 purely tracked so ``forever``/``put(ttl=...)`` round-trip correctly.
 ``throttle`` is the one call that reads the clock, because a rate-limit
 bucket IS a function of time.
+
+Counters (``increment`` / ``decrement`` / ``throttle``) live in their own
+namespace, as they do on Redis and on the file driver: ``get(key)`` after
+``increment(key)`` answers the default, a ``put`` never feeds a counter, and
+``has`` / ``ttl`` / ``forget`` / ``forget_pattern`` / ``flush`` cover both
+namespaces exactly as the real drivers do. A fake that kept both in one dict
+let a test pass that read a counter with ``get`` — a read that misses in
+production.
 """
 
 from __future__ import annotations
@@ -13,7 +21,7 @@ from __future__ import annotations
 import fnmatch
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from cara.exceptions import CacheConfigurationException
@@ -23,10 +31,31 @@ class CacheFake:
     def __init__(self) -> None:
         self._store: dict[str, Any] = {}
         self._ttls: dict[str, int | None] = {}
+        # The counter namespace (Redis keeps counters under their own prefix).
+        self._counters: dict[str, int] = {}
+        self._counter_ttls: dict[str, int | None] = {}
 
     # Production-side surface
     def get(self, key: str, default: Any = None, *, strict: bool = True) -> Any:
         return self._store.get(key, default)
+
+    def many(
+        self,
+        keys: Iterable[str],
+        default: Any = None,
+        driver_name: str | None = None,
+        *,
+        strict: bool = True,
+    ) -> dict[str, Any]:
+        """``Cache.many``: ``{key: value}`` in the order given, ``default``
+        standing in for each absent key.
+
+        Reads through :meth:`get` so the batched and the single read cannot
+        drift apart. Without it a token check that batches its revocation
+        keys fell through to the real cache under this fake.
+        """
+        del driver_name
+        return {key: self.get(key, default, strict=strict) for key in keys}
 
     def put(
         self,
@@ -43,8 +72,11 @@ class CacheFake:
         self._store[key] = value
         self._ttls[key] = ttl
 
-    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        self.put(key, value, ttl)
+    # No ``set`` / ``delete``: the ``Cache`` facade has never had either
+    # spelling (it is ``put`` / ``forget``). The fake used to answer both, so
+    # ``Cache.set(...)`` in production code passed its test and raised
+    # ``AttributeError`` on the first real call — the ``Mail.raw`` outage in
+    # another facade (see ``MailFake``).
 
     def forever(self, key: str, value: Any) -> None:
         self.put(key, value, None)
@@ -62,7 +94,8 @@ class CacheFake:
         return True
 
     def has(self, key: str) -> bool:
-        return key in self._store
+        # Redis ``EXISTS`` over the value AND the counter key.
+        return key in self._store or key in self._counters
 
     def ttl(self, key: str) -> int | None:
         """Mirror of the production ``Cache.ttl`` surface.
@@ -74,14 +107,21 @@ class CacheFake:
         callers that compare against the most-recent write get the
         same answer in both surfaces.
         """
+        # The counter's expiry when a counter exists, else the value's — the
+        # order ``RedisCacheDriver.ttl`` reads them in.
+        if key in self._counters:
+            return self._counter_ttls.get(key)
         if key not in self._store:
             return None
         return self._ttls.get(key)
 
     def forget(self, key: str) -> bool:
-        existed = key in self._store
+        # Redis ``forget`` deletes the value AND the counter under ``key``.
+        existed = key in self._store or key in self._counters
         self._store.pop(key, None)
         self._ttls.pop(key, None)
+        self._counters.pop(key, None)
+        self._counter_ttls.pop(key, None)
         return existed
 
     def pull(self, key: str, default: Any = None) -> Any:
@@ -122,9 +162,6 @@ class CacheFake:
             return True
         return False
 
-    def delete(self, key: str) -> bool:
-        return self.forget(key)
-
     def raw_key(self, key: str, driver_name: str | None = None) -> str:
         """``Cache.raw_key``: the fake has no raw connection, hence no
         physical namespace: ``key`` unchanged."""
@@ -133,19 +170,24 @@ class CacheFake:
     def flush(self) -> None:
         self._store.clear()
         self._ttls.clear()
+        self._counters.clear()
+        self._counter_ttls.clear()
 
     def remember(
         self,
         key: str,
         ttl: int | None,
-        factory: Callable[[], Any],
+        callback: Callable[[], Any],
         *,
         strict: bool = True,
     ) -> Any:
+        # ``callback`` is the facade's own parameter name: as ``factory`` the
+        # fake accepted ``remember(..., factory=fn)``, which the real
+        # ``Cache.remember`` rejects.
         del strict
         if key in self._store:
             return self._store[key]
-        value = factory()
+        value = callback()
         self.put(key, value, ttl)
         return value
 
@@ -197,14 +239,14 @@ class CacheFake:
             raise TypeError("Cache counter amount must be an integer")
         if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0:
             raise ValueError("Cache counters require a positive integer expiration")
-        existed = key in self._store
-        current = self._store.get(key, 0)
+        existed = key in self._counters
+        current = self._counters.get(key, 0)
         if isinstance(current, bool) or not isinstance(current, int):
             raise ValueError(f"Cache counter '{key}' contains a non-integer value")
         value = current + amount
-        self._store[key] = value
+        self._counters[key] = value
         if not existed:
-            self._ttls[key] = ttl
+            self._counter_ttls[key] = ttl
         return value
 
     def decrement(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
@@ -236,7 +278,8 @@ class CacheFake:
                 raise CacheConfigurationException(
                     f"Cache throttle {name} must be a positive integer"
                 )
-        stored = self._store.get(key)
+        # The GCRA cell is a counter-namespace integer on Redis.
+        stored = self._counters.get(key)
         if stored is not None and (
             isinstance(stored, bool) or not isinstance(stored, int)
         ):
@@ -252,8 +295,8 @@ class CacheFake:
             remaining = max(0, (tolerance - (tat - now)) // emission_interval_ms)
             return False, remaining, allow_at - now, tat - now
         full_after = next_tat - now
-        self._store[key] = next_tat
-        self._ttls[key] = math.ceil(full_after / 1000)
+        self._counters[key] = next_tat
+        self._counter_ttls[key] = math.ceil(full_after / 1000)
         remaining = max(0, (tolerance - full_after) // emission_interval_ms)
         return True, remaining, 0, full_after
 
@@ -267,11 +310,17 @@ class CacheFake:
         worth modelling here.
         """
 
-        keys = [k for k in self._store if fnmatch.fnmatchcase(k, pattern)]
-        for k in keys:
+        # Both namespaces, each key counted once per namespace — Redis
+        # deletes (and counts) the value key and the counter key separately.
+        values = [k for k in self._store if fnmatch.fnmatchcase(k, pattern)]
+        counters = [k for k in self._counters if fnmatch.fnmatchcase(k, pattern)]
+        for k in values:
             self._store.pop(k, None)
             self._ttls.pop(k, None)
-        return len(keys)
+        for k in counters:
+            self._counters.pop(k, None)
+            self._counter_ttls.pop(k, None)
+        return len(values) + len(counters)
 
     def forget_by_prefix(self, prefix: str) -> int:
         """Delete every key starting with ``prefix``.
@@ -284,23 +333,28 @@ class CacheFake:
         return self.forget_pattern(f"{prefix}*")
 
     # ── Test-time helpers ────────────────────────────────────────────
+    # Inspection spans both namespaces (a value shadows a counter of the same
+    # key): a test asserting on a counter it incremented keeps working.
 
     def all(self) -> dict[str, Any]:
-        return dict(self._store)
+        return {**self._counters, **self._store}
 
     def ttl_of(self, key: str) -> int | None:
-        return self._ttls.get(key)
+        if key in self._store:
+            return self._ttls.get(key)
+        return self._counter_ttls.get(key)
 
     def assert_has(self, key: str, value: Any = ...) -> None:
-        if key not in self._store:
+        stored = self.all()
+        if key not in stored:
             raise AssertionError(f"Expected cache key {key!r}, not found")
-        if value is not ... and self._store[key] != value:
+        if value is not ... and stored[key] != value:
             raise AssertionError(
-                f"Cache key {key!r} = {self._store[key]!r}, expected {value!r}"
+                f"Cache key {key!r} = {stored[key]!r}, expected {value!r}"
             )
 
     def assert_missing(self, key: str) -> None:
-        if key in self._store:
+        if key in self._store or key in self._counters:
             raise AssertionError(f"Expected cache key {key!r} to be missing")
 
     def clear(self) -> None:

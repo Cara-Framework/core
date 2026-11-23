@@ -69,7 +69,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import nodes_of, parse, python_files, relpath
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -211,9 +211,8 @@ def _collect_classes(manifest: Manifest) -> dict[str, list[_ClassEntry]]:
             if tree is None:
                 continue
             rel = relpath(path, manifest.roots.deployable)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    classes.setdefault(node.name, []).append(_build_entry(node, rel))
+            for node in nodes_of(tree, (ast.ClassDef,)):
+                classes.setdefault(node.name, []).append(_build_entry(node, rel))
     return classes
 
 
@@ -477,8 +476,10 @@ class CollaboratorCalls:
                 continue
 
             member_classes = _reachable(name, classes, set())
-            all_nodes = [n for _, member in member_classes for n in member.method_nodes]
-            counts = _self_attr_assignment_counts(all_nodes)
+            member_methods = [
+                n for _, member in member_classes for n in member.method_nodes
+            ]
+            counts = _self_attr_assignment_counts(member_methods)
             attr_map = {
                 attr: type_name
                 for attr, type_name in attr_map.items()

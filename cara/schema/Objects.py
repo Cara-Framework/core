@@ -26,7 +26,12 @@ import re
 
 from cara.exceptions import SchemaPlanRefused
 from cara.schema.DeclaredIndex import _declared_blueprint_indexes, _unique_index_preflight
-from cara.schema.IndexDrift import drifted_indexes, reshape_scaffolding
+from cara.schema.IndexDrift import (
+    drifted_indexes,
+    quoted_name,
+    reshape_scaffolding,
+    stored_name,
+)
 from cara.schema.LiveSchema import LiveSchema
 from cara.schema.Operation import ADDITIVE, DESTRUCTIVE, LOCKING, Operation
 
@@ -99,19 +104,19 @@ def created_objects(up_sql: str) -> set[str] | None:
     None means "this statement creates nothing I can name", which the caller
     reports as a refusal rather than replanning it. Guessing in either
     direction is worse: run-it-always is the phantom above, skip-it-always
-    silently drops a real object from the plan.
+    silently drops a real object from the plan. Every name is the STORED one
+    (:func:`stored_name`), since the catalogue holds names cut to 63 bytes.
     """
-    found = {match.group("name") for match in _CREATES_RE.finditer(up_sql)}
+
+    def named(match: re.Match) -> str:
+        return stored_name(match.group("name"))
+
+    found = {named(match) for match in _CREATES_RE.finditer(up_sql)}
+    found |= {f"extension:{named(m)}" for m in _CREATES_EXTENSION_RE.finditer(up_sql)}
+    found |= {f"column:{named(m)}" for m in _ADDS_COLUMN_RE.finditer(up_sql)}
     found |= {
-        f"extension:{match.group('name')}"
-        for match in _CREATES_EXTENSION_RE.finditer(up_sql)
-    }
-    found |= {
-        f"column:{match.group('name')}" for match in _ADDS_COLUMN_RE.finditer(up_sql)
-    }
-    found |= {
-        f"statistics:{match.group('name')}={int(match.group('target'))}"
-        for match in _SETS_STATISTICS_RE.finditer(up_sql)
+        f"statistics:{named(m)}={int(m.group('target'))}"
+        for m in _SETS_STATISTICS_RE.finditer(up_sql)
     }
     return found or None
 
@@ -128,9 +133,10 @@ def _adopt_unique_index(
         table=table,
         key=f"{table}:{name}:constraint",
         forward_sql=(
-            f'ALTER TABLE "{table}" ADD CONSTRAINT {name} UNIQUE USING INDEX {name}'
+            f'ALTER TABLE "{table}" ADD CONSTRAINT {quoted_name(name)} '
+            f"UNIQUE USING INDEX {quoted_name(name)}"
         ),
-        reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {name}',
+        reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {quoted_name(name)}',
         safety=LOCKING,
         reason=(
             "a bare unique index carries the declared unique constraint's "
@@ -166,7 +172,7 @@ def _declared_checks(model: dict, table: str) -> list[tuple[str, str]]:
         if not expression:
             continue
         name = check.get("name") or f"{table}_{_slugify_check(expression)}_check"
-        declared.append((name, expression))
+        declared.append((stored_name(name), expression))
     return declared
 
 
@@ -187,7 +193,7 @@ def declared_foreign_keys(model: dict, table: str) -> list[dict]:
     """
 
     def named(columns: list[str], given) -> str:
-        return str(given) if given else f"{table}_{'_'.join(columns)}_foreign"
+        return stored_name(given or f"{table}_{'_'.join(columns)}_foreign")
 
     def listed(value, fallback: str | None = None) -> list[str]:
         if value is None:
@@ -239,7 +245,7 @@ def _foreign_key_clause(key: dict) -> str:
     columns = ", ".join(f'"{column}"' for column in key["columns"])
     references = ", ".join(f'"{column}"' for column in key["references"])
     clause = (
-        f"ADD CONSTRAINT {key['name']} "
+        f"ADD CONSTRAINT {quoted_name(key['name'])} "
         f'FOREIGN KEY ({columns}) REFERENCES "{key["on"]}" ({references})'
     )
     if key.get("on_delete"):
@@ -259,7 +265,7 @@ def _validate_foreign_key(table: str, key: dict, undone_by: str) -> Operation:
         kind="validate_foreign_key",
         table=table,
         key=f"{table}:{name}:validate",
-        forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
+        forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {quoted_name(name)}',
         reverse_sql=None,
         safety=LOCKING,
         reason="prove the existing rows satisfy the attached FOREIGN KEY",
@@ -340,7 +346,9 @@ def missing_foreign_keys(model: dict, table: str, live: LiveSchema) -> list[Oper
                 table=table,
                 key=f"{table}:{name}",
                 forward_sql=_foreign_key_sql(table, key),
-                reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {name}',
+                reverse_sql=(
+                    f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {quoted_name(name)}'
+                ),
                 safety=LOCKING,
                 reason="model declares a FOREIGN KEY absent from the database",
                 notes=(
@@ -378,10 +386,12 @@ def missing_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]
                 table=table,
                 key=f"{table}:{name}",
                 forward_sql=(
-                    f'ALTER TABLE "{table}" ADD CONSTRAINT {name} '
+                    f'ALTER TABLE "{table}" ADD CONSTRAINT {quoted_name(name)} '
                     f"CHECK ({expression}) NOT VALID"
                 ),
-                reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {name}',
+                reverse_sql=(
+                    f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {quoted_name(name)}'
+                ),
                 safety=LOCKING,
                 reason="model declares a CHECK constraint absent from the database",
                 notes=(
@@ -395,7 +405,9 @@ def missing_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]
                 kind="validate_check",
                 table=table,
                 key=f"{table}:{name}:validate",
-                forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
+                forward_sql=(
+                    f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {quoted_name(name)}'
+                ),
                 reverse_sql=None,
                 safety=LOCKING,
                 reason="prove the existing rows satisfy the attached CHECK",
@@ -436,7 +448,7 @@ def orphaned_checks(model: dict, table: str, live: LiveSchema) -> list[Operation
                 kind="drop_check",
                 table=table,
                 key=f"{table}:{name}",
-                forward_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {name}',
+                forward_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {quoted_name(name)}',
                 reverse_sql=None,
                 safety=DESTRUCTIVE,
                 reason="CHECK constraint in the database that no model declares",
@@ -508,9 +520,9 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
                 # for an index.
                 forward_sql=(
                     f"CREATE {'UNIQUE ' if unique else ''}INDEX CONCURRENTLY "
-                    f'IF NOT EXISTS {name} ON "{table}" ({column_list})'
+                    f'IF NOT EXISTS {quoted_name(name)} ON "{table}" ({column_list})'
                 ),
-                reverse_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
+                reverse_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {quoted_name(name)}",
                 safety=ADDITIVE,
                 reason=(
                     f"model declares {'a unique' if unique else 'an'} index on "
@@ -648,7 +660,7 @@ def orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operatio
                 kind="drop_index",
                 table=table,
                 key=f"{table}:{name}",
-                forward_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
+                forward_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {quoted_name(name)}",
                 reverse_sql=reverse,
                 safety=LOCKING if reverse and not invariant else DESTRUCTIVE,
                 restores_data=not invariant,
@@ -664,28 +676,8 @@ def _rebuild_index_sql(table: str, name: str, definition: str | None) -> str | N
     """``pg_indexes.indexdef`` as a CONCURRENTLY build, or None unread."""
     head = re.match(r"CREATE (UNIQUE )?INDEX ", definition or "")
     unique, body = (head[1] or "", definition[head.end() :]) if head else ("", "")
-    body = body or (definition and f'{name} ON "{table}" {definition}')
+    body = body or (definition and f'{quoted_name(name)} ON "{table}" {definition}')
     return f"CREATE {unique}INDEX CONCURRENTLY IF NOT EXISTS {body}" if body else None
-
-
-def orphaned_tables(model_tables: set[str], live: LiveSchema) -> list[str]:
-    """Tables in the database that no model declares — REPORTED, never dropped.
-
-    A DROP TABLE derived from a diff is where an autogenerating tool does its
-    worst damage, because the diff cannot distinguish an abandoned table from
-    a partition child, a table an extension owns, or the framework's own
-    migration tracker. So this returns prose for a human, not an operation.
-    """
-    ignored = {"migrations"}
-    # BASE TABLES only. A VIEW is never a table a model declares, so every
-    # view in the schema matched this rule and was reported as an orphan
-    # inviting a DROP — advice about a relation the application reads.
-    orphans = sorted(live.base_table_names() - model_tables - ignored)
-    return [
-        f"table '{name}' exists in the database and no model declares it — "
-        f"if it is obsolete, drop it by hand; the planner will not guess"
-        for name in orphans
-    ]
 
 
 __all__ = [
@@ -696,5 +688,4 @@ __all__ = [
     "missing_indexes",
     "orphaned_checks",
     "orphaned_indexes",
-    "orphaned_tables",
 ]

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import contextlib
+import contextvars
 import fnmatch
 import inspect
 import sys
@@ -25,6 +26,7 @@ from threading import RLock
 
 from cara.broadcasting import drained, pending_listener_tasks
 from cara.context import ExecutionContext
+from cara.eloquent import reset_registry
 from cara.events.contracts import Listener
 from cara.exceptions import EventDispatchCycleException, EventNameConflictException
 from cara.facades import Log
@@ -552,9 +554,10 @@ class Event:
         )
 
         job = HandleListenerJob(
-            listener_class=listener.__class__.__name__,
-            event_data=event.to_dict() if hasattr(event, "to_dict") else event.__dict__,
-            event_class=event.__class__.__name__,
+            # Fully qualified: two listeners (or events) may share a class name.
+            listener_class=HandleListenerJob.listener_path(listener.__class__),
+            event_data=HandleListenerJob.event_payload(event),
+            event_class=HandleListenerJob.listener_path(event.__class__),
         )
         job.queue = queue_name
 
@@ -656,10 +659,19 @@ class Event:
         # Same handling regardless of ExecutionContext: run inline when no
         # loop is running, otherwise schedule on the running loop.
         try:
-            asyncio.get_running_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             # This loop ends with the dispatch; a listener's sync broadcast
             # is only scheduled on it.
             asyncio.run(drained(coro))
         else:
-            Event._track(asyncio.create_task(coro))
+            # The detached task runs later, beside the caller, so it must
+            # not share the caller's transaction registry (a mutable dict
+            # the copied context holds by reference): a listener's write
+            # landed in whatever transaction the caller had open by then and
+            # rolled back with it — after ``fire_after_commit`` had already
+            # waited for the event's own commit. A fresh registry in a copy
+            # of the context keeps every other binding (tenant, request).
+            context = contextvars.copy_context()
+            context.run(reset_registry)
+            Event._track(loop.create_task(coro, context=context))

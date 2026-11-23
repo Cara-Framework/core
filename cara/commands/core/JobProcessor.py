@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import threading
 import time
@@ -137,9 +138,19 @@ class JobProcessor:
             if lease is not None:
                 lease.fence_current_task()
             try:
-                return await asyncio.wait_for(
-                    method_to_call(*init_args), timeout=timeout_seconds
-                )
+                # ``asyncio.timeout`` is what ``wait_for`` is built on; used
+                # directly because it can say WHOSE deadline fired. A
+                # ``TimeoutError`` the job raised itself (its own
+                # ``asyncio.timeout``, an HTTP client, a socket) used to be
+                # relabelled "exceeded timeout of Ns" after 50 ms of a 30 s
+                # budget — and rebuilt as a bare ``TimeoutError``, so a
+                # ``retry_after`` it carried never reached the retry router.
+                async with asyncio.timeout(timeout_seconds) as budget:
+                    return await method_to_call(*init_args)
+            except TimeoutError as exc:
+                if not budget.expired():
+                    raise
+                raise TimeoutError(f"Job exceeded timeout of {timeout_seconds}s") from exc
             finally:
                 if lease is not None:
                     lease.unfence()
@@ -157,8 +168,34 @@ class JobProcessor:
             # Outside the job's own timeout: the drain has its own bound, and
             # a slow Redis must not turn a finished job into a timed-out one.
             return asyncio.run(drained(_run_registered()))
-        except TimeoutError as e:
-            raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
+        except asyncio.CancelledError as stray:
+            # Only two things cancel a run on purpose: its lease fence and the
+            # worker's shutdown (``cancel_all``). A CancelledError with
+            # neither behind it came out of the job itself, and reading it as
+            # a shutdown handed the delivery back UNPENALISED: it redelivered,
+            # cancelled the next slot the same way, and never spent an attempt
+            # or reached the DLQ. It is a failure like any other. With NO
+            # registry (a direct ``process_message`` caller) nothing can have
+            # requested a shutdown, so only the fence can excuse it.
+            shutdown = (
+                cancellation_registry is not None
+                and cancellation_registry.cancellation_requested
+            )
+            if shutdown or (lease is not None and lease.fenced):
+                raise
+            raise QueueException(
+                "Job raised CancelledError outside a worker shutdown."
+            ) from stray
+        except SystemExit as stray:
+            # ``sys.exit`` inside a job (or a library under it) is the same
+            # kind of escape: no ``except Exception`` between here and the
+            # consumer thread catches it, so the delivery was never settled
+            # (no attempt spent, redelivered once its lease lapsed, for ever)
+            # and the exception ended the slot's thread. A failure like any
+            # other: it spends an attempt and can reach the DLQ.
+            raise QueueException(
+                f"Job raised SystemExit({stray.code!r}) instead of failing."
+            ) from stray
         finally:
             hard_kill.cancel()
 
@@ -330,12 +367,14 @@ class JobProcessor:
         # FAILURE that names its wait (an upstream's ``Retry-After`` carried
         # on the exception) is honoured the same way: a floor, never a cut.
         retry_after = getattr(exc, "retry_after", None)
+        retry_floor = 0
         if (
             isinstance(retry_after, (int, float))
             and not isinstance(retry_after, bool)
             and retry_after > 0
         ):
-            base_delay = max(base_delay, int(retry_after))
+            retry_floor = math.ceil(retry_after)
+            base_delay = max(base_delay, retry_floor)
 
         try:
             driver = _Queue.driver()
@@ -349,6 +388,11 @@ class JobProcessor:
                     delay_seconds = apply_jitter(base_delay, instance)
                 except Exception:
                     delay_seconds = base_delay
+            # The floor is re-applied AFTER the spread. The jitter swings both
+            # ways around ``base_delay``, so flooring only before it sent
+            # about half of the retries back EARLIER than the wait the
+            # failure named — knocking on the door it said was still closed.
+            delay_seconds = max(delay_seconds, retry_floor)
 
             retry_options = {
                 "queue": queue_name or msg.get("queue") or "default",

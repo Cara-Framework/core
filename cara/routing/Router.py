@@ -16,7 +16,12 @@ from cara.exceptions import (
 )
 from cara.support import flatten
 
+from ._RouteIndex import _RouteIndex
 from .Route import Route
+
+#: A bucket smaller than this is scanned directly: walking the index costs
+#: more than a handful of regex matches.
+_INDEX_MIN_ROUTES = 8
 
 # Include "WS" so WebSocket routes are bucketed
 HTTP_METHODS = [
@@ -117,18 +122,28 @@ class Router:
 
         For HTTP OPTIONS, automatically generates preflight if needed.
         """
-        method = request_method.upper()
-        candidates = self.routes_by_method.get(method, [])
+        return self.find_with_params(path, request_method)[0]
 
-        for route in candidates:
-            if route.matches(path, request_method):
-                return route
+    def find_with_params(
+        self, path: str, request_method: str
+    ) -> tuple[Route, dict[str, Any]]:
+        """``find``, plus the parameters the path binds on the found route.
+
+        The match that selects the route already captured them; returning
+        them spares the caller a second regex match of the same path, and
+        keeps them per request instead of on the shared ``Route``.
+        """
+        method = request_method.upper()
+        found = self._first_match_with_params(method, path, request_method)
+        if found is not None:
+            return found
 
         # If no direct match, check for method-not-allowed
         allowed = self.get_allowed_methods(path)
         if allowed:
             if method == "OPTIONS":
-                return self._create_preflight_route(path, allowed)
+                preflight = self._create_preflight_route(path, allowed)
+                return preflight, preflight.extract_parameters(path)
             # Pass the allow-list through to the exception so the
             # default handler can emit the RFC-9110 ``Allow`` header
             # (see ``MethodNotAllowedException`` docstring). The kwarg
@@ -150,13 +165,53 @@ class Router:
         Returns:
             List of allowed HTTP methods
         """
-        allowed: list[str] = []
-        for m, bucket in self.routes_by_method.items():
+        return [
+            m
+            for m in self.routes_by_method
+            if self._first_match(m, path, m.lower()) is not None
+        ]
+
+    def _first_match(self, bucket_method: str, path: str, method: str) -> Route | None:
+        """The first-registered route of one method bucket that matches ``path``."""
+        found = self._first_match_with_params(bucket_method, path, method)
+        return found[0] if found is not None else None
+
+    def _first_match_with_params(
+        self, bucket_method: str, path: str, method: str
+    ) -> tuple[Route, dict[str, Any]] | None:
+        """The first-registered route of one method bucket that matches ``path``,
+        with the parameters that match bound.
+
+        Registration order decides between two routes that both match (a
+        literal ``/orders/export`` declared after ``/orders/@id`` loses to
+        it). The index only narrows which routes are tried, in that same
+        order — see ``_RouteIndex``.
+        """
+        bucket = self.routes_by_method.get(bucket_method)
+        if not bucket:
+            return None
+        # ``$`` in a route pattern also matches before a trailing newline, so
+        # ``/health\n`` matches ``/health`` — but its last SEGMENT is
+        # ``health\n``, which the index would not find. Keep the full scan
+        # for that path shape rather than change what it resolves to.
+        if len(bucket) < _INDEX_MIN_ROUTES or path.endswith("\n"):
             for route in bucket:
-                if route.matches(path, m.lower()):
-                    allowed.append(m)
-                    break
-        return allowed
+                params = route.match(path, method)
+                if params is not None:
+                    return route, params
+            return None
+
+        # ``__dict__`` rather than an attribute set in ``__init__``: a router
+        # built without it (``__new__`` in tooling) must still resolve.
+        indexes = self.__dict__.setdefault("_route_indexes", {})
+        index = indexes.get(bucket_method)
+        if index is None or not index.is_current_for(bucket):
+            index = indexes[bucket_method] = _RouteIndex(bucket)
+        for _, route in index.candidates(path):
+            params = route.match(path, method)
+            if params is not None:
+                return route, params
+        return None
 
     def _create_preflight_route(self, path: str, allowed_methods: list[str]) -> Route:
         """Generate an OPTIONS route for CORS preflight.

@@ -301,22 +301,28 @@ class Model(
         # nothing read. Calling ``super().__init__(**kwargs)`` now lands on
         # ``object.__init__``, which rejects keyword arguments.
 
-        # Initialize attribute storage
-        self.__attributes__: dict[str, Any] = {}
-        self.__original_attributes__: dict[str, Any] = {}
-        self.__dirty_attributes__: dict[str, Any] = {}
+        # The instance's own stores are written straight into ``__dict__``.
+        # ``self.x = ...`` goes through ``Model.__setattr__`` — the write door
+        # for COLUMN values (mutator lookup, cast registry, date rule) — and
+        # for these eight underscore names that door did all of that work
+        # only to arrive at this same ``__dict__`` write. A model is built
+        # for every hydrated row and every ``Model.query()``, and the detour
+        # was most of what one cost (10.2us -> 0.9us per instance; hydrating
+        # 2000 rows 23.9ms -> 5.0ms, ``tests/eloquent/test_model_init_cost.py``).
+        state = self.__dict__
 
-        # Initialize appends if not already present
-        if not hasattr(self, "__appends__"):
-            self.__appends__ = []
+        # Attribute storage
+        state["__attributes__"] = {}
+        state["__original_attributes__"] = {}
+        state["__dirty_attributes__"] = {}
 
-        # Initialize relationships storage
-        self._relations: dict[str, Any] = {}
-        self._relationships: dict[str, Any] = {}
-        self._global_scopes: dict[str, Any] = {}
+        # Relationships storage
+        state["_relations"] = {}
+        state["_relationships"] = {}
+        state["_global_scopes"] = {}
 
-        # Initialize model events cache
-        self._model_events: dict[str, list[Callable]] | None = None
+        # Model events cache
+        state["_model_events"] = None
 
         # Set attributes from kwargs
         for key, value in kwargs.items():

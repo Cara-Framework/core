@@ -25,7 +25,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .Sources import _FUNCTION_NODES, _simple_name
+from .Sources import _FUNCTION_NODES, _simple_name, _walk
 
 _UNKNOWN = object()
 
@@ -226,6 +226,10 @@ class _Binder:
     def __init__(self) -> None:
         self._kept: dict[ast.AST, frozenset[str]] = {}
         self._forwards: dict[tuple[ast.AST, int], bool] = {}
+        # What a function's own source settles for every scan of it
+        # (``Calls._FunctionScan``), kept beside the other per-function
+        # readings so one call follower reads each function once.
+        self.source: dict[Any, Any] = {}
 
     def bind(
         self,
@@ -316,10 +320,10 @@ def _forwards(function: Any, implicit: int) -> bool:
         isinstance(node, (ast.Attribute, ast.Subscript))
         and isinstance(node.value, ast.Name)
         and node.value.id in {star, double}
-        for node in ast.walk(function)
+        for node in _walk(function)
     ):
         return False
-    for node in ast.walk(function):
+    for node in _walk(function):
         if not isinstance(node, ast.Call) or not _passes_mapping(node, double):
             continue
         arguments = node.args
@@ -359,7 +363,7 @@ def _consulted(function: Any) -> frozenset[str]:
     call — as is, or inside the expression it passes (``billing=billing and
     other``, ``"a" if write else "b"``)."""
     found: set[str] = set()
-    for node in ast.walk(function):
+    for node in _walk(function):
         if isinstance(node, (ast.If, ast.While, ast.IfExp, ast.Assert)):
             found.update(_loaded(node.test))
         elif isinstance(node, ast.Call):
@@ -371,7 +375,7 @@ def _consulted(function: Any) -> frozenset[str]:
 def _loaded(expression: ast.expr) -> set[str]:
     return {
         name.id
-        for name in ast.walk(expression)
+        for name in _walk(expression)
         if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load)
     }
 
@@ -392,7 +396,7 @@ def _unsettled(function: Any) -> frozenset[str]:
     by a ``match`` pattern, a nested definition's name, or a parameter of a
     nested function or lambda."""
     found: set[str] = set()
-    for node in ast.walk(function):
+    for node in _walk(function):
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             found.add(node.id)
         elif isinstance(node, ast.pattern):

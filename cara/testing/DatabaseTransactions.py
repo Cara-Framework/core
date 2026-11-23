@@ -64,22 +64,39 @@ class DatabaseTransactions:
         """
         DatabaseTransactions._lane_depth += 1
         try:
+            # The depth BEFORE the lane's own BEGIN is what teardown returns
+            # to. One ``DB.rollback`` unwinds ONE level, so a body that left a
+            # transaction of its own open (a ``begin_transaction`` whose
+            # commit/rollback an exception skipped) used to leave the lane's
+            # outer transaction open and pinned: every later test in the
+            # process then ran as a SAVEPOINT inside it and read this test's
+            # rows — and its locks — until the process exited.
+            baseline = DB.transaction_level(connection)
             DB.begin_transaction(connection)
             try:
                 yield
             finally:
                 try:
-                    DB.rollback(connection)
+                    if DB.transaction_level(connection) <= baseline:
+                        # The lane's own level is gone: the test body
+                        # committed (or rolled back) past the fixture's outer
+                        # BEGIN, so writes may have PERSISTED (isolation lost
+                        # for this test). Surface it loudly but do not raise —
+                        # a teardown error must not swallow a test
+                        # assertion/exception already propagating.
+                        _logger.warning(
+                            "DatabaseTransactions.rolled_back: no active transaction "
+                            "on %r at teardown — the test drained its outer "
+                            "transaction, so writes may have persisted (isolation "
+                            "lost).",
+                            connection,
+                        )
+                    else:
+                        DB.rollback_transactions_above(baseline, connection)
                 except Exception:  # log misuse, never mask the test result
-                    # No active transaction at teardown means the test body
-                    # committed past the fixture's outer BEGIN, so writes may
-                    # have PERSISTED (isolation lost for this test). Surface
-                    # it loudly but do not raise — a teardown error must not
-                    # swallow a test assertion/exception already propagating.
                     _logger.warning(
-                        "DatabaseTransactions.rolled_back: no active transaction "
-                        "on %r at teardown — the test drained its outer "
-                        "transaction, so writes may have persisted (isolation "
+                        "DatabaseTransactions.rolled_back: rolling %r back at "
+                        "teardown failed — writes may have persisted (isolation "
                         "lost).",
                         connection,
                         exc_info=True,

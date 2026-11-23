@@ -151,7 +151,7 @@ class _Driver:
         return {"_tenant_mode": "tenant", "_tenant": _TENANT}
 
     @staticmethod
-    def _create_job_record(_job, _job_id, _options):
+    def _create_job_record(_job, _job_id, _options, *, queue=None):
         return 9
 
     def _serialize_payload(self, payload, opts):

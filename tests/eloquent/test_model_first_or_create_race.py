@@ -385,84 +385,146 @@ class TestFirstOrCreateRace:
 
 
 # ── update_or_create race semantics ───────────────────────────
+#
+# ``update_or_create`` no longer looks before it writes: the UPDATE runs
+# first with ``RETURNING *`` and its answer says both whether the row was
+# there and what it holds now — one round trip when it exists. A miss costs
+# the UPDATE that matched nothing, the INSERT and the read-back (``fresh``).
+
+
+class _RecordingModelUOC(_RecordingModelFOC):
+    """The stand-in, plus what ``_update_matching`` drives: ``update`` with
+    ``returning`` answering the rows written (``update_sequence``), and the
+    builder that hydrates the first of them."""
+
+    update_sequence: list[list[dict]] = []
+    update_calls: list[tuple[dict, tuple]] = []
+
+    @classmethod
+    def create(cls, payload: dict, id_key: str | None = None) -> Any:
+        cls.timeline.append("create")
+        cls.create_payload = dict(payload)
+        if cls.create_side_effect is not None:
+            raise cls.create_side_effect
+        return _FakeRow(id=42, **payload)
+
+    def get_selects(self) -> list:
+        return []
+
+    def update(self, payload: dict, returning: tuple = ()) -> list[dict]:
+        type(self).timeline.append("update")
+        type(self).update_calls.append((dict(payload), tuple(returning)))
+        return type(self).update_sequence.pop(0)
+
+    def get_builder(self) -> Any:
+        return type("_Builder", (), {"prepare_result": staticmethod(_hydrate)})()
+
+
+def _hydrate(row: dict) -> _FakeRow:
+    return _FakeRow(hydrated=True, **row)
+
+
+@pytest.fixture
+def upsert_class(model_class) -> type[_RecordingModelUOC]:
+    _RecordingModelUOC.update_sequence = []
+    _RecordingModelUOC.update_calls = []
+    _RecordingModelUOC.timeline = model_class.timeline
+    return _RecordingModelUOC
 
 
 class TestUpdateOrCreateRace:
-    def test_existing_row_updated_no_create(
+    def test_existing_row_is_updated_in_one_round_trip(
         self,
-        model_class: type[_RecordingModelFOC],
+        upsert_class: type[_RecordingModelUOC],
     ) -> None:
-        existing = _FakeRow(id=1, slug="foo", title="Old")
-        # Two .first() calls: pre-update SELECT + post-update SELECT.
-        updated = _FakeRow(id=1, slug="foo", title="New")
-        model_class.select_sequence = [existing, updated]
+        """The UPDATE's own RETURNING row is the answer: no SELECT before it
+        to look, none after it to read the result, no INSERT."""
+        upsert_class.update_sequence = [[{"id": 1, "slug": "foo", "title": "New"}]]
 
         out = Model.update_or_create.__func__(
-            model_class,
+            upsert_class,
             {"slug": "foo"},
             {"title": "New"},
         )
 
-        assert out is updated
-        # UPDATE was called with the merged payload (updates + wheres).
-        assert model_class.create_payload == {"title": "New", "slug": "foo"}
+        assert (out.hydrated, out.id, out.title) == (True, 1, "New")
+        assert upsert_class.timeline == ["update"]
+        assert upsert_class.update_calls == [({"title": "New", "slug": "foo"}, ("*",))]
+        assert upsert_class.create_payload is None
+
+    def test_missing_row_updates_then_inserts_and_reads_back(
+        self,
+        upsert_class: type[_RecordingModelUOC],
+    ) -> None:
+        upsert_class.update_sequence = [[]]  # the UPDATE matched nothing
+
+        out = Model.update_or_create.__func__(
+            upsert_class,
+            {"slug": "foo"},
+            {"title": "New"},
+        )
+
+        assert (out.id, out.slug, out.title) == (42, "foo", "New")
+        assert upsert_class.timeline == [
+            "update",
+            "tx_enter",
+            "create",
+            ("tx_exit", None),
+        ]
+        assert upsert_class.create_payload == {"title": "New", "slug": "foo"}
 
     def test_race_uniqueviolation_falls_through_to_update(
         self,
-        model_class: type[_RecordingModelFOC],
+        upsert_class: type[_RecordingModelUOC],
     ) -> None:
-        """The upsert promise — loser's payload still lands. SELECT
-        misses, CREATE loses the race, the existence-check confirms
-        the row IS there, then the UPDATE branch runs and the final
-        SELECT returns the row with the loser's merged payload."""
-        post_check_row = _FakeRow(id=99, slug="foo", title="Winner")  # existence check
-        final_row = _FakeRow(id=99, slug="foo", title="Loser merged")
-        # Sequence: pre-create SELECT (miss) → post-violation existence
-        # check (hit) → post-update SELECT (final).
-        model_class.select_sequence = [None, post_check_row, final_row]
-        model_class.create_side_effect = _make_unique_violation()
+        """The upsert promise — the loser's payload still lands. The UPDATE
+        misses, the INSERT loses the race and its boundary rolls back, then
+        the UPDATE runs again and answers with the winner's row as merged."""
+        upsert_class.update_sequence = [
+            [],
+            [{"id": 99, "slug": "foo", "title": "Loser merged"}],
+        ]
+        upsert_class.create_side_effect = _make_unique_violation()
 
         out = Model.update_or_create.__func__(
-            model_class,
+            upsert_class,
             {"slug": "foo"},
             {"title": "Loser merged"},
         )
 
-        assert out is final_row
-        # UPDATE ran with the merged payload — that's the "upsert"
-        # promise: even though create lost, the loser's payload
-        # converges via the update branch.
-        assert model_class.create_payload == {"title": "Loser merged", "slug": "foo"}
-        assert model_class.timeline[:5] == [
-            "select",
+        assert (out.id, out.title) == (99, "Loser merged")
+        assert upsert_class.timeline == [
+            "update",
             "tx_enter",
             "create",
             ("tx_exit", "QueryException"),
-            "select",
+            "update",
+        ]
+        merged = {"title": "Loser merged", "slug": "foo"}
+        assert [payload for payload, _ in upsert_class.update_calls] == [
+            merged,
+            merged,
         ]
 
     def test_race_then_winner_vanishes_reraises(
         self,
-        model_class: type[_RecordingModelFOC],
+        upsert_class: type[_RecordingModelUOC],
     ) -> None:
-        """Same vanishing-row guard as first_or_create — if the
-        post-violation existence check misses, the row was deleted
-        between CREATE losing and the existence SELECT. UPDATE on a
-        non-existent row would match 0 rows; the final SELECT
-        returns None; the caller would see a confusing ``None``
-        return from an "upsert" call. Bubble the original error
-        instead."""
-        model_class.select_sequence = [None, None]  # pre + existence both miss
-        model_class.create_side_effect = _make_unique_violation()
+        """If the winner's row is deleted again before the retried UPDATE,
+        that UPDATE matches nothing; returning None from an "upsert" would
+        hide the failure, so the original violation surfaces."""
+        upsert_class.update_sequence = [[], []]
+        upsert_class.create_side_effect = _make_unique_violation()
 
         with pytest.raises(Exception) as excinfo:
             Model.update_or_create.__func__(
-                model_class,
+                upsert_class,
                 {"slug": "foo"},
                 {"title": "x"},
             )
 
         assert sqlstate_of(excinfo.value) == "23505"
+        assert upsert_class.timeline[-1] == "update"
 
 
 def test_query_builder_first_or_create_rolls_back_before_requery(

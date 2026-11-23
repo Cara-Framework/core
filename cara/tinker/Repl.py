@@ -9,9 +9,10 @@ from __future__ import annotations
 import ast
 from typing import Any
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
 
 
 class Repl:
@@ -22,23 +23,31 @@ class Repl:
         self.namespace = namespace
         self.console = Console()
 
-    def execute(self, code: str) -> Any:
-        """Execute code and return result."""
+    def evaluate(self, code: str) -> Any:
+        """Execute code and return its result; a failure RAISES.
+
+        The door for callers that must know whether the code worked.
+        ``execute`` prints the error and answers ``None`` — the same answer a
+        successful statement gives — so a caller reading only its return
+        value counted every failed line as a success.
+        """
         if not code.strip():
             return None
 
+        # Try to parse as expression first
         try:
-            # Try to parse as expression first
-            try:
-                # Parse as expression
-                parsed = ast.parse(code, mode="eval")
-                return eval(compile(parsed, "<tinker>", "eval"), self.namespace)
-            except SyntaxError:
-                # If it's not an expression, try as statement
-                parsed = ast.parse(code, mode="exec")
-                exec(compile(parsed, "<tinker>", "exec"), self.namespace)
-                return None
+            parsed = ast.parse(code, mode="eval")
+        except SyntaxError:
+            # If it's not an expression, try as statement
+            parsed = ast.parse(code, mode="exec")
+            exec(compile(parsed, "<tinker>", "exec"), self.namespace)
+            return None
+        return eval(compile(parsed, "<tinker>", "eval"), self.namespace)
 
+    def execute(self, code: str) -> Any:
+        """Execute code and return result."""
+        try:
+            return self.evaluate(code)
         except Exception as e:
             # Print error but don't crash
             self.print_error(e, code)
@@ -46,16 +55,21 @@ class Repl:
 
     def print_error(self, error: Exception, code: str | None = None):
         """Print error in a beautiful Rich format."""
-        error_type = type(error).__name__
-        error_message = str(error)
-
-        error_content = f"[bold red]{error_type}:[/bold red] {error_message}"
+        # ``Text``, never a markup string: the message is the user's data. As
+        # markup, ``[red]`` inside it was swallowed and a ``[/tag]`` raised
+        # ``MarkupError`` out of the one method whose job is to report an
+        # error without crashing.
+        error_content = Text()
+        error_content.append(f"{type(error).__name__}:", style="bold red")
+        error_content.append(f" {error}")
 
         if code:
-            # Show the problematic code with syntax highlighting
+            # Show the problematic code with syntax highlighting. The Syntax
+            # is a renderable of its own: formatted into the string it
+            # printed as ``<rich.syntax.Syntax object at 0x...>``.
             syntax = Syntax(code, "python", theme="monokai", line_numbers=False)
             error_panel = Panel(
-                f"{error_content}\n\n[dim]Code:[/dim]\n{syntax}",
+                Group(error_content, Text(""), Text("Code:", style="dim"), syntax),
                 title="❌ Execution Error",
                 border_style="red",
                 padding=(1, 2),

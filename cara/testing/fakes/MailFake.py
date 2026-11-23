@@ -60,9 +60,9 @@ class MailFake:
 
     # ── Production-side surface ──────────────────────────────────────
 
-    def to(self, addrs: str | Iterable[str]) -> MailMessage:
+    def to(self, addresses: str | Iterable[str]) -> MailMessage:
         """Begin the real fluent chain, bound to this fake as its manager."""
-        return MailMessage(self).to(addrs)
+        return MailMessage(self).to(addresses)
 
     def mailable(self, mailable: Mailable) -> MailPendingSend:
         """Mirror ``Mail.mailable`` — the chain target that only sends."""

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import ast
 
-from cara.architecture._ast_utils import iter_modules
+from cara.architecture._ast_utils import all_nodes, iter_modules
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -42,7 +42,7 @@ class HttpInBusinessLogic:
             manifest.roots.scan_dirs("http_in_business_logic"),
             manifest.roots.deployable,
         ):
-            for node in ast.walk(tree):
+            for node in all_nodes(tree):
                 if isinstance(node, ast.ImportFrom) and node.module:
                     if _matches(node.module, prefixes):
                         findings.append(
@@ -52,6 +52,21 @@ class HttpInBusinessLogic:
                                 f"imports an HTTP type from {node.module} — raise a "
                                 f"domain exception and let the edge translate it",
                             )
+                        )
+                    elif not node.level:
+                        # ``from cara import request`` binds the transport
+                        # PACKAGE itself: ``cara`` is no HTTP prefix, so the
+                        # module test above never saw it, yet every HTTP type
+                        # is one attribute away from the name it binds.
+                        findings.extend(
+                            Finding(
+                                rel,
+                                node.lineno,
+                                f"imports {node.module}.{alias.name} — HTTP "
+                                f"transport stops at the edge",
+                            )
+                            for alias in node.names
+                            if _matches(f"{node.module}.{alias.name}", prefixes)
                         )
                 elif isinstance(node, ast.Import):
                     findings.extend(

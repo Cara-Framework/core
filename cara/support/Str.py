@@ -14,12 +14,27 @@ from urllib.parse import urlparse, urlunparse
 # through to a browser. We strip tags at input time as defense in depth —
 # frontend escaping remains the primary protection.
 _TAG_RE = re.compile(r"<[^>]+>")
+# What a browser tokenizes as a tag: ``<`` followed by a letter, ``/``, ``!``
+# or ``?``. Anything else after ``<`` is text ("1 < 2 and 3 > 2"). Used on
+# text that was entity-DECODED by this module, where the caller never typed a
+# bracket pair and must not lose the prose between two decoded comparisons.
+_REAL_TAG_RE = re.compile(r"<[A-Za-z/!?][^>]*>")
+# The start of such a tag, closed or not: an unterminated one at the end of
+# the text is closed by the page's next ``>`` once embedded (``_strip_tag_spans``).
+_TAG_OPENER_RE = re.compile(r"<[A-Za-z/!?]")
 # Script/style bodies — strip tags AND contents since the content itself
-# is dangerous (event handlers, inline JS).
-_SCRIPT_BLOCK_RE = re.compile(
-    r"<(script|style|iframe|object|embed)\b[^>]*>.*?</\1\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
+# is dangerous (event handlers, inline JS). Matched by ``_strip_blocks``,
+# which walks these two instead of one ``<name...>.*?</name>`` regex: that
+# regex rescanned to the end of the text from every unclosed opener.
+_BLOCK_NAMES = ("script", "style", "iframe", "object", "embed")
+_BLOCK_OPEN_RE = re.compile(rf"<({'|'.join(_BLOCK_NAMES)})\b", re.IGNORECASE)
+_BLOCK_CLOSE_RE = {
+    name: re.compile(rf"</{name}\s*>", re.IGNORECASE) for name in _BLOCK_NAMES
+}
+# Entity layers decoded before the remainder is left encoded (inert as text).
+# Real input is single- or double-encoded; an unbounded loop would let
+# ``&amp;amp;amp;…lt;`` buy one full pass per four bytes.
+_MAX_MARKUP_PASSES = 5
 # Control characters except \t \n \r — these are never legitimate in text
 # input and often used to evade filters.
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -45,15 +60,27 @@ _LOG_SECRET_NAME = (
     r"api[_-]?key|apikey|client[_-]?secret|secret|password|passwd|"
     r"signature|x-amz-signature|x-amz-security-token)"
 )
+# A QUOTED value runs to its closing quote (or to the end of a truncated
+# line): the bare-token form stopped at the first space or ``,;&#}``, and a
+# quoted secret holding one of those then failed the closing-quote check and
+# was not redacted AT ALL (``{"password": "correct horse"}``, ``"p@ss,word"``).
 _LOG_SECRET_ASSIGNMENT_RE = re.compile(
-    rf"(?i)([\"']?{_LOG_SECRET_NAME}[\"']?\s*[:=]\s*)([\"']?)"
-    r"([^\"'\s,;&#}]+)(\2)"
+    rf"(?i)([\"']?{_LOG_SECRET_NAME}[\"']?\s*[:=]\s*)"
+    r"(\"(?:[^\"\\]|\\.)*(?:\"|\Z)|'(?:[^'\\]|\\.)*(?:'|\Z)|[^\"'\s,;&#}]+)"
 )
+# The header name and the scheme may each sit inside quotes: a logged header
+# dict is ``{'Authorization': 'Bearer …'}``.
 _LOG_AUTHORIZATION_RE = re.compile(
-    r"(?i)(\b(?:authorization|proxy-authorization)\s*[:=]\s*"
-    r"(?:bearer|basic)\s+)([^\s,;]+)"
+    r"(?i)(\b(?:authorization|proxy-authorization)[\"']?\s*[:=]\s*[\"']?"
+    r"(?:bearer|basic)\s+)([^\s,;\"']+)"
 )
-_LOG_URL_CREDENTIALS_RE = re.compile(r"(?i)(https?://)([^/@\s]+)@")
+# Any scheme, not only http(s): a DSN in a connection error
+# (``postgresql://app:pw@db/app``, ``redis://:pw@cache:6379/0``,
+# ``amqp://user:pw@broker/``) carries the same userinfo. The lookbehind makes
+# a scheme start only at the head of its run, so a long token is scanned once.
+_LOG_URL_CREDENTIALS_RE = re.compile(
+    r"(?i)(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*://)([^/@\s]+)@"
+)
 
 
 def modularize(file_path, suffix=".py"):
@@ -267,7 +294,15 @@ def redact_log_secrets(message: Any) -> str:
     text = str(message)
     text = _LOG_URL_CREDENTIALS_RE.sub(r"\1[REDACTED]@", text)
     text = _LOG_AUTHORIZATION_RE.sub(r"\1[REDACTED]", text)
-    return _LOG_SECRET_ASSIGNMENT_RE.sub(r"\1\2[REDACTED]\4", text)
+    return _LOG_SECRET_ASSIGNMENT_RE.sub(_redact_assignment, text)
+
+
+def _redact_assignment(match: re.Match[str]) -> str:
+    """``name=<value>`` with the value replaced and its quotes kept."""
+    value = match.group(2)
+    quote = value[0] if value[0] in "\"'" else ""
+    closing = quote if quote and len(value) > 1 and value.endswith(quote) else ""
+    return f"{match.group(1)}{quote}[REDACTED]{closing}"
 
 
 def mask_ip(ip: str) -> str:
@@ -347,12 +382,106 @@ def strip_tags(text: str) -> str:
     """
     if not text:
         return ""
-    out = _SCRIPT_BLOCK_RE.sub("", text)
-    out = _TAG_RE.sub("", out)
-    # Decode any HTML entities that were smuggled in, so the storage is
-    # canonicalized and downstream escaping only happens once.
-    out = html.unescape(out)
-    return out
+    return _strip_markup(text, fold=False)
+
+
+def _strip_tag_spans(text: str, pattern: re.Pattern[str]) -> str:
+    """``pattern.sub("", text)`` for a ``<…>`` pattern, in linear time, and
+    an unterminated tag at the end dropped.
+
+    Past the last ``>`` nothing can match, yet the regex still walked to the
+    end of the text from every ``<`` there: 80k unclosed ``<`` cost 2 s.
+
+    That tail is not safe to keep as-is: ``hello <img src=x onerror=alert(1)``
+    has no ``>``, but once embedded in a page the page's own next ``>`` closes
+    it and the handler runs. So the tail is cut at its first real tag opener
+    (``<`` + letter, ``/``, ``!`` or ``?``: what a browser tokenizes as a
+    tag); a ``<`` that opens nothing (``a < b``, ``<3``) stays text. One
+    forward search of the tail, so still linear.
+    """
+    last = text.rfind(">")
+    head = pattern.sub("", text[: last + 1]) if last >= 0 else ""
+    tail = text[last + 1 :]
+    opener = _TAG_OPENER_RE.search(tail)
+    if opener is not None:
+        tail = tail[: opener.start()]
+    return head + tail
+
+
+def _strip_blocks(text: str) -> str:
+    """Drop ``<script|style|iframe|object|embed …>…</same>`` with contents.
+
+    The leftmost opener that has a closer wins, and the block ends at the
+    FIRST closer after it. A name whose closer search failed once is never
+    searched again — nothing later can find one either — so unclosed openers
+    cost one scan in total, not one each.
+    """
+    if text.rfind(">") < 0:
+        return text
+    out: list[str] = []
+    kept_from = 0
+    search_from = 0
+    tag_end = -1
+    unclosed: set[str] = set()
+    while True:
+        opener = _BLOCK_OPEN_RE.search(text, search_from)
+        if opener is None:
+            break
+        # Openers nested in one unclosed tag share its ``>``: look once.
+        if tag_end < opener.end():
+            tag_end = text.find(">", opener.end())
+            if tag_end < 0:
+                break
+        name = opener.group(1).lower()
+        closer = (
+            None if name in unclosed else _BLOCK_CLOSE_RE[name].search(text, tag_end + 1)
+        )
+        if closer is None:
+            unclosed.add(name)
+            search_from = opener.start() + 1
+            continue
+        out.append(text[kept_from : opener.start()])
+        kept_from = search_from = closer.end()
+    out.append(text[kept_from:])
+    return "".join(out)
+
+
+def _fold_text(text: str) -> str:
+    """NFKC, invisible and control characters dropped — what a reader sees."""
+    text = unicodedata.normalize("NFKC", text)
+    text = strip_invisible(text)
+    text = _CONTROL_CHARS_RE.sub("", text)
+    return _C1_CONTROL_CHARS_RE.sub("", text)
+
+
+def _strip_markup(text: str, *, fold: bool) -> str:
+    """Strip markup, decode entities, and strip what the decoding exposed.
+
+    Decoding used to be the LAST step, so ``&lt;script&gt;`` went in as text
+    and came out as a live ``<script>``; with ``fold`` (``sanitize_text``) the
+    NFKC fold ran after the strip too, so fullwidth ``＜script＞`` did the
+    same. Each pass now folds, strips, then decodes, and repeats while the
+    decode changed anything. The first pass strips every ``<…>`` (what the
+    caller typed, unchanged behaviour); later passes strip only what a browser
+    reads as a tag, so decoded prose such as ``1 &lt; 2 and 3 &gt; 2`` keeps
+    its middle.
+    """
+    out = text
+    for depth in range(_MAX_MARKUP_PASSES):
+        if fold:
+            out = _fold_text(out)
+        out = _strip_tag_spans(_strip_blocks(out), _REAL_TAG_RE if depth else _TAG_RE)
+        # Decode any HTML entities that were smuggled in, so the storage is
+        # canonicalized and downstream escaping only happens once.
+        decoded = html.unescape(out)
+        if decoded == out:
+            return out
+        out = decoded
+    # Encoded deeper than any real text: strip what the last decode exposed
+    # and leave the rest encoded, where it is inert.
+    if fold:
+        out = _fold_text(out)
+    return _strip_tag_spans(_strip_blocks(out), _REAL_TAG_RE)
 
 
 def _is_tag(ch: str) -> bool:
@@ -438,11 +567,7 @@ def sanitize_text(text: Any, max_length: int = 0) -> str:
     s = str(text)
     if not s:
         return ""
-    s = strip_tags(s)
-    s = unicodedata.normalize("NFKC", s)
-    s = strip_invisible(s)
-    s = _CONTROL_CHARS_RE.sub("", s)
-    s = _C1_CONTROL_CHARS_RE.sub("", s)
+    s = _fold_text(_strip_markup(s, fold=True))
     s = _MULTI_SPACE_RE.sub(" ", s)
     s = _MULTI_NEWLINE_RE.sub("\n\n", s)
     s = s.strip()

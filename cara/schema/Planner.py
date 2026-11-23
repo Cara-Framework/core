@@ -51,7 +51,6 @@ from cara.schema.Objects import (
     missing_indexes,
     orphaned_checks,
     orphaned_indexes,
-    orphaned_tables,
 )
 from cara.schema.Operation import (
     ADDITIVE,
@@ -62,6 +61,7 @@ from cara.schema.Operation import (
     Operation,
     sort_operations,
 )
+from cara.schema.OrphanedTables import orphaned_tables
 from cara.schema.PartitionDrift import partition_refusals
 from cara.schema.Vocabulary import (
     DB_INT_RANK,
@@ -148,7 +148,6 @@ def plan(
             )
             continue
 
-
         renames = _declared_renames(model)
         for new_name, old_name in sorted(renames.items()):
             if old_name in live_columns and new_name not in live_columns:
@@ -189,8 +188,15 @@ def plan(
                         refusals.append(f"{table}.{new_name}: {refusal}")
 
         renamed_away = {old for new, old in renames.items() if old in live_columns}
+        # A rename target whose old column this database never had is a plain ADD.
+        renamed_now = {
+            new: old
+            for new, old in renames.items()
+            if old in live_columns and new not in live_columns
+        }
+        added_now = set(declared) - set(live_columns) - set(renamed_now)
 
-        for name in sorted(set(declared) - set(live_columns) - set(renames)):
+        for name in sorted(added_now):
             try:
                 operations.extend(_add_column(table, name, declared))
             except SchemaPlanRefused as refusal:
@@ -241,12 +247,6 @@ def plan(
         operations.extend(missing_checks(model, table, live))
         # Columns this plan adds or renames: a declared CHECK naming one is
         # never called unchanged just because the probe could not spell it.
-        renamed_now = {
-            new: old
-            for new, old in renames.items()
-            if old in live_columns and new not in live_columns
-        }
-        added_now = set(declared) - set(live_columns) - set(renames)
         operations.extend(changed_checks(model, table, live, renamed_now, added_now))
         operations.extend(orphaned_checks(model, table, live))
         # A trigger or function whose BODY changed under its name.

@@ -12,7 +12,9 @@ random empty/wrong responses under concurrent load.
 
 Fix: all per-request state is now kept in local variables and passed through
 closures / function arguments. The conductor instance carries only the
-application reference and router (both immutable across requests).
+application reference, the router (both immutable across requests) and the
+resolved route middleware stacks, which are derived from registration state
+and hold nothing of any request.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from cara.exceptions import MiddlewareNotFoundException
+from cara.conductors._MiddlewareStackCache import _MiddlewareStackCache
 from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware.http import ResetHttpAuth
@@ -43,6 +45,29 @@ class HttpConductor:
         """Initialize conductor with application instance."""
         self.application = application
         self.router = None
+        # Resolved, ordered middleware stacks (see ``_MiddlewareStackCache``).
+        self._stacks = _MiddlewareStackCache()
+
+    def _stack_cache(self) -> _MiddlewareStackCache:
+        # Through ``vars(self)`` so a conductor assembled without ``__init__``
+        # (``__new__`` in tests and tooling) still caches.
+        return vars(self).setdefault("_stacks", _MiddlewareStackCache())
+
+    def _reset_auth(self) -> ResetHttpAuth:
+        """The one ``ResetHttpAuth`` this conductor runs after every request.
+
+        It holds nothing but the application, so building one per request
+        was pure allocation. Rebuilt only if the application (or the class,
+        as a test may swap it) changed since.
+        """
+        reset = vars(self).get("_reset_auth_instance")
+        if (
+            reset is None
+            or type(reset) is not ResetHttpAuth
+            or getattr(reset, "application", None) is not self.application
+        ):
+            reset = vars(self)["_reset_auth_instance"] = ResetHttpAuth(self.application)
+        return reset
 
     async def handle(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         """
@@ -91,12 +116,12 @@ class HttpConductor:
             Route matching, route-specific middleware and controller dispatch.
             """
             # Route matching happens AFTER global middleware (Laravel style)
-            try:
-                route = self.router.find(req.path, req.method)
-                req.set_route(route).load_params(route.set_params_from_path(req.path))
-            except Exception:
-                # If route not found or method not allowed, let exception handler deal with it
-                raise
+            # Not-found and method-not-allowed propagate to the exception
+            # handler. The match that found the route captured its
+            # parameters; they stay with this request, never on the
+            # shared ``Route``.
+            route, params = self.router.find_with_params(req.path, req.method)
+            req.set_route(route).load_params(params)
 
             async def route_dispatch(r: Request) -> Response:
                 """Dispatch to controller and handle the result."""
@@ -170,7 +195,7 @@ class HttpConductor:
         so no route-specific filtering is needed here.
         """
         capsule = self.application.make("middleware_http")
-        return capsule.get_global_middleware()
+        return self._stack_cache().global_stack(capsule)
 
     def get_route_middleware(self, route):
         """
@@ -179,21 +204,17 @@ class HttpConductor:
         Sort order is left to ``MiddlewareCapsule.sort_by_priority`` so
         global / route conflict resolution stays in the capsule's
         contract, not duplicated here.
+
+        The ordered stack is resolved once per declaration and capsule
+        registration version (see ``_MiddlewareStackCache``).
         """
         capsule = self.application.make("middleware_http")
-        route_middleware = []
+        return self._stack_cache().route_stack(capsule, route.get_middleware())
 
-        for mw in route.get_middleware():
-            resolved = capsule.resolve_middleware(mw)
-            if resolved is None:
-                raise MiddlewareNotFoundException(
-                    f"Middleware alias or group '{mw}' could not be resolved."
-                )
-            if isinstance(resolved, list):
-                route_middleware.extend(resolved)
-            else:
-                route_middleware.append(resolved)
-        return capsule.sort_by_priority(route_middleware)
+    @staticmethod
+    def _resolve_route_middleware(capsule, declared: tuple) -> list:
+        """Resolve and order a route's declared middleware through the capsule."""
+        return _MiddlewareStackCache.resolve_route_middleware(capsule, declared)
 
     async def _run_terminable_middleware(
         self,
@@ -214,9 +235,8 @@ class HttpConductor:
         per-request isolation.
         """
         # CRITICAL: Always run auth cache cleanup first
-        reset_auth_middleware = ResetHttpAuth(self.application)
         try:
-            await reset_auth_middleware.terminate(request, response)
+            await self._reset_auth().terminate(request, response)
         except Exception as e:
             Log.error("Critical error in auth cache cleanup: %s", e, exc_info=True)
 

@@ -7,7 +7,6 @@ It configures Loguru through Cara's channel system and provides centralized logg
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from cara.configuration import config
@@ -90,13 +89,9 @@ class LoggerProvider(Provider):
         This ensures all logs go through Cara's formatting system consistently.
         """
 
-        # Install Cara loggers for all external libraries
-        # This replaces their Python loggers with Cara-compatible adapters
-        install_cara_loggers()
-
-        # Also configure some basic Python logging settings for compatibility
-        logging.basicConfig(level=logging.WARNING, force=True)
-
-        # Ensure root logger doesn't interfere
-        logging.getLogger().handlers.clear()
-        logging.getLogger().addHandler(logging.NullHandler())
+        # One pipeline for every stdlib logger: the root bridge replaces the
+        # handlers ``basicConfig`` / a library left on the root (it used to
+        # be a ``NullHandler`` that discarded every product logger's record)
+        # and sets the third-party default level. It must run LAST: a later
+        # ``basicConfig(force=True)`` would remove the bridge again.
+        install_cara_loggers(config("logging.python_levels", None))

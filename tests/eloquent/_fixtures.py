@@ -22,3 +22,9 @@ def install_fake_psycopg2(monkeypatch, connect_factory) -> types.ModuleType:
     fake.OperationalError = type("OperationalError", (Exception,), {})
     monkeypatch.setitem(sys.modules, "psycopg2", fake)
     return fake
+
+
+def pool_of(connection):
+    """The ``PostgresPool`` a ``PostgresConnection`` checks out of: the one
+    keyed on its configured name and resolved DSN/session options."""
+    return connection._pool(connection._connect_kwargs())

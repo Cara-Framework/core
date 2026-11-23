@@ -7,6 +7,13 @@ so status and duration reflect the final response (including downstream
 middleware mutations). Every write goes through a fire-and-forget thread —
 a slow log INSERT must never extend the user-visible latency of a request.
 
+Rows are buffered and written in batches (``insert_many`` on the store): a
+thread hop and an INSERT per request cost more than the request they record
+on a busy worker. A batch leaves when it reaches :attr:`BATCH_SIZE` rows or
+:attr:`FLUSH_INTERVAL_SECONDS` after its first row, and whatever is buffered
+is written — and every pending write awaited — when the application shuts
+down cleanly (``lifespan.shutdown``), so a deploy loses no rows.
+
 Probe endpoints are skipped so the log does not fill with orchestrator noise.
 The framework default is ``("/health", "/metrics")``; an application widens it
 through ``logging.http_request_log_skip_prefixes``.
@@ -105,6 +112,18 @@ class PersistRequestLog(Middleware):
     # useful. Shared across subclasses by design (mutated, never rebound):
     # one process, one set of pending writes.
     _inflight_tasks: set[asyncio.Task] = set()
+
+    #: Rows per batch, and how long the first row of a batch may wait.
+    BATCH_SIZE = 100
+    FLUSH_INTERVAL_SECONDS = 0.25
+
+    # The rows not yet handed to a write, process-wide like the tasks above
+    # (mutated, never rebound). Middleware instances are built per request,
+    # so the buffer cannot live on one; ``_buffer_writer`` is the most recent
+    # instance, whose store writes the batch (every instance resolves the
+    # same binding).
+    _buffer: list[dict[str, Any]] = []
+    _buffer_state: dict[str, Any] = {"writer": None, "timer": None, "loop": None}
 
     @classmethod
     def _spawn(cls, coro: Any) -> None:
@@ -218,7 +237,7 @@ class PersistRequestLog(Middleware):
                 else None,
             }
             payload.update(self.extra_columns(request))
-            self._spawn(ExecutionContext.run_in_thread(self._insert, payload))
+            self._buffer_row(payload)
             cadence = self._cleanup_cadence()
             if self._should_run_cleanup(cleanup_every=cadence):
                 retention = self._retention_days()
@@ -229,6 +248,75 @@ class PersistRequestLog(Middleware):
             Log.debug(
                 f"PersistRequestLog skipped row: {exc}",
                 category=self.LOG_CATEGORY,
+            )
+
+    def _buffer_row(self, payload: dict[str, Any]) -> None:
+        """Queue one row; write the batch when it is full, else soon."""
+        cls = PersistRequestLog
+        cls._buffer.append(payload)
+        cls._buffer_state["writer"] = self
+        self._flush_at_shutdown_of(self.application)
+        if len(cls._buffer) >= max(1, int(self.BATCH_SIZE)):
+            cls._flush()
+            return
+        loop = asyncio.get_running_loop()
+        state = cls._buffer_state
+        # A timer armed on another loop (one that has since closed, as each
+        # ``asyncio.run`` does) will never fire; arm one on this loop.
+        if state["timer"] is None or state["loop"] is not loop:
+            state["loop"] = loop
+            state["timer"] = loop.call_later(self.FLUSH_INTERVAL_SECONDS, cls._flush)
+
+    @classmethod
+    def _flush(cls) -> None:
+        """Hand every buffered row to one background write."""
+        state = PersistRequestLog._buffer_state
+        timer = state["timer"]
+        state["timer"] = state["loop"] = None
+        if timer is not None:
+            timer.cancel()
+        writer = state["writer"]
+        rows = PersistRequestLog._buffer[:]
+        PersistRequestLog._buffer.clear()
+        if rows and writer is not None:
+            cls._spawn(ExecutionContext.run_in_thread(writer._insert_batch, rows))
+
+    @classmethod
+    async def flush_pending(cls) -> None:
+        """Write what is buffered and wait for every write still in flight.
+
+        Registered as a shutdown callback (see ``_flush_at_shutdown_of``):
+        the ASGI server runs it after the last request finished, so every
+        row a served request produced reaches the store before the process
+        exits. Write failures were already reported by the writes themselves.
+        """
+        cls._flush()
+        pending = list(PersistRequestLog._inflight_tasks)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    @classmethod
+    def _flush_at_shutdown_of(cls, application: Any) -> None:
+        """Register :meth:`flush_pending` on ``application``'s shutdown, once.
+
+        The lifespan conductor runs ``application._shutdown_callbacks`` on
+        ``lifespan.shutdown`` (the broadcaster registers its cleanup the same
+        way). An application object that takes no attribute (a test double)
+        simply gets no shutdown flush.
+        """
+        callback = PersistRequestLog.flush_pending
+        try:
+            callbacks = getattr(application, "_shutdown_callbacks", None)
+            if callbacks is None:
+                callbacks = []
+                application._shutdown_callbacks = callbacks
+            if callback not in callbacks:
+                callbacks.append(callback)
+        except AttributeError, TypeError:
+            Log.debug(
+                f"{cls.TABLE}: no shutdown hook on this application; "
+                "buffered rows are flushed on size and interval only",
+                category=cls.LOG_CATEGORY,
             )
 
     @staticmethod
@@ -256,28 +344,55 @@ class PersistRequestLog(Middleware):
         except TypeError:
             return cls.SKIP_PREFIXES
 
+    def _insert_batch(self, payloads: list[dict[str, Any]]) -> None:
+        """Write one batch (worker thread).
+
+        A store that overrides ``insert_many`` gets the whole batch in one
+        call. One that does not (``insert`` only — the port's default loops
+        it) is written row by row here, through :meth:`_insert`, so a single
+        failing row loses only itself, exactly as when each request wrote
+        its own row.
+        """
+        store = self._request_logs
+        insert_many = getattr(type(store), "insert_many", None)
+        if insert_many is None or insert_many is RequestLogStore.insert_many:
+            for payload in payloads:
+                if PersistRequestLog._table_missing:
+                    return
+                self._insert(payload)
+            return
+        try:
+            store.insert_many(payloads)
+        except Exception as exc:
+            self._report_write_failure(exc, rows=len(payloads))
+
     def _insert(self, payload: dict[str, Any]) -> None:
         try:
             self._request_logs.insert(payload)
         except Exception as exc:
-            # Relation missing? Trip the kill switch and emit ONE warning
-            # with the fix instruction so the worker log doesn't drown in a
-            # per-request stream of the same error.
-            if self._is_missing_table_error(exc):
-                if not PersistRequestLog._table_missing:
-                    PersistRequestLog._table_missing = True
-                    Log.warning(
-                        f"{self.TABLE} relation is missing — disabling "
-                        "PersistRequestLog for this process. Run "
-                        "`python craft migrate` to create it, then restart "
-                        "the application.",
-                        category=self.LOG_CATEGORY,
-                    )
-                return
-            Log.warning(
-                f"{self.TABLE} insert failed: {exc}",
-                category=self.LOG_CATEGORY,
-            )
+            self._report_write_failure(exc, rows=1)
+
+    def _report_write_failure(self, exc: Exception, *, rows: int) -> None:
+        """One warning per failed write; a missing relation trips the switch."""
+        # Relation missing? Trip the kill switch and emit ONE warning
+        # with the fix instruction so the worker log doesn't drown in a
+        # per-request stream of the same error.
+        if self._is_missing_table_error(exc):
+            if not PersistRequestLog._table_missing:
+                PersistRequestLog._table_missing = True
+                Log.warning(
+                    f"{self.TABLE} relation is missing — disabling "
+                    "PersistRequestLog for this process. Run "
+                    "`python craft migrate` to create it, then restart "
+                    "the application.",
+                    category=self.LOG_CATEGORY,
+                )
+            return
+        lost = "" if rows == 1 else f" ({rows} rows lost)"
+        Log.warning(
+            f"{self.TABLE} insert failed{lost}: {exc}",
+            category=self.LOG_CATEGORY,
+        )
 
     @classmethod
     def _is_missing_table_error(cls, exc: Exception) -> bool:

@@ -7,8 +7,11 @@ directory.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
+import stat
+import uuid
 from pathlib import Path, PurePosixPath
 
 from cara.exceptions import (
@@ -46,13 +49,47 @@ class FileDriver(StorageContract):
             ) from e
 
     def put(self, key: str, data: bytes) -> None:
+        """Store ``data`` under ``key``; the key holds the old bytes or the
+        new ones, never a mix.
+
+        Written to a sibling temp file and renamed over the key. Opening the
+        key itself with ``"wb"`` truncated it first: a reader during an
+        overwrite got an empty or half-written object (a scrubbed photo read
+        back mid-rewrite and cached upstream), and a write that failed
+        left the key empty instead of unchanged.
+        """
         file_path = self._file_path(key)
+        directory = os.path.dirname(file_path)
+        tmp_path = os.path.join(directory, f".tmp-{os.getpid()}-{uuid.uuid4().hex}")
         try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "wb") as f:
+            fd = self._create_in(directory, tmp_path)
+            with os.fdopen(fd, "wb") as f:
                 f.write(data)
+            # An overwrite keeps the permissions the key already had.
+            with contextlib.suppress(OSError):
+                os.chmod(tmp_path, stat.S_IMODE(os.stat(file_path).st_mode))
+            os.replace(tmp_path, file_path)
         except Exception as e:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
             raise StorageException(f"Failed to write data for key '{key}': {e}") from e
+
+    @staticmethod
+    def _create_in(directory: str, path: str) -> int:
+        """Create ``path`` (new, default permissions) inside ``directory``.
+
+        ``delete`` prunes a directory the moment it is empty, so a delete of
+        the last sibling can remove ``directory`` between the ``makedirs`` and
+        the create here — an upload racing the worker that discards the
+        previous import. Recreate it and try again instead of failing the put.
+        """
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        for _ in range(2):
+            os.makedirs(directory, exist_ok=True)
+            with contextlib.suppress(FileNotFoundError):
+                return os.open(path, flags, 0o666)
+        os.makedirs(directory, exist_ok=True)
+        return os.open(path, flags, 0o666)
 
     def get(self, key: str) -> bytes:
         file_path = self._file_path(key)

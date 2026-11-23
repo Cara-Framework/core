@@ -36,6 +36,13 @@ class SoftDeleteScope(BaseScope):
             action="delete",
         )
 
+        # A query UPDATE writes live rows only (see ``_update_live_rows``)
+        builder.set_global_scope(
+            "_soft_delete_update",
+            self._update_live_rows,
+            action="update",
+        )
+
         # Register convenience methods
         builder.macro("with_trashed", self._with_trashed)
         builder.macro("only_trashed", self._only_trashed)
@@ -47,6 +54,7 @@ class SoftDeleteScope(BaseScope):
         """Remove soft delete scopes when disabled."""
         builder.remove_global_scope("_soft_delete", action="select")
         builder.remove_global_scope("_soft_delete_delete", action="delete")
+        builder.remove_global_scope("_soft_delete_update", action="update")
 
     def _where_not_deleted(self, builder):
         """
@@ -159,6 +167,39 @@ class SoftDeleteScope(BaseScope):
         builder.set_action("update")
         return builder
 
+    def _update_live_rows(self, builder):
+        """
+        Keep a query UPDATE (``Model.where(...).update(...)``, ``increment``,
+        ``bulk_update``) off the rows in the trash.
+
+        SELECT and DELETE were scoped, UPDATE was not: a model query could
+        not SEE a soft-deleted row and could not delete it twice, yet it
+        rewrote it — a "deactivate every listing of this product" also
+        edited the listings deleted last year, and a restore brought them
+        back carrying a change nobody made to a live row. Laravel's scope
+        covers every statement of the builder; this closes the gap.
+
+        Gated exactly like the delete scope (``_soft_delete_query``):
+
+        * a loaded instance's own ``update()`` / ``save()`` stays keyed to
+          its primary key alone, so an instance read ``with_trashed()`` can
+          still be edited;
+        * ``with_trashed()`` and ``only_trashed()`` drop the select scope,
+          which is what this reads — the first then writes every row, the
+          second only the trashed ones (its own ``where_not_null``);
+        * ``restore()`` drops the select scope before its UPDATE, and a
+          force delete never compiles an UPDATE.
+
+        A soft delete itself does not pass here: scopes are picked for the
+        action a statement STARTS with, and that one starts as a delete.
+        """
+        model = getattr(builder, "_model", None)
+        if bool(model) and model.is_loaded():
+            return builder
+        if "_soft_delete" in builder._global_scopes.get("select", {}):
+            self._where_not_deleted(builder)
+        return builder
+
     def _force_delete(self, model, builder):
         """
         Permanently delete a record, bypassing soft delete.
@@ -193,7 +234,7 @@ class SoftDeleteScope(BaseScope):
         permanently retires the shared-dict mutation hazard rather than
         relying on the per-builder copy in ``QueryBuilder.__init__``.)
         """
-        drop = {"_soft_delete", "_soft_delete_delete"}
+        drop = {"_soft_delete", "_soft_delete_delete", "_soft_delete_update"}
         builder._global_scopes = {
             action: {name: fn for name, fn in scopes.items() if name not in drop}
             for action, scopes in builder._global_scopes.items()

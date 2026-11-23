@@ -138,11 +138,11 @@ class Mail:
         was indistinguishable from a sent one. §9 fail-closed: a mail that
         was never queued must be loud at the dispatch site.
         """
-        # Create a job to send the mailable
-
-        job = SendMailableJob(mailable, driver_name)
-
-        # Dispatch to queue using facade
+        # The job carries the built message as plain data; a mailable that
+        # cannot be expressed that way is refused here, naming the field.
+        job = SendMailableJob.for_mailable(
+            mailable, driver_name, application=self.application
+        )
         Queue.dispatch(job)
         return True
 

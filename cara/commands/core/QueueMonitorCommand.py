@@ -66,8 +66,15 @@ class QueueMonitorCommand(CommandBase):
                 f"{pendulum.now('UTC').format('YYYY-MM-DD HH:mm:ss')} UTC\n"
             )
 
+            # One grouped query for every queue's tracker counts, not five
+            # counts per queue.
+            counts = store.count_jobs_by_queue_and_status(
+                queues=sorted(queues), created_at_gte=cutoff_24h
+            )
             for queue_name in sorted(queues):
-                self._display_queue_stats(store, queue_name, int(limit), cutoff_24h)
+                self._display_queue_stats(
+                    store, queue_name, int(limit), cutoff_24h, counts.get(queue_name, {})
+                )
 
             self._display_overall_health(store, cutoff_24h, cutoff_1h)
             self._display_dead_letter_ledger(store, queue)
@@ -90,24 +97,20 @@ class QueueMonitorCommand(CommandBase):
         queue_name: str,
         limit: int,
         cutoff_24h,
+        counts: dict[str, tuple[int, int]],
     ) -> None:
-        pending = store.count_jobs(queue=queue_name, status=store.TRACKER_STATUS_PENDING)
-        processing = store.count_jobs(
-            queue=queue_name, status=store.TRACKER_STATUS_PROCESSING
-        )
-        completed = store.count_jobs(
-            queue=queue_name,
-            status=store.TRACKER_STATUS_SUCCESS,
-            created_at_gte=cutoff_24h,
-        )
-        failed = store.count_jobs(
-            queue=queue_name,
-            status=store.TRACKER_STATUS_FAILED,
-            created_at_gte=cutoff_24h,
-        )
-        retrying = store.count_jobs(
-            queue=queue_name, status=store.TRACKER_STATUS_RETRYING
-        )
+        def _all(status: str) -> int:
+            return counts.get(status, (0, 0))[0]
+
+        def _recent(*statuses: str) -> int:
+            return sum(counts.get(status, (0, 0))[1] for status in statuses)
+
+        pending = _all(store.TRACKER_STATUS_PENDING)
+        processing = _all(store.TRACKER_STATUS_PROCESSING)
+        # Both success words are the one outcome (``TRACKER_SUCCESS_STATUSES``).
+        completed = _recent(*store.TRACKER_SUCCESS_STATUSES)
+        failed = _recent(store.TRACKER_STATUS_FAILED)
+        retrying = _all(store.TRACKER_STATUS_RETRYING)
 
         total = completed + failed
         failure_rate = (failed / max(total, 1)) * 100

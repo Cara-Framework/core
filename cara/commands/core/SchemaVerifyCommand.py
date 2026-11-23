@@ -40,15 +40,12 @@ the repository, and the place to prove it is a disposable database.
 
 from __future__ import annotations
 
-import cara.schema.Scratch as Scratch
 from cara.commands.CommandBase import CommandBase
 from cara.configuration import config, is_production_environment
 from cara.decorators import command
+from cara.exceptions import ScratchDatabaseException
+from cara.schema import Scratch
 from cara.support import base_path
-
-#: Scratch names are interpolated into DDL as identifiers; keep them boring
-#: instead of quoting our way around exotic ones.
-_SAFE_DB_NAME = Scratch.SAFE_DB_NAME
 
 #: ``schema:check``'s exit code for drift; 2 is "could not check".
 _DRIFT = 1
@@ -116,17 +113,12 @@ class SchemaVerifyCommand(CommandBase):
             return 2
 
         scratch = self.option("database") or _derive_scratch_name(params["database"])
-        if scratch == params["database"]:
-            self.error(
-                f"Scratch database '{scratch}' is the configured database "
-                f"itself — refusing to drop it."
-            )
-            return 2
-        if not _SAFE_DB_NAME.match(scratch):
-            self.error(
-                f"Scratch database name '{scratch}' is not a plain lowercase "
-                f"identifier — refusing to interpolate it into DDL."
-            )
+        # One rule set with ``schema:plan --rehearse``, including the 63-byte
+        # cut that could make a derived scratch name the configured one.
+        try:
+            Scratch.validate_name(scratch, params["database"])
+        except ScratchDatabaseException as exc:
+            self.error(str(exc))
             return 2
 
         self.info(f"Scratch database: {scratch}")

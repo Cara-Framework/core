@@ -77,6 +77,26 @@ def matches(token: str, public_id: str, email: str, secret: str) -> bool:
     # Bytes, not ``str``: the token arrives from a query string, and
     # ``compare_digest`` raises ``TypeError`` on a non-ASCII ``str`` — a
     # mangled link would surface as a 500 instead of "not valid".
-    return hmac.compare_digest(
-        str(token).encode("utf-8"), mint(public_id, email, secret).encode("utf-8")
-    )
+    presented = str(token).encode("utf-8")
+    valid = False
+    # Every key is compared (no short-circuit), so timing says nothing about
+    # which one — if any — matched.
+    for key in _verification_keys(secret):
+        valid |= hmac.compare_digest(
+            presented, mint(public_id, email, key).encode("utf-8")
+        )
+    return valid
+
+
+def _verification_keys(secret: str) -> tuple[str, ...]:
+    """The raw secret, plus its whitespace-stripped form when it differs.
+
+    ``mint`` keys by the RAW secret (the frozen format, and what every
+    product issuer passes). ``MailChannel`` once stripped surrounding
+    whitespace before signing while every verifier used the raw value, so
+    with a secret carrying a trailing newline (a mounted secret file) each
+    of its links failed. Those links are already in mailboxes; accepting the
+    stripped key here keeps them working without re-keying anyone else's.
+    Both keys derive from the same secret, so nothing forgeable is added.
+    """
+    return tuple(key for key in dict.fromkeys((secret, secret.strip())) if key)

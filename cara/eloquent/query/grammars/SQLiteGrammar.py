@@ -125,6 +125,20 @@ class SQLiteGrammar(BaseGrammar):
     def value_string(self):
         return "'{value}'{separator}"
 
+    def expression_literal(self, text: str) -> str:
+        """A literal holding ``?`` is written without the character
+        (``('a' || char(63) || 'b')``), so the connection's ``'?'`` → ``?``
+        placeholder rewrite cannot mistake part of it for a binding. SQLite
+        has no escape-string form; the concatenation is TEXT with no
+        affinity, as the plain literal is. ``%`` needs nothing here: sqlite3
+        binds by ``?`` and never reads it. Any other literal keeps the plain
+        form, byte for byte.
+        """
+        if "?" not in text:
+            return super().expression_literal(text)
+        plain = super().expression_literal
+        return "(" + " || char(63) || ".join(map(plain, text.split("?"))) + ")"
+
     def join_string(self):
         return "{keyword} {foreign_table}{alias} {on}"
 

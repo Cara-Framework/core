@@ -8,14 +8,13 @@ triggers the leaky path and asserts the resource has been released.
 from __future__ import annotations
 
 import importlib
-import threading
 from unittest.mock import MagicMock
 
 import pytest
 
-from cara.eloquent.connections import SQLiteConnection
+from cara.eloquent.connections import PostgresPool, SQLiteConnection
 
-from ._fixtures import install_fake_psycopg2
+from ._fixtures import install_fake_psycopg2, pool_of
 
 # Resolve the *module* (not the class re-exported by the package __init__).
 PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
@@ -118,11 +117,7 @@ def test_create_connection_closes_cursor_when_healthcheck_execute_raises(
     fresh_conn = MagicMock(name="fresh_conn")
     install_fake_psycopg2(monkeypatch, connect_factory=lambda **kw: fresh_conn)
 
-    # Reset the module-level pool / semaphore so this test is hermetic.
-    monkeypatch.setattr(PGModule, "CONNECTION_POOL", [stale_conn])
-    monkeypatch.setattr(PGModule, "_pool_initialized", True)
-    monkeypatch.setattr(PGModule, "_pool_semaphore", threading.Semaphore(4))
-
+    PostgresPool.reset_all(close=False)  # hermetic: no pool from another test
     pc = PostgresConnection(
         host="x",
         database="x",
@@ -134,8 +129,12 @@ def test_create_connection_closes_cursor_when_healthcheck_execute_raises(
             "connection_pooling_max_size": 100,
         },
     )
+    pool_of(pc).warm(lambda: stale_conn, 1)  # pre-warmed: probed on checkout
 
-    returned = pc.create_connection()
+    try:
+        returned = pc.create_connection()
+    finally:
+        PostgresPool.reset_all(close=False)
 
     assert returned is fresh_conn, (
         "create_connection should fall through to a fresh connect after "

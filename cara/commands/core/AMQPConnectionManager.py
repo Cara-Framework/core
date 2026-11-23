@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import sys
 
@@ -42,10 +41,7 @@ class AMQPConnectionManager:
                     # than much later in the consumer loop.
                     self.connection.process_data_events(time_limit=0)
                 except Exception:
-                    with contextlib.suppress(
-                        OSError, RuntimeError, AttributeError, ConnectionError
-                    ):
-                        self.connection.close()
+                    self._close_quietly()
                     self.connection = None
 
             if self.connection is None or self.connection.is_closed:
@@ -106,5 +102,24 @@ class AMQPConnectionManager:
     def close(self):
         """Clean up connection."""
         if self.connection and not self.connection.is_closed:
-            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
-                self.connection.close()
+            self._close_quietly()
+
+    def _close_quietly(self) -> None:
+        """Close the connection; one that cannot be closed is already gone.
+
+        pika raises its OWN family from ``close()``: ``StreamLostError`` when
+        the stream died under a connection that still reads open,
+        ``ConnectionWrongStateError`` once it has noticed. They are
+        ``AMQPError`` subclasses of ``Exception``, not of ``OSError`` or
+        ``ConnectionError``, so the narrow lists that stood here let them
+        through: ``close()`` raised out of its caller's teardown, and the
+        liveness probe in ``ensure_connection`` reported a failed connect
+        instead of reconnecting. The stdlib logger, not the facade: a close
+        must not depend on the container still resolving one.
+        """
+        try:
+            self.connection.close()
+        except Exception as exc:
+            _logger.warning(
+                "RabbitMQ connection did not close cleanly; dropping it: %r", exc
+            )

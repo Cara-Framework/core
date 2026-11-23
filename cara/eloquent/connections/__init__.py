@@ -4,14 +4,15 @@ from cara._LazyExports import _install_lazy_exports
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "BaseConnection": (".BaseConnection", "BaseConnection"),
-    "CONNECTION_POOL": (".PostgresConnection", "CONNECTION_POOL"),
     "ConnectionFactory": (".ConnectionFactory", "ConnectionFactory"),
     "ConnectionResolver": (".ConnectionResolver", "ConnectionResolver"),
     "PostgresConnection": (".PostgresConnection", "PostgresConnection"),
+    "PostgresPool": (".PostgresPool", "PostgresPool"),
     "PostgresScopedReads": (".PostgresScopedReads", "PostgresScopedReads"),
     "SQLiteConnection": (".SQLiteConnection", "SQLiteConnection"),
     "begin_in_snapshot": (".PostgresReadSnapshot", "begin_in_snapshot"),
     "build_relations": (".PostgresReadSnapshot", "build_relations"),
+    "database_pool_stats": (".PostgresPool", "database_pool_stats"),
     "lookup_keys": (".PostgresReadSnapshot", "lookup_keys"),
     "open_session": (".PostgresReadSnapshot", "open_session"),
     "regexp": (".SQLiteConnection", "regexp"),
@@ -21,14 +22,15 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 
 __all__ = [
     "BaseConnection",
-    "CONNECTION_POOL",
     "ConnectionFactory",
     "ConnectionResolver",
     "PostgresConnection",
+    "PostgresPool",
     "PostgresScopedReads",
     "SQLiteConnection",
     "begin_in_snapshot",
     "build_relations",
+    "database_pool_stats",
     "lookup_keys",
     "open_session",
     "regexp",

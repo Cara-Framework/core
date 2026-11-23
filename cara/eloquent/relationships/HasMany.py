@@ -19,15 +19,18 @@ class HasMany(BaseRelationship):
         return self
 
     def _resolve(self, instance):
-        """Laravel behavior: ``model.posts`` is a Collection, not a builder."""
-        return (
-            self.get_builder()
-            .where(
-                self.foreign_key,
-                instance.__attributes__[self.local_key],
-            )
-            .get()
-        )
+        """Laravel behavior: ``model.posts`` is a Collection, not a builder.
+
+        A NULL local key relates to nothing (``NULL = NULL`` is not true in
+        SQL). ``where(col, None)`` compiles to ``IS NULL``, so a parent
+        without the key used to receive every ORPHAN child of the table —
+        an unbounded read of rows that are not its own.
+        """
+        local_value = instance.__attributes__[self.local_key]
+        if local_value is None:
+            return Collection([])
+
+        return self.get_builder().where(self.foreign_key, local_value).get()
 
     def register_related(self, key, model, collection):
         # ``group_by`` keeps each group as a plain list, so a parent with
@@ -49,12 +52,19 @@ class HasMany(BaseRelationship):
         if callback:
             callback(builder)
         if isinstance(relation, Collection):
+            keys = self._eager_keys(relation)
+            if keys.is_empty():
+                return Collection([])
             return builder.where_in(
                 f"{builder.get_table_name()}.{self.foreign_key}",
-                Collection(relation._get_value(self.local_key)).unique(),
+                keys,
             ).get()
 
+        local_value = getattr(relation, self.local_key)
+        if local_value is None:
+            # See ``_resolve``: a NULL key matches no child, and needs no query.
+            return Collection([])
         return builder.where(
             f"{builder.get_table_name()}.{self.foreign_key}",
-            getattr(relation, self.local_key),
+            local_value,
         ).get()

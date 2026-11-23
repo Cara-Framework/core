@@ -143,7 +143,9 @@ def build_relations(
         for name, table, sql, bound in orders:
             keys = lookup_keys(_indexes_of(connection, cursor, name), bound)
             builds.extend(_build(table, sql, keys))
-        opened = _UNGUARD if reopened else f"{_REOPEN}; SET TRANSACTION SNAPSHOT '{exported}'"
+        opened = (
+            _UNGUARD if reopened else f"{_REOPEN}; SET TRANSACTION SNAPSHOT '{exported}'"
+        )
         cursor.execute("; ".join([opened, *builds, _GUARDED]))
     finally:
         with contextlib.suppress(Exception):
@@ -165,6 +167,8 @@ def _twin(owner: Any) -> Any:
         name=owner.name,
     )
     twin.schema = owner.schema
+    # Same configured connection, so the twin draws on the owner's pool.
+    twin.connection_name = owner.connection_name
     return twin
 
 

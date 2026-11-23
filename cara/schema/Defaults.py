@@ -102,7 +102,23 @@ def defaults_match(declared: str | None, live: str | None) -> bool:
     """
     if declared is None or live is None:
         return declared is None and live is None
+    declared_text, live_text = _quoted_text(declared), _quoted_text(live)
+    if declared_text is not None and live_text is not None:
+        # Both sides wrote a quoted literal: a TEXT default, compared as
+        # text. The numeric reading below made ``'01'`` equal ``'1'``, so a
+        # model changing a zero-padded code's default left the column on
+        # the old one with both gates green. A quoted number against a bare
+        # one (``'-1'::integer`` vs ``-1``) is still a value comparison.
+        return declared_text == live_text
     return _canonical(declared) == _canonical(live)
+
+
+def _quoted_text(sql: str) -> str | None:
+    """The string a quoted literal default spells, or None for anything else."""
+    text = live_default_sql(sql) or ""
+    if len(text) >= 2 and text.startswith("'") and text.endswith("'"):
+        return text[1:-1].replace("''", "'")
+    return None
 
 
 def _raw_default_value(source):

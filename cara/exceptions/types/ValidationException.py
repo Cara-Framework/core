@@ -63,7 +63,7 @@ class ValidationException(CaraException):
         if self.validation_errors is None:
             return
 
-        # Case 1: RouteParameterValidator dict structure
+        # Case 1: a plain ``{field: [messages]}`` dict
         if isinstance(self.validation_errors, dict):
             self._analyze_dict_structure()
 
@@ -74,19 +74,10 @@ class ValidationException(CaraException):
             self._analyze_validation_object()
 
     def _analyze_dict_structure(self) -> None:
-        """Analyze dict-based validation errors (like RouteParameterValidator)."""
+        """Analyze a plain ``{field: [messages]}`` dict of errors."""
         validation_dict = self.validation_errors
-
-        if "route_parameter_validation_failed" in validation_dict:
-            # RouteParameterValidator format
-            if "first_error" in validation_dict and validation_dict["first_error"]:
-                self._extracted_message = validation_dict["first_error"]
-            if "errors" in validation_dict and validation_dict["errors"]:
-                self._extracted_errors = validation_dict["errors"]
-        else:
-            # Regular dict of errors
-            self._extracted_errors = validation_dict
-            self._extract_first_error_from_dict(validation_dict)
+        self._extracted_errors = validation_dict
+        self._extract_first_error_from_dict(validation_dict)
 
     def _analyze_validation_object(self) -> None:
         """Analyze the canonical ``ValidationErrors`` protocol."""

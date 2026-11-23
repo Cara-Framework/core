@@ -27,7 +27,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import all_nodes, parse, python_files, relpath
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -70,6 +70,13 @@ _FORBIDDEN_BARREL_MEMBERS = {
     "commons": frozenset({"gates", "models"}),
 }
 
+#: The framework's own container globals, called with no receiver:
+#: ``cara.foundation.resolve`` and ``cara.helpers.app``. The lookup check keyed
+#: on a ``.resolve`` / ``.make`` SUFFIX, so ``self.resolve("XRepository")`` was
+#: a finding while the documented global ``resolve("XRepository")`` — the same
+#: container, one import away — was not.
+_CONTAINER_GLOBALS = frozenset({"resolve", "app"})
+
 
 def _is_edge_path(path: Path, edge_layers: frozenset[str]) -> bool:
     parts = path.parts
@@ -100,11 +107,29 @@ def _call_name(node: ast.AST) -> str:
     return ""
 
 
-def _hits(tree: ast.Module) -> list[tuple[int, str]]:
+def _absolute_module(rel: str, node: ast.ImportFrom) -> str:
+    """The dotted module an ``ImportFrom`` targets, relative forms resolved.
+
+    The forbidden prefixes are absolute names, so ``from ...repositories
+    import X`` inside ``app/controllers/shop/`` read as the module
+    ``repositories`` and matched nothing: the same reach as ``from
+    app.repositories import X``, invisible because of how it was spelled.
+    Resolved against the file's own deployable-relative package, the way
+    ``DomainOwnership`` already does.
+    """
+    module = node.module or ""
+    if not node.level:
+        return module
+    package = list(Path(rel).with_suffix("").parts[:-1])
+    keep = max(0, len(package) - node.level + 1)
+    return ".".join([*package[:keep], *(module.split(".") if module else [])])
+
+
+def _hits(tree: ast.Module, rel: str) -> list[tuple[int, str]]:
     hits: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in all_nodes(tree):
         if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
+            module = _absolute_module(rel, node)
             if _forbidden_import(module):
                 if _is_name_judged(module) and not _binds_model_class(node.names):
                     continue  # pure helper from the foundation layer
@@ -133,7 +158,9 @@ def _hits(tree: ast.Module) -> list[tuple[int, str]]:
                     )
         elif isinstance(node, ast.Call):
             name = _call_name(node.func)
-            if name.endswith((".resolve", ".make")) and node.args:
+            if (
+                name in _CONTAINER_GLOBALS or name.endswith((".resolve", ".make"))
+            ) and node.args:
                 target = node.args[0]
                 if (
                     isinstance(target, ast.Constant)
@@ -171,7 +198,7 @@ class FlowLaw:
                 tree = parse(path)
                 if tree is None:
                     continue
-                violations = _hits(tree)
+                violations = _hits(tree, rel)
                 if violations:
                     found[rel] = violations
 

@@ -18,7 +18,9 @@ from .Sources import (
     _imports,
     _lazy_exports,
     _parameter_annotation,
+    _parse_source,
     _simple_name,
+    _statements,
     _subscript_base,
     _top_level,
 )
@@ -88,7 +90,9 @@ class SourceIndex:
         resolved = path.resolve()
         if resolved in self._by_path:
             return self._by_path[resolved]
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        # By its resolved path: the tree the other extractors of this build
+        # already parsed, whichever spelling (a symlinked ``cara``) led here.
+        tree = _parse_source(resolved)
         package = name if path.name == "__init__.py" else name.rpartition(".")[0]
         functions: dict = {}
         classes: dict = {}
@@ -294,7 +298,8 @@ class SourceIndex:
         if receiver is None:
             return []
         values: list[SourceClass | None] = []
-        for node in ast.walk(function):
+        # An assignment is a statement: the expressions between them hold none.
+        for node in _statements(function):
             targets = (
                 node.targets
                 if isinstance(node, ast.Assign)

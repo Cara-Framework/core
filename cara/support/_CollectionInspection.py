@@ -64,6 +64,10 @@ def _collection_first(self, callback=None, default=None):
     if not filtered:
         return default if default is not None else None
 
+    # A keyed collection (``group_by`` / ``key_by`` / ``count_by``) has no
+    # index 0: ``filtered[0]`` was a KeyError. Its first item is its first value.
+    if isinstance(filtered._items, dict):
+        return next(iter(filtered._items.values()))
     return filtered[0]
 
 
@@ -88,6 +92,8 @@ def _collection_last(self, callback=None, default=None):
     if not filtered:
         return default if default is not None else None
 
+    if isinstance(filtered._items, dict):
+        return next(reversed(filtered._items.values()))
     return filtered[-1]
 
 
@@ -120,7 +126,10 @@ def _collection_sole(self, callback=None):
     return filtered[0]
 
 
-def _collection_first_where(self, key, operator="==", value=None):
+_NO_VALUE = object()
+
+
+def _collection_first_where(self, key, operator="==", value=_NO_VALUE):
     """
     Returns the first item where the given key's value matches the criteria.
 
@@ -134,9 +143,14 @@ def _collection_first_where(self, key, operator="==", value=None):
     Returns:
         The first matching item or None.
     """
-    if value is None and operator != "==":
-        value = operator
-        operator = "=="
+    # Two-argument form ``first_where(key, value)``: the value arrives in the
+    # operator slot. Told apart by an OMITTED value, not a ``None`` one —
+    # ``first_where("d", "!=", None)`` was rewritten to ``d == "!="``.
+    if value is _NO_VALUE:
+        if operator == "==":
+            value = None
+        else:
+            value, operator = operator, "=="
 
     filtered = self.where(key, operator, value)
     return filtered.first() if filtered else None
@@ -451,8 +465,8 @@ def _collection_diff(self, items):
     Returns:
         A new Collection instance with the differing items.
     """
-    items = self._get_items(items)
-    return self.__class__([x for x in self if x not in items])
+    present = self._member_test(self._get_items(items))
+    return self.__class__([x for x in self if not present(x)])
 
 
 def _collection_diff_assoc(self, items):

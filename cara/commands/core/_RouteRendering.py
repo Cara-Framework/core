@@ -509,6 +509,15 @@ def _route_build_route_instance(self, method: dict, class_name: str) -> str:
         middleware=method.get("middleware", []),
     )
 
+    if http_method == "head":
+        # ``Route`` has no ``head`` classmethod (``Route.get`` answers HEAD as
+        # well), yet the parser accepts ``@head(...)``: the emitted
+        # ``Route.head(...)`` raised AttributeError the moment the generated
+        # routes file was imported. A HEAD-only route is spelled through the
+        # factory every verb classmethod delegates to.
+        params.insert(2, '["head"]')
+        return f"Route.factory({', '.join(params)})"
+
     # Generate route instance
     params_str = ", ".join(params)
     route_method = "ws" if http_method == "ws" else http_method

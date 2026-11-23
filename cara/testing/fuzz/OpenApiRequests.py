@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -30,6 +31,21 @@ GENERIC_QUERY_KEYS = (
     "search",
     "q",
 )
+
+
+def _python_regex(pattern: str) -> bool:
+    """Whether ``pattern`` compiles as a Python regex.
+
+    ``st.from_regex`` is lazy: a JS-only pattern raised only at DRAW time, so
+    the broad ``except`` that wrapped it never ran and the operation's fuzz
+    run died instead of falling back to free text. Compiling up front, with
+    the one error a bad pattern raises, decides it where the fallback is.
+    """
+    try:
+        re.compile(pattern)
+    except re.error:
+        return False
+    return True
 
 
 class OpenApiRequests:
@@ -131,13 +147,10 @@ class OpenApiRequests:
         }
         if fmt in formats:
             return formats[fmt]()
-        if schema.get("pattern"):
-            try:
-                return st.from_regex(schema["pattern"], fullmatch=True).filter(
-                    lambda s: len(s) <= schema.get("maxLength", 2000)
-                )
-            except Exception:  # noqa: BLE001 - a JS-only regex falls back to free text.
-                pass
+        if schema.get("pattern") and _python_regex(schema["pattern"]):
+            return st.from_regex(schema["pattern"], fullmatch=True).filter(
+                lambda s: len(s) <= schema.get("maxLength", 2000)
+            )
         low = schema.get("minLength", 0)
         edges = [
             st.text(min_size=low, max_size=min(schema.get("maxLength", 40), low + 40))

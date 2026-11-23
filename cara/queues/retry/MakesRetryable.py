@@ -120,12 +120,18 @@ class MakesRetryable:
             Exception: The last exception after all retries exhausted,
                 or any non-retryable exception immediately.
         """
-        attempts = int(
-            max_attempts
-            if max_attempts is not None
-            else self.MAX_RETRY_ATTEMPTS
-            if self.MAX_RETRY_ATTEMPTS is not None
-            else self._retry_max_attempts()
+        # Floored at one: the body always runs once. ``JOBS_RETRY_MAX_ATTEMPTS=0``
+        # (an operator's "no retries") used to skip the loop entirely and raise
+        # "Unexpected exit from retry loop" without ever running the job.
+        attempts = max(
+            1,
+            int(
+                max_attempts
+                if max_attempts is not None
+                else self.MAX_RETRY_ATTEMPTS
+                if self.MAX_RETRY_ATTEMPTS is not None
+                else self._retry_max_attempts()
+            ),
         )
         delay = float(
             base_delay

@@ -28,6 +28,7 @@ from cara.architecture._ast_utils import (
     function_local_imports,
     parse,
     python_files,
+    read_source,
     relpath,
 )
 from cara.architecture.Finding import Finding
@@ -78,11 +79,19 @@ class InlineImports:
                 tree = parse(path)
                 if tree is None:
                     continue
-                source = path.read_text(encoding="utf-8")
+                local_imports = function_local_imports(tree)
+                if not local_imports:
+                    # The raw lines are only ever consulted for a ``# local:``
+                    # tag. Most files have no function-local import at all, and
+                    # every one of them used to be read a second time anyway.
+                    continue
+                source = read_source(path)
+                if source is None:
+                    continue
                 lines = source.splitlines()
                 rel = relpath(path, manifest.roots.deployable)
                 in_envelopes = any(d.resolve() in resolved.parents for d in envelope_dirs)
-                for node in function_local_imports(tree):
+                for node in local_imports:
                     start = max(node.lineno - 1, 0)
                     end = min(node.end_lineno or node.lineno, len(lines))
                     import_lines = lines[start:end]

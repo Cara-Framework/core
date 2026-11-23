@@ -19,6 +19,17 @@ class JobClassResolver:
         "cara.queues",
     )
 
+    #: The framework's own queued jobs. Always trusted on top of the
+    #: configured roots: a product's allowlist names ITS homes (``app.jobs``)
+    #: and never these, so ``Mail.queue()``, a ``ShouldQueue`` notification
+    #: or listener built a job its own worker refused to load. Exact modules,
+    #: not ``cara``: the rest of the framework stays outside the trust root.
+    _FRAMEWORK_JOB_MODULES = (
+        "cara.mail.jobs",
+        "cara.notifications.jobs",
+        "cara.events.jobs",
+    )
+
     @classmethod
     def allowed_prefixes(
         cls,
@@ -51,7 +62,7 @@ class JobClassResolver:
             raise QueueException(
                 "Queued-job module allowlist contains an invalid prefix."
             )
-        return normalized
+        return tuple(dict.fromkeys((*normalized, *cls._FRAMEWORK_JOB_MODULES)))
 
     @classmethod
     def resolve(

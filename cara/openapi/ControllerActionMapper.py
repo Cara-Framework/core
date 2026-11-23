@@ -12,6 +12,7 @@ from .Controllers import (
     controller_action_functions,
 )
 from .Inference import SERIALIZER_METHODS
+from .Sources import _walk
 from .UnknownDeclaredResource import UnknownDeclaredResource
 
 # The response methods whose first argument is the envelope's ``data``.
@@ -78,7 +79,7 @@ class ControllerActionMapper:
         for fn in functions:
             rows = {id(call) for call in self._comprehension_rows(fn)}
             parts = {id(call) for call in self._dict_value_parts(fn)}
-            for sub in ast.walk(fn):
+            for sub in _walk(fn):
                 if not isinstance(sub, ast.Call):
                     continue
                 func = sub.func
@@ -126,11 +127,11 @@ class ControllerActionMapper:
         """Every ``Resource(...)`` built as a keyed value of a dict literal."""
         return [
             call
-            for node in ast.walk(fn)
+            for node in _walk(fn)
             if isinstance(node, ast.Dict)
             for key, value in zip(node.keys, node.values, strict=True)
             if key is not None
-            for call in ast.walk(value)
+            for call in _walk(value)
             if isinstance(call, ast.Call)
             and isinstance(call.func, ast.Name)
             and call.func.id in self._known
@@ -140,9 +141,9 @@ class ControllerActionMapper:
         """Every ``Resource(...)`` a list comprehension builds once per row."""
         return [
             call
-            for node in ast.walk(fn)
+            for node in _walk(fn)
             if isinstance(node, ast.ListComp)
-            for call in ast.walk(node.elt)
+            for call in _walk(node.elt)
             if isinstance(call, ast.Call)
             and isinstance(call.func, ast.Name)
             and call.func.id in self._known
@@ -156,7 +157,7 @@ class ControllerActionMapper:
             data = next(
                 (
                     node.value
-                    for node in ast.walk(fn)
+                    for node in _walk(fn)
                     if isinstance(node, ast.Assign)
                     and len(node.targets) == 1
                     and isinstance(node.targets[0], ast.Name)

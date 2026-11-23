@@ -5,6 +5,8 @@ from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
 from cara.support import paths
 
+from .MigrateCommand import MigrateCommand
+
 
 @command(
     name="migrate:rollback",
@@ -62,6 +64,13 @@ from cara.support import paths
     ],
 )
 class MigrateRollbackCommand(CommandBase):
+    # The dry-run SQL collector is ``migrate --show``'s: one owner for "build
+    # the migration against a dry Schema, guard the DB facade, record every
+    # statement", so the two previews cannot drift apart.
+    _collect_migration_sql = MigrateCommand._collect_migration_sql
+    _install_db_facade_guard = MigrateCommand._install_db_facade_guard
+    _install_sql_recorder = staticmethod(MigrateCommand._install_sql_recorder)
+
     def handle(self):
         """
         Roll back migrations with improved safety and user experience.
@@ -115,32 +124,119 @@ class MigrateRollbackCommand(CommandBase):
 
         # Show what will be rolled back
         migration_name = self.option("migration")
+        specific = bool(migration_name and migration_name != "all")
         step = int(self.option("step") or 1)
+        if step < 1:
+            self.error("❌ --step must be a positive number of batches.")
+            return 1
 
-        if migration_name and migration_name != "all":
+        if specific:
+            targets = [migration_name]
             self.info(f"📦 Rolling back specific migration: {migration_name}")
         else:
+            targets = available if step == 1 else self._batch_targets(mig, step)
             self.info(f"📦 Rolling back last {step} batch(es) of migrations:")
-            for mig_info in available[:5]:  # Show first 5
+            for mig_info in targets[:5]:  # Show first 5
                 self.info(f"   • {mig_info}")
-            if len(available) > 5:
-                self.info(f"   ... and {len(available) - 5} more")
+            if len(targets) > 5:
+                self.info(f"   ... and {len(targets) - 5} more")
 
-        # Show SQL only mode
+        # Show SQL only mode. This used to call ``mig.rollback(...)`` — the
+        # REAL rollback — right under "No changes will be made": the executor
+        # builds each migration with a live Schema, so ``--show`` ran every
+        # ``down()`` and deleted the ledger rows. The preview now compiles
+        # ``down()`` against a dry Schema and never reaches the executor.
         if self.option("show"):
             self.info("🔍 SQL Preview Mode - No changes will be made:")
-            mig.rollback(migration=migration_name, output=True)
+            self._show_sql_preview(
+                mig,
+                targets,
+                connection=conn_name,
+                directory=migrations_dir,
+                schema=schema,
+            )
             return
 
         # Perform rollback
         self.info("⚡ Performing rollback...")
         try:
-            mig.rollback(migration=migration_name, output=False)
+            if specific:
+                mig.rollback(migration=migration_name, output=False)
+            else:
+                # ``rollback("all")`` undoes exactly the newest batch, so
+                # ``--step N`` is N of them. ``--step`` used to be parsed,
+                # echoed in the banner above and then dropped: every value
+                # rolled back one batch.
+                for _ in range(step):
+                    if not mig.get_rollback_migrations():
+                        break
+                    mig.rollback(migration="all", output=False)
             self.info("✅ Rollback completed successfully!")
         except Exception as e:
             self.error(f"❌ Rollback failed: {str(e)}")
             self.error("💡 Try running with --show to see the SQL that would be executed")
             raise
+
+    @staticmethod
+    def _batch_targets(mig: Migration, step: int) -> list[str]:
+        """Migrations held by the newest ``step`` batches, in rollback order.
+
+        Batch numbers can have gaps (a rolled-back batch leaves one), so this
+        walks down from the newest and counts only batches that hold rows.
+        """
+        targets: list[str] = []
+        batch = mig.get_last_batch_number()
+        taken = 0
+        while batch > 0 and taken < step:
+            names = mig.tracker.get_migrations_by_batch(batch)
+            if names:
+                targets.extend(names)
+                taken += 1
+            batch -= 1
+        return targets
+
+    def _show_sql_preview(
+        self,
+        mig: Migration,
+        targets: list[str],
+        connection: str,
+        directory: str,
+        schema: str | None,
+    ) -> None:
+        """Print the SQL each target's ``down()`` WOULD run; execute nothing."""
+        file_map = {
+            mig.file_manager.get_migration_name_from_file(path): path
+            for path in mig.file_manager.get_migration_files()
+        }
+
+        self.info("SQL that would be executed:")
+        self.info("=" * 60)
+
+        for index, name in enumerate(targets, 1):
+            self.info(f"\n{index}. Migration: {name}")
+            self.info("-" * 40)
+
+            file_path = file_map.get(name)
+            if file_path is None:
+                self.warning("   Migration file is missing from disk.")
+                continue
+
+            statements = self._collect_migration_sql(
+                mig,
+                file_path,
+                connection=connection,
+                directory=directory,
+                schema=schema,
+                direction="down",
+            )
+            if statements:
+                for sql in statements:
+                    self.line(f"{sql.rstrip(';')};")
+            else:
+                self.info("-- (no SQL statements compiled for this migration)")
+
+        self.info("\n" + "=" * 60)
+        self.info("No actual changes were made to the database.")
 
     def _confirm_production(self) -> bool:
         """Confirm rollback in production environment."""

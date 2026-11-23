@@ -43,8 +43,18 @@ class QueueOperationsStore:
     TRACKER_STATUS_PENDING = "pending"
     TRACKER_STATUS_PROCESSING = "processing"
     TRACKER_STATUS_SUCCESS = "success"
+    TRACKER_STATUS_COMPLETED = "completed"
     TRACKER_STATUS_FAILED = "failed"
     TRACKER_STATUS_RETRYING = "retrying"
+
+    #: "The job finished its work" is ONE outcome under two words: worker
+    #: settlement writes ``completed`` (``_DeliverySettlement``, and the
+    #: scheduler's tracked ticks), the ``Trackable`` hook of an inline run
+    #: writes ``success``. A count that asks for one of them reads both, the
+    #: same rule as ``JobTracker._success_statuses``: ``queue:monitor`` asked
+    #: for ``success`` alone, so every job a worker settled was missing and
+    #: "Completed" read 0 beside a failure rate of 100%.
+    TRACKER_SUCCESS_STATUSES = (TRACKER_STATUS_COMPLETED, TRACKER_STATUS_SUCCESS)
 
     TERMINAL_LEDGER_STATUSES = (
         QueueJobDeliveryStore.STATUS_DEAD_LETTERED,
@@ -71,13 +81,20 @@ class QueueOperationsStore:
         status: str | None = None,
         created_at_gte: Any | None = None,
     ) -> int:
-        """Count tracker jobs matching the given filters."""
+        """Count tracker jobs matching the given filters.
+
+        Either success word counts the whole success family
+        (:attr:`TRACKER_SUCCESS_STATUSES`); every other status is itself.
+        """
         conditions = ["1 = 1"]
         bindings: list[Any] = []
         if queue is not None:
             conditions.append("queue = %s")
             bindings.append(queue)
-        if status is not None:
+        if status in self.TRACKER_SUCCESS_STATUSES:
+            conditions.append("status IN (%s, %s)")
+            bindings.extend(self.TRACKER_SUCCESS_STATUSES)
+        elif status is not None:
             conditions.append("status = %s")
             bindings.append(status)
         if created_at_gte is not None:
@@ -90,14 +107,51 @@ class QueueOperationsStore:
         )
         return int(self._value(row or {}, "total") or 0)
 
+    def count_jobs_by_queue_and_status(
+        self, *, queues: list[str], created_at_gte: Any
+    ) -> dict[str, dict[str, tuple[int, int]]]:
+        """Tracker counts per queue and status, in ONE grouped query.
+
+        ``{queue: {status: (all_rows, rows_created_since)}}``. A NULL queue is
+        counted under ``default``, the name ``list_distinct_queues_since``
+        lists it by: a per-queue ``queue = %s`` count never matched NULL, so
+        that queue always read zero. ``queue:monitor`` issued five such counts
+        per queue; this answers all of them at once.
+        """
+        rows = (
+            DB.select(
+                "SELECT COALESCE(queue, 'default') AS queue, status, "
+                "COUNT(*) AS total, "
+                "COUNT(*) FILTER (WHERE created_at >= %s) AS recent "
+                f"FROM {self.tracker_table} "
+                "WHERE COALESCE(queue, 'default') = ANY(%s::varchar[]) "
+                "GROUP BY 1, 2",
+                [created_at_gte, list(queues)],
+            )
+            or []
+        )
+        counts: dict[str, dict[str, tuple[int, int]]] = {}
+        for row in rows:
+            counts.setdefault(str(self._value(row, "queue")), {})[
+                str(self._value(row, "status"))
+            ] = (
+                int(self._value(row, "total") or 0),
+                int(self._value(row, "recent") or 0),
+            )
+        return counts
+
     def list_recent_failed_jobs(
         self, *, queue: str, cutoff: Any, limit: int
     ) -> list[dict]:
-        """Recent failed tracker jobs for one queue, newest first."""
+        """Recent failed tracker jobs for one queue, newest first.
+
+        A NULL queue is listed under ``default``, as every monitor figure is.
+        """
         return list(
             DB.select(
                 f"SELECT id, public_id, name, queue, status, error, created_at "
-                f"FROM {self.tracker_table} WHERE queue = %s AND status = %s "
+                f"FROM {self.tracker_table} "
+                "WHERE COALESCE(queue, 'default') = %s AND status = %s "
                 "AND created_at >= %s ORDER BY created_at DESC LIMIT %s",
                 [queue, self.TRACKER_STATUS_FAILED, cutoff, int(limit)],
             )
@@ -267,7 +321,8 @@ class QueueOperationsStore:
 
         Rows that already have a replay child are excluded: ``replay_of`` is
         ``ON DELETE RESTRICT``, so including one would abort the statement and
-        delete nothing at all.
+        delete nothing at all. So are rows whose terminal hook is still due or
+        running (:meth:`_purgeable_ledger_conditions`).
         """
         conditions = self._purgeable_ledger_conditions()
         bindings: list[Any] = [*self.TERMINAL_LEDGER_STATUSES, cutoff]
@@ -283,8 +338,19 @@ class QueueOperationsStore:
         )
 
     def _purgeable_ledger_conditions(self) -> str:
+        """Terminal, stalled since the cutoff, unreplayed, and its hooks settled.
+
+        A dead-lettered or expired row is the outbox row of its ``failed()``
+        callback until that callback completed or was quarantined; the
+        retention prune (``prune_terminal``) waits for the same thing. Without
+        this the purge deleted a row whose callback was still due, or running
+        under a live hook lease, and the product's compensation never fired.
+        No bindings: the count and the delete keep their binding order.
+        """
         return (
             "status IN (%s, %s) AND updated_at < %s AND "
+            "(post_hooks_completed_at IS NOT NULL OR "
+            "post_hooks_quarantined_at IS NOT NULL) AND "
             f"{self._awaiting_replay_condition()}"
         )
 

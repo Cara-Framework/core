@@ -279,8 +279,11 @@ def _delivery_unclaim_publish(self, job_ids: list[str], token: str) -> None:
 
 def _delivery_verified_envelope(self, row: Any) -> tuple[bytes, dict[str, Any]]:
     """One claimed row's signed envelope, verified against its immutable columns."""
-    body = self._envelope_bytes(self._row_value(row, "signed_envelope"))
     try:
+        # Inside the guard: a body that is no JSON object is this ROW's
+        # invalid envelope. Raised bare, it failed the whole iteration and
+        # left the row's batch leased with it, to fail again every lease.
+        body = self._envelope_bytes(self._row_value(row, "signed_envelope"))
         envelope = SignedJsonJobSerializer.inspect_envelope(
             body,
             signing_keys=self.options.get("signing_keys", {}),

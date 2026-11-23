@@ -159,7 +159,9 @@ def infer_value_schema(
     if isinstance(node, ast.Constant):
         return const_schema(node)
     if isinstance(node, (ast.List, ast.Tuple)):
-        return {"type": "array", "items": ANY_SCHEMA}
+        # A copy, as everywhere else: handing out the shared ``ANY_SCHEMA``
+        # let one caller's in-place edit retype every unknown value after it.
+        return {"type": "array", "items": dict(ANY_SCHEMA)}
     if isinstance(node, ast.Dict):
         properties: dict[str, Any] = {}
         required: list[str] = []
@@ -189,7 +191,7 @@ def infer_value_schema(
     if isinstance(node, ast.DictComp):
         return {"type": "object", "additionalProperties": True}
     if isinstance(node, ast.ListComp):
-        return {"type": "array", "items": ANY_SCHEMA}
+        return {"type": "array", "items": dict(ANY_SCHEMA)}
     # ``a if cond else b`` — unify the two branches.
     if isinstance(node, ast.IfExp):
         # ``None`` is not an unknowable expression here; it is an explicit
@@ -203,16 +205,29 @@ def infer_value_schema(
             return _nullable(
                 infer_value_schema(node.body, locals_map, call_types),
             )
-        return unify(
-            infer_value_schema(node.body, locals_map, call_types),
-            infer_value_schema(node.orelse, locals_map, call_types),
-        )
+        body = infer_value_schema(node.body, locals_map, call_types)
+        orelse = infer_value_schema(node.orelse, locals_map, call_types)
+        # ``Resource.collection(rows) if shown else []``: an empty display
+        # sends no item, so it cannot disagree with the other branch's.
+        if _is_empty_sequence(node.orelse) and body.get("type") == "array":
+            return body
+        if _is_empty_sequence(node.body) and orelse.get("type") == "array":
+            return orelse
+        return unify(body, orelse)
     # ``a or b`` / ``a and b`` — describe the operands we can.
     if isinstance(node, ast.BoolOp):
         schemas = [
             infer_value_schema(value, locals_map, call_types) for value in node.values
         ]
-        known = [schema for schema in schemas if schema != ANY_SCHEMA]
+        known = [
+            schema
+            for schema, value in zip(schemas, node.values, strict=True)
+            if schema != ANY_SCHEMA and not _is_empty_sequence(value)
+        ]
+        # ``rows or []``: the empty display says only "an array", which a
+        # typed operand already does; alone it is all there is to say.
+        if not any(schema.get("type") == "array" for schema in known):
+            known = [schema for schema in schemas if schema != ANY_SCHEMA]
         if not known:
             return dict(ANY_SCHEMA)
         merged = reduce(unify, known)
@@ -233,6 +248,11 @@ def infer_value_schema(
 
 def _is_none_literal(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
+
+
+def _is_empty_sequence(node: ast.AST) -> bool:
+    """``[]`` / ``()``: an array that sends no item."""
+    return isinstance(node, (ast.List, ast.Tuple)) and not node.elts
 
 
 def _without_enums(schema: Any) -> Any:
@@ -271,32 +291,82 @@ def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def unify(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
-    """Merge two candidate schemas for the same key (ternary branches)."""
+    """Merge two candidate schemas for the same key (ternary branches).
+
+    The result says what EITHER branch can send, and nothing narrower. It
+    used to start from the first branch and keep whatever that one said, so
+    ``A(x).to_dict() if c else B(y).to_dict()`` was published as ``A``, a key
+    only the first branch sends as required, a key only the second sends not
+    at all, and the first branch's ``format`` for both. Only what both
+    branches state survives; what they disagree on is not known.
+    """
     if a == b:
         return dict(a)
     if a == ANY_SCHEMA or b == ANY_SCHEMA:
         return dict(ANY_SCHEMA)
-    if a.get("type") == b.get("type"):
-        out = dict(a)
-        if a.get("nullable") or b.get("nullable"):
-            out["nullable"] = True
-        # The vocabulary is the union of both branches' values, and only a
-        # branch that names its values has one: ``"x" if c else opt_str(y)``
-        # can send anything.
-        if "enum" in a and "enum" in b:
-            out["enum"] = sorted({*a["enum"], *b["enum"]})
-        else:
-            out.pop("enum", None)
-        # The same holds one level down: a key both object branches send.
-        if "properties" in a and "properties" in b:
-            out["properties"] = {
-                key: unify(schema, b["properties"][key])
-                if key in b["properties"]
-                else schema
-                for key, schema in a["properties"].items()
-            }
-        return out
-    return dict(ANY_SCHEMA)
+    if a.get("type") != b.get("type"):
+        return dict(ANY_SCHEMA)
+    if "type" not in a:
+        # Two references (``$ref`` / ``allOf``): the same one, nullable on
+        # either side, is that reference. Two different ones are not the
+        # first of them.
+        if _less_nullable(a) != _less_nullable(b):
+            return dict(ANY_SCHEMA)
+        return {**a, "nullable": True}
+    # Keys are named only where both branches name theirs: an object one
+    # branch builds from a literal and the other gets from a helper is an
+    # object, with no key this can vouch for.
+    keyed = "properties" in a and "properties" in b
+    partial = bool(a.get("x-fields-partial") or b.get("x-fields-partial"))
+    out: dict[str, Any] = {}
+    for key, value in a.items():
+        if key == "nullable":
+            out[key] = True if value or b.get("nullable") else value
+        elif key == "enum":
+            # The vocabulary is the union of both branches' values, and only
+            # a branch that names its values has one: ``"x" if c else
+            # opt_str(y)`` can send anything.
+            if "enum" in b:
+                out[key] = sorted({*value, *b["enum"]})
+        elif key == "items":
+            if "items" in b:
+                out[key] = unify(value, b["items"])
+        elif key == "properties":
+            # The same holds one level down, for every key either sends.
+            if keyed:
+                other = b["properties"]
+                out[key] = {
+                    **{
+                        name: unify(schema, other[name]) if name in other else schema
+                        for name, schema in value.items()
+                    },
+                    **{
+                        name: schema
+                        for name, schema in other.items()
+                        if name not in value
+                    },
+                }
+        elif key == "required":
+            # Required only where both branches send it.
+            sent = [name for name in value if keyed and name in b.get("required", [])]
+            if sent:
+                out[key] = sent
+        elif key in _OPEN_MARKERS and partial:
+            out[key] = True
+        elif key in b and b[key] == value:
+            out[key] = value
+    if "nullable" not in out and b.get("nullable"):
+        out["nullable"] = True
+    if partial:
+        out.update(dict.fromkeys(_OPEN_MARKERS, True))
+    return out
+
+
+_OPEN_MARKERS = ("additionalProperties", "x-fields-partial")
+
+
+def _less_nullable(schema: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in schema.items() if key != "nullable"}
 
 
 def dict_payload(node: ast.AST) -> ast.Dict | None:

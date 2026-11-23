@@ -113,9 +113,7 @@ class ShouldAuthenticate(Middleware):
             # global handler, exactly as ``CanPerform`` does for the
             # authorization half.
             except CaraException as e:
-                if denial_status(e) is None:
-                    raise
-                last_error = e
+                last_error = self.guard_denial(e)
                 continue
 
         if not user:
@@ -133,6 +131,27 @@ class ShouldAuthenticate(Middleware):
 
         response = await next_fn(request)
         return response
+
+    @staticmethod
+    def guard_denial(error: CaraException) -> CaraException:
+        """The ONE rule for a guard's exception, for every guard loop.
+
+        A denial (``denial_status``: a 4xx) is returned, to be remembered
+        while the next guard is tried. Anything else — a 503 from a dead
+        auth backend, a status-less fault — is re-raised at once, so with
+        several guards an outage in one is never overwritten by a later
+        guard's 401: "we failed" outranks "your credentials failed". With a
+        single guard the outcome is the same as deferring it, since
+        ``authentication_failed`` re-raises a fault too.
+
+        Shared with ``AuthenticateUser``, whose own loop classified with
+        ``is_http_exception``: ``DatabaseUnavailableException`` sets it, so a
+        503 from the first guard was swallowed and the second guard's 401
+        went to the client as the answer.
+        """
+        if denial_status(error) is None:
+            raise error
+        return error
 
     def authentication_failed(
         self, request: Request, last_error: Exception | None = None

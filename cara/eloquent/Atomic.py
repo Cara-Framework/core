@@ -3,23 +3,30 @@
 Provides @atomic decorator and context manager for clean transaction
 handling with automatic savepoint support for nested transactions.
 
-Two distinct ``__exit__`` paths
--------------------------------
-1. **Top-level** (we opened the outer transaction): commit / rollback
-   must go through the resolver so the registry entry is cleared and
-   the psycopg2 connection is returned to the pool. Calling
-   ``self._conn.commit()`` directly bypasses the resolver — the
-   connection stays pinned in the per-context registry forever, every
-   subsequent query inside that context picks up the same committed
-   handle thinking it's still in a transaction, and the pool slowly
-   bleeds connections.
+One ``__exit__`` path: the resolver
+-----------------------------------
+Every level commits and rolls back through the resolver, which nests by
+``transaction_level`` exactly as ``DB.transaction()`` does: at the
+outermost level it clears the registry entry and returns the psycopg2
+connection to the pool; at a nested level it releases (or rolls back to)
+the savepoint and leaves the outer transaction pinned.
 
-2. **Nested savepoint** (the outer transaction already existed when
-   ``__enter__`` ran): we own a savepoint, not the connection. The
-   underlying ``connection.commit()`` releases the savepoint via the
-   driver's transaction-level math and the outer transaction stays
-   active. Resolver-level commit must NOT run here — it would unwind
-   the outer caller's transaction.
+A nested ``atomic`` used to call ``connection.commit()`` /
+``connection.rollback()`` directly (from when the resolver could not
+nest). Bypassing the resolver cost three things:
+
+* a ``RELEASE SAVEPOINT`` that failed — PostgreSQL refuses it (25P02) once
+  a statement inside the block failed and was swallowed — left the level
+  un-decremented, so the outer rollback only rolled back to the savepoint:
+  the OUTER transaction stayed open and pinned, with its pool permit, and
+  every later statement of that context ran inside a transaction nobody
+  would ever commit;
+* callbacks registered in a nested block that rolled back still fired on
+  the outer commit, and its after-rollback callbacks never ran;
+* a COMMIT that failed at the outermost level (a deferred constraint, a
+  serialization failure reported at commit) was never unwound: the wrapper
+  stayed pinned and kept its permit, where ``DB.transaction()`` rolls back
+  and releases (``ConnectionResolver.rollback_failed_commit``).
 
 Deadlock / serialization retry
 -------------------------------
@@ -100,10 +107,9 @@ class Atomic:
         self.attempts = max(1, int(attempts))
         self._db = None
         self._conn = None
-        # Track whether THIS Atomic opened the outer transaction.
-        # Only the opener invokes resolver-level commit/rollback — and
-        # only the opener is allowed to retry (it can roll the outer
-        # transaction back; a nested savepoint caller cannot).
+        # Track whether THIS Atomic opened the outer transaction: only the
+        # opener is allowed to retry (it can roll the outer transaction
+        # back; a nested savepoint caller cannot).
         self._is_outer_transaction = False
         self._connection_name: str | None = None
 
@@ -144,17 +150,14 @@ class Atomic:
 
         try:
             if exc_type is not None:
-                if self._is_outer_transaction:
-                    resolver.rollback(name)
-                else:
-                    self._conn.rollback()
+                resolver.rollback(name)
                 return False  # re-raise
-            else:
-                if self._is_outer_transaction:
-                    resolver.commit(name)
-                else:
-                    self._conn.commit()
-                return False
+            try:
+                resolver.commit(name)
+            except BaseException:
+                resolver.rollback_failed_commit(name)
+                raise
+            return False
         finally:
             self._conn = None
 

@@ -77,3 +77,23 @@ def test_declaring_gates_flattened_makes_it_checked(tmp_path):
     findings = VendorBarrelParity.scan(manifest)
     assert len(findings) == 1
     assert "helper" in findings[0].message
+
+
+def test_a_kernel_package_with_no_barrel_is_skipped_not_fatal(tmp_path):
+    """A declared kernel root with no ``__init__.py`` (a sibling checkout that
+    is absent, or mid-regeneration) used to raise ``AttributeError: 'NoneType'
+    object has no attribute 'body'`` out of the scanner and abort the whole
+    pack. There is nothing to fold onto, so there is nothing to check."""
+    manifest = make_manifest(tmp_path)
+    (tmp_path / "commons" / "models" / "__init__.py").unlink()
+    write(tmp_path / "app" / "models" / "__init__.py", _barrel("User"))
+
+    assert VendorBarrelParity.scan(manifest) == []
+
+
+def test_a_kernel_barrel_that_does_not_parse_is_skipped_not_fatal(tmp_path):
+    manifest = make_manifest(tmp_path)
+    write(tmp_path / "commons" / "models" / "__init__.py", "__all__ = [\n")
+    write(tmp_path / "app" / "models" / "__init__.py", _barrel("User"))
+
+    assert VendorBarrelParity.scan(manifest) == []

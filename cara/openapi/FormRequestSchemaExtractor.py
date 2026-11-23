@@ -96,6 +96,33 @@ def _bound(schema: dict[str, Any], kind: str, value: int | float) -> None:
         schema["minimum" if kind == "min" else "maximum"] = value
 
 
+def _typed_enum(values: list[str], schema_type: str | None) -> list[Any]:
+    """``in:`` values in the field's own type.
+
+    ``integer|in:1,7`` validates the integers 1 and 7, but the enum was
+    published as the strings ``"1"`` / ``"7"`` — a schema no valid payload
+    matches, and a generated client that sends strings. Values that do not
+    parse as the type stay as written (the rule then documents itself).
+    """
+    if schema_type == "integer":
+        try:
+            return [int(value) for value in values]
+        except ValueError:
+            return values
+    if schema_type == "number":
+        numbers = [_number(value) for value in values]
+        return values if any(n is None for n in numbers) else numbers
+    if schema_type == "boolean":
+        table = {"true": True, "1": True, "false": False, "0": False}
+        lowered = [value.strip().lower() for value in values]
+        return (
+            values
+            if any(v not in table for v in lowered)
+            else [table[v] for v in lowered]
+        )
+    return values
+
+
 def _rule_schema(rule: str | None) -> dict[str, Any]:
     if not rule:
         return {}
@@ -115,7 +142,7 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
         schema.update({"type": "array", "items": {}})
     elif "dict" in names:
         schema.update({"type": "object", "additionalProperties": True})
-    elif {"string", "email", "url", "date", "dateformat"} & names:
+    elif {"string", "email", "url", "date", "dateformat", "date_format"} & names:
         schema["type"] = "string"
 
     if "nullable" in names:
@@ -125,6 +152,10 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
     if "url" in names:
         schema["format"] = "uri"
     if "date" in names:
+        schema["format"] = "date"
+    if "date_format" in tokens:
+        # ``DateFormatRule`` with no argument checks ``%Y-%m-%d``.
+        schema["x-cara-date-format"] = "%Y-%m-%d"
         schema["format"] = "date"
     if "alpha" in names:
         schema["pattern"] = "^[A-Za-z]+$"
@@ -136,7 +167,7 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
         if not separator:
             continue
         if name == "in" and "{" not in argument:
-            schema["enum"] = argument.split(",")
+            schema["enum"] = _typed_enum(argument.split(","), schema.get("type"))
         elif name == "in_csv":
             schema["x-cara-in-csv"] = argument.split(",")
         elif name == "public_id_csv":
@@ -158,8 +189,10 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
             schema["pattern"] = (
                 "^(?:" + "|".join(re.escape(value) for value in argument.split(",")) + ")"
             )
-        elif name == "dateformat":
+        elif name in {"dateformat", "date_format"}:
             schema["x-cara-date-format"] = argument
+            if argument == "%Y-%m-%d":
+                schema["format"] = "date"
         elif name == "decimal_text":
             parts = argument.split(",")
             try:
@@ -209,6 +242,7 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
             "between",
             "boolean",
             "date",
+            "date_format",
             "dateformat",
             "decimal_text",
             "dict",

@@ -84,6 +84,9 @@ from . import _ScheduledThrottle, _ScheduleRegistration
 class ScheduleWorkCommand(MakesAutoReload, CommandBase):
     """Run schedule worker with enhanced monitoring and task registration."""
 
+    #: ``--once`` only: the exit code its single pass earned (``_start_scheduler``).
+    _exit_code: int | None = None
+
     def __init__(self, application=None):
         super().__init__(application)
         self.start_time = None
@@ -136,6 +139,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             self._show_final_stats()
         if self._reload_requested:
             self._restart_scheduler_process()
+        return self._exit_code
 
     def _trigger_auto_reload(self) -> None:
         """Stop the scheduler, then replace the process for code reload.
@@ -180,8 +184,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         # Show scheduler configuration
         self._show_config(scheduler_config)
 
-        # Register and run scheduled jobs
+        # Register on the driver this command runs (``--driver X``), then run.
         try:
+            Schedule.use(scheduler_config["driver_name"])
             job_entries = self._register_jobs()
             if not job_entries:
                 raise ConfigurationException("No scheduled jobs were registered")
@@ -550,6 +555,16 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 self.console.print(
                     f"[#30e047]Scheduled tasks executed once ({executed} succeeded)[/#30e047]"
                 )
+                # ``run_all`` logs a failing task and carries on, so a cron
+                # wrapper read exit 0 over a pass in which tasks raised. The
+                # driver reports the failures itself; the success count cannot
+                # stand in for them (a fire skipped by its overlap lock is
+                # neither). A driver without the report keeps exit 0.
+                failures = int(getattr(driver, "last_run_failures", 0) or 0)
+                if failures:
+                    failed = ", ".join(getattr(driver, "last_run_failed_ids", None) or [])
+                    self.error(f"× {failures} scheduled task(s) failed: {failed}")
+                    self._exit_code = 1
             else:
                 # BackgroundScheduler: start() returns immediately, jobs
                 # run in a thread pool. The while-loop below keeps the

@@ -13,8 +13,8 @@ from cara.commands.ProcessReload import import_when_settled
 from cara.configuration import config
 from cara.context import Tenancy
 from cara.exceptions import ConfigurationException
-from cara.facades import Schedule
-from cara.queues import Bus
+from cara.facades import Log, Schedule
+from cara.queues import Bus, JobThrottledException
 from cara.queues.middleware import run_through_middleware_async
 from cara.scheduling import declared_interval_seconds, on_wall_clock
 
@@ -174,6 +174,15 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
                 lambda: asyncio.run(drained(_run_scoped())),
                 budget_seconds=_budget,
             )
+        except JobThrottledException as refused:
+            # The job's own gate (``WithoutOverlapping`` still held by the
+            # previous tick, a cooldown, a rate limit) refused the fire before
+            # its body ran. That is the driver's "skipped" — the previous run
+            # is still going — not a failure: the tick row was written
+            # ``failed`` and the failure-rate alerts counted it. The refusal
+            # is handed on so the driver counts the fire once, as skipped.
+            _skip_tick(_identifier, tracker, db_job_id, refused)
+            raise
         except BaseException:
             _finish_tick("failed")
             raise
@@ -224,12 +233,21 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
         builder.executor(spec["executor"])
 
     if trigger == "interval":
+        # ``days`` / ``weeks`` ride through with the rest. Dropping them left a
+        # ``{"days": 2}`` entry with a period of ZERO — which APScheduler ran
+        # every second, and which the driver now refuses at registration.
         builder.interval(
             seconds=spec.get("seconds", 0),
             minutes=spec.get("minutes", 0),
             hours=spec.get("hours", 0),
+            days=spec.get("days", 0),
+            weeks=spec.get("weeks", 0),
         )
         parts = []
+        if spec.get("weeks"):
+            parts.append(f"{spec['weeks']}w")
+        if spec.get("days"):
+            parts.append(f"{spec['days']}d")
         if spec.get("hours"):
             parts.append(f"{spec['hours']}h")
         if spec.get("minutes"):
@@ -268,3 +286,25 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
         "type": "dict",
         "schedule": schedule_desc,
     }
+
+
+def _skip_tick(identifier: str, tracker: Any, db_job_id: Any, refused: Exception) -> None:
+    """Record a fire the job's own gate refused as SKIPPED, never failed.
+
+    The driver counts the fire (``outcome="skipped"`` on
+    ``scheduled_tasks_total``, as for a fire its own overlap lock skipped)
+    when the refusal reaches it; this writes the tick's row. A tracked tick row
+    is called off (``cancelled``, reason kept in metadata) — the tracker's
+    terminal word for an inline run a gate refused, since ``failed`` would
+    read as an incident and ``processing`` as a run stuck forever.
+    """
+    Log.info(
+        "Scheduled job '%s' skipped — %s",
+        identifier,
+        refused,
+        category="scheduler",
+    )
+    if tracker is not None and db_job_id is not None:
+        # Tracking must never break the tick itself.
+        with contextlib.suppress(Exception):
+            tracker.track_job_throttled(db_job_id, f"skipped: {refused}")

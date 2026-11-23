@@ -18,7 +18,6 @@ it as an enum value that raises on use is a lie the framework will not tell.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import uuid
 from collections.abc import Callable
@@ -126,6 +125,11 @@ class Pipeline:
 
     async def _execute_sync(self) -> dict[str, Any]:
         """Execute pipeline synchronously (for commands)."""
+        # Each run reports its own steps. Appending to the list a previous
+        # ``execute()`` returned made a second run report every step twice
+        # (and rewrote the first run's report under its caller). A new list,
+        # not ``clear()``, leaves the earlier report as it was handed out.
+        self.results = []
         successful_steps = 0
         skipped_steps = 0
         total_steps = len(self.steps)
@@ -164,14 +168,17 @@ class Pipeline:
                 if hasattr(instance, "handle"):
                     target = instance.handle
                     if application is not None and hasattr(application, "call"):
-                        if asyncio.iscoroutinefunction(target):
-                            result = await application.call(target, **step.kwargs)
-                        else:
-                            result = application.call(target, **step.kwargs)
+                        result = application.call(target, **step.kwargs)
                     else:
-                        result = await self._safe_call(target, **step.kwargs)
+                        result = target(**step.kwargs)
                 else:
-                    result = await self._safe_call(instance, **step.kwargs)
+                    result = instance(**step.kwargs)
+                # Await whatever came back, not what the callable looked like:
+                # a sync ``handle`` that returns a coroutine (a decorated or
+                # delegating handle) was recorded as a success while its
+                # coroutine was never run.
+                if inspect.isawaitable(result):
+                    result = await result
 
                 # Craft commands signal failure by RETURNING a non-zero exit
                 # code (the Typer/CLI convention used throughout), not by
@@ -180,7 +187,13 @@ class Pipeline:
                 # "N/N completed" and mask the failure. Treat a non-zero int
                 # result as a failed step. (Non-int results — dicts, domain
                 # objects, None — are not exit codes and stay successful.)
-                if isinstance(result, int) and result != 0:
+                # A bool is an int to Python but never an exit code: a step
+                # returning ``True`` ("it worked") failed as "exit code True".
+                if (
+                    isinstance(result, int)
+                    and not isinstance(result, bool)
+                    and result != 0
+                ):
                     raise StepFailed(
                         f"{step.step_class.__name__} returned exit code {result}"
                     )
@@ -194,10 +207,6 @@ class Pipeline:
                 }
                 self.results.append(step_result)
                 successful_steps += 1
-
-                # Call success callback
-                if step.on_success:
-                    step.on_success(step_result, self.context)
 
                 Log.info(
                     "✅ Step completed: %s",
@@ -224,6 +233,25 @@ class Pipeline:
                     str(e),
                     category="cara.pipeline",
                 )
+                continue
+
+            # The success hook runs OUTSIDE the step's try: a hook that
+            # raised was recorded as the STEP failing — a second, failed row
+            # beside the successful one and ``on_failure`` called for a step
+            # that had completed. The step stays a success; the hook's
+            # failure is logged and kept on the step's row.
+            if step.on_success:
+                try:
+                    step.on_success(step_result, self.context)
+                except Exception as hook_error:
+                    step_result["on_success_error"] = str(hook_error)
+                    Log.error(
+                        "❌ on_success hook failed for step %s - %s",
+                        step.step_class.__name__,
+                        str(hook_error),
+                        category="cara.pipeline",
+                        exc_info=True,
+                    )
 
         # Condition-skipped steps are not failures — a healthy run with a
         # legitimately-skipped optional step must still report success.
@@ -251,10 +279,3 @@ class Pipeline:
             category="cara.pipeline",
         )
         return result
-
-    async def _safe_call(self, func, *args, **kwargs):
-        """Safely call a function (sync or async)."""
-        if inspect.iscoroutinefunction(func):
-            return await func(*args, **kwargs)
-        else:
-            return func(*args, **kwargs)

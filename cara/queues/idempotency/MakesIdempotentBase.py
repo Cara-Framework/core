@@ -29,8 +29,6 @@ Subclasses MUST set ``_idempotency_key`` indirectly by calling
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
@@ -39,7 +37,6 @@ from typing import Any
 import pendulum
 
 from cara.cache import cache_backend_fault_types
-from cara.context import Tenancy
 from cara.exceptions import (
     IdempotencyGateFaultException,
     IdempotencyLeaseLostException,
@@ -47,11 +44,18 @@ from cara.exceptions import (
 )
 from cara.facades import Cache, Log
 from cara.queues.idempotency.ClaimsSourceCooldown import ClaimsSourceCooldown
-from cara.queues.idempotency.IdempotencyParams import normalize_idempotency_param
+from cara.queues.idempotency.DerivesIdempotencyKey import DerivesIdempotencyKey
 from cara.queues.LeaseHeartbeat import LeaseHeartbeat
 
+#: Default handed to ``Cache.get`` when the gate reads a result: it tells an
+#: absent entry apart from every stored value (a falsy payload, the None
+#: sentinel) in ONE round trip. The ``has`` then ``get`` pair it replaces
+#: asked Redis twice for every duplicate, and could answer a completed job
+#: "returned None" when the entry expired between the two.
+_ABSENT: Any = object()
 
-class MakesIdempotentBase(ClaimsSourceCooldown):
+
+class MakesIdempotentBase(DerivesIdempotencyKey, ClaimsSourceCooldown):
     """Laravel-style trait for flow-level idempotency (opt-in per job).
 
     Subclasses define their own ``handle()`` and run the body through
@@ -205,21 +209,14 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         # Cross-process envelopes may explicitly bypass only the completed
         # result cache. That is distinct from operator recovery: lifecycle
         # policy still applies and the active owner lock is always respected.
-        if not bypass_result_cache and getattr(self, "idempotency_cache_results", True):
-            cache_key = self._result_key()
+        reads_result_cache = not bypass_result_cache and getattr(
+            self, "idempotency_cache_results", True
+        )
+        if reads_result_cache:
             with self._gate_cannot_ask_cache():
-                completed = Cache.has(cache_key)
-                cached_raw = Cache.get(cache_key) if completed else None
+                completed, cached_result = self._read_completed_result()
             if completed:
-                cached_result = None if cached_raw == self._NONE_SENTINEL else cached_raw
-                Log.debug(
-                    "Job already completed (cached): %s",
-                    self.get_job_identifier(),
-                    category="idempotency",
-                )
-                self._emit_cache_op_metric("get", "hit")
-                self._emit_idempotency_metric("collision")
-                return cached_result
+                return self._answer_from_completed_result(cached_result)
             self._emit_cache_op_metric("get", "miss")
 
         with self._gate_cannot_ask_cache():
@@ -247,7 +244,9 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
             # worker delete the newer worker's lock on exit. The acquire
             # (SET NX) is the only lock question asked: an EXISTS before it
             # answered the same thing one round trip earlier, on every job.
-            return await self._execute_with_lock(callback)
+            return await self._execute_with_lock(
+                callback, recheck_result=reads_result_cache
+            )
         except BaseException:
             self._release_source_cooldown()
             raise
@@ -271,67 +270,6 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 retry_after=self.GATE_FAULT_RETRY_SECONDS,
             ) from exc
 
-    # ── Key generation + parameter normalization ───────────────────
-
-    def generate_idempotency_key(self) -> str:
-        """Idempotency key from class + parameters + the ARMED tenancy: one
-        job run for two workspaces is two units of work, never one shared
-        result cache and lease (it made jobs carry a second ``tenant_id``)."""
-        tenancy = "central" if Tenancy.is_central() else Tenancy.id()
-        job_data = {
-            "job_class": self.__class__.__name__,
-            "parameters": self.get_job_parameters(),
-            "tenancy": None if tenancy is None else str(tenancy),
-            "version": "1.0",
-        }
-        key_string = json.dumps(job_data, sort_keys=True)
-        return hashlib.sha256(key_string.encode()).hexdigest()[:16]
-
-    def get_job_parameters(self) -> dict[str, Any]:
-        """Return job parameters for idempotency key generation.
-
-        Default behaviour: include every public, non-callable instance
-        attribute (excluding queue-runner internals).
-
-        Subclasses can pin the dedup surface by setting a class-level
-        ``idempotency_params`` tuple — only the listed attributes
-        contribute to the hash. This is the right shape when a job's
-        identity is "what entity does this touch" rather than "what
-        bag of optional kwargs was it dispatched with":
-
-            class ConsolidateJob(BaseJob):
-                idempotency_params = ("record_id",)
-
-        Without the whitelist, ``ConsolidateJob(record_id=42)``
-        and ``ConsolidateJob(record_id=42, extra_data={...})``
-        produce different keys, both acquire different locks, and both
-        write to the same product row concurrently — the exact race
-        the lock exists to prevent.
-        """
-        whitelist = getattr(self, "idempotency_params", None)
-
-        params: dict[str, Any] = {}
-        for key, value in vars(self).items():
-            if key.startswith("_"):
-                continue
-            if key in {"queue", "routing_key", "attempts", "job_id"}:
-                continue
-            if callable(value):
-                continue
-            if whitelist is not None and key not in whitelist:
-                continue
-            normalized = self._normalize_param_value(value, strict=whitelist is not None)
-            if normalized is not None:
-                params[key] = normalized
-        return params
-
-    def _normalize_param_value(self, value: Any, *, strict: bool = False) -> Any:
-        """One parameter's key form (``IdempotencyParams``)."""
-        try:
-            return normalize_idempotency_param(value, strict=strict)
-        except TypeError as exc:
-            raise TypeError(f"{self.__class__.__name__}: {exc}") from None
-
     # ── Cache / lock primitives ────────────────────────────────────
 
     def _result_key(self) -> str:
@@ -347,8 +285,8 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
 
         ``Cache.get`` returning ``None`` overlaps with "absent"
         and "cached None" on every driver. ``wrap_with_idempotency``
-        uses ``Cache.has`` + a sentinel-aware decode for the canonical
-        check; this accessor decodes correctly when callers ask but
+        uses :meth:`_read_completed_result` for the canonical check;
+        this accessor decodes correctly when callers ask but
         still returns ``None`` for "truly absent" so the existing
         ``if cached is not None`` shape in external callers remains
         meaningful.
@@ -358,6 +296,30 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         if raw == self._NONE_SENTINEL:
             return None
         return raw
+
+    def _read_completed_result(self) -> tuple[bool, Any]:
+        """``(completed, result)`` for this key, in one cache round trip.
+
+        The canonical "did this job already finish" read of the gate and of
+        the waiter. ``completed`` is the entry's existence, so a job that
+        returned ``None`` (stored as the sentinel) is a completion, never
+        "still running"; ``result`` is the decoded value.
+        """
+        raw = Cache.get(self._result_key(), _ABSENT)
+        if raw is _ABSENT:
+            return False, None
+        return True, None if raw == self._NONE_SENTINEL else raw
+
+    def _answer_from_completed_result(self, cached_result: Any) -> Any:
+        """Settle this dispatch as a duplicate of a run that already finished."""
+        Log.debug(
+            "Job already completed (cached): %s",
+            self.get_job_identifier(),
+            category="idempotency",
+        )
+        self._emit_cache_op_metric("get", "hit")
+        self._emit_idempotency_metric("collision")
+        return cached_result
 
     def cache_result(self, result: Any) -> None:
         """Cache a job's terminal result, encoding ``None`` to the
@@ -495,8 +457,17 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
 
     # ── Execution + waiter ─────────────────────────────────────────
 
-    async def _execute_with_lock(self, callback: Callable[[], Awaitable[Any]]) -> Any:
+    async def _execute_with_lock(
+        self,
+        callback: Callable[[], Awaitable[Any]],
+        *,
+        recheck_result: bool = False,
+    ) -> Any:
         """Acquire lock, run callback, cache result, release lock.
+
+        ``recheck_result`` is the gate saying it read the result cache before
+        coming here; the lease winner then reads it once more (see
+        :meth:`_completed_while_unleased`).
 
         Lock-acquisition failure waits for the owner by default. Durable
         intent jobs instead raise a throttle so their own callback is
@@ -520,6 +491,11 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                     f"Idempotency lease is active for {self.get_job_identifier()}"
                 )
             return await self._wait_without_spending_cooldown()
+
+        if recheck_result:
+            completed, cached_result = self._completed_while_unleased()
+            if completed:
+                return self._answer_from_completed_result(cached_result)
 
         self._emit_idempotency_metric("fresh")
         heartbeat = self._hold_job_lock()
@@ -587,6 +563,34 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 self._idempotency_lock_value = None
             self.release_job_lock()
 
+    def _completed_while_unleased(self) -> tuple[bool, Any]:
+        """Re-read the result now that the lease is this run's.
+
+        The gate's first read and the lease acquire are two round trips with
+        the lifecycle hook between them. An owner that cached its result and
+        released its lease inside that window left the key free, so this run
+        won the ``SET NX`` and ran the body a SECOND time although a completed
+        result existed — a duplicate charge, push or mail for one identity.
+        An owner caches before it releases, so a lease this run could take
+        means any finished owner's result is already readable: one read here
+        closes the window, where no read before the acquire can.
+
+        Whatever the answer, a run that will not execute gives back what it
+        took: the lease (no heartbeat holds it yet), and on a hit the cooldown
+        window its lifecycle hook claimed, as a waiter does. A read fault is
+        the gate's (nothing ran), and the caller hands the cooldown back.
+        """
+        try:
+            with self._gate_cannot_ask_cache():
+                completed, cached_result = self._read_completed_result()
+        except BaseException:
+            self.release_job_lock()
+            raise
+        if completed:
+            self.release_job_lock()
+            self._release_source_cooldown()
+        return completed, cached_result
+
     def _hold_job_lock(self) -> LeaseHeartbeat:
         """Keep this run's lease alive until ``_execute_with_lock`` ends.
 
@@ -646,19 +650,17 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         max_wait_time = 300  # 5 minutes
         check_interval = 5
         waited = 0
-        cache_key = self._result_key()
 
         while waited < max_wait_time:
             await asyncio.sleep(check_interval)
             waited += check_interval
 
             # Sentinel-aware existence check — see
-            # ``wrap_with_idempotency`` for the rationale: a job that
+            # ``_read_completed_result`` for the rationale: a job that
             # returns ``None`` must be observable to waiters as
             # "completed", not "still running".
-            if Cache.has(cache_key):
-                cached_raw = Cache.get(cache_key)
-                cached_result = None if cached_raw == self._NONE_SENTINEL else cached_raw
+            completed, cached_result = self._read_completed_result()
+            if completed:
                 Log.debug(
                     "Waited job completed: %s",
                     self.get_job_identifier(),
@@ -680,17 +682,6 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
             category="idempotency",
         )
         return None
-
-    # ── Identity / debug ───────────────────────────────────────────
-
-    def get_job_identifier(self) -> str:
-        """Human-readable identifier used in log lines."""
-        params = self.get_job_parameters()
-        if "product_id" in params:
-            return f"{self.__class__.__name__}(product_id={params['product_id']})"
-        elif "source" in params:
-            return f"{self.__class__.__name__}(source={params['source']})"
-        return f"{self.__class__.__name__}({params})"
 
 
 __all__ = ["MakesIdempotentBase"]

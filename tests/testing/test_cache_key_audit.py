@@ -30,6 +30,21 @@ class TestConstantKeys:
         assert "tenant:settings" in findings[0]
         assert "tenant_id" in findings[0]
 
+    def test_a_call_in_a_nested_function_is_one_finding(self):
+        """Both functions are parameterized and both enclose the call; it was
+        reported once for each ("Found 2 constant cache key(s)" for one line)."""
+        findings = _scan(
+            """
+            class R:
+                def settings(self, tenant_id):
+                    def load(strict):
+                        return Cache.remember("tenant:settings", 60, fetch)
+                    return load(True)
+            """
+        )
+        assert len(findings) == 1
+        assert "load(strict)" in findings[0]
+
     def test_a_keyword_key_argument_is_read_too(self):
         findings = _scan(
             """

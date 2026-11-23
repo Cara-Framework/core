@@ -15,7 +15,13 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import (
+    all_nodes,
+    nodes_of,
+    parse,
+    python_files,
+    relpath,
+)
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -204,7 +210,7 @@ def _model_symbols(
     model_tables: dict[str, str],
 ) -> dict[str, str]:
     symbols = dict(model_tables)
-    for node in ast.walk(tree):
+    for node in all_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 table = model_tables.get(alias.name)
@@ -243,9 +249,7 @@ def _model_symbols(
 def _writes(tree: ast.Module, model_tables: dict[str, str]) -> list[tuple[int, str]]:
     model_symbols = _model_symbols(tree, model_tables)
     hits: set[tuple[int, str]] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node in nodes_of(tree, (ast.Call,)):
         for table in _raw_sql_tables(node):
             hits.add((node.lineno, table))
         if not isinstance(node.func, ast.Attribute) or node.func.attr not in _MUTATORS:

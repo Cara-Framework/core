@@ -6,6 +6,8 @@
   ids such as ``listing_id``).
 * ``update`` filtered rows by tenant but let the SET move a row to another
   tenant (``update({"tenant_id": 9})``) — the insert path refuses that write.
+* ``bulk_update`` ran the ``update`` scopes against an empty update list, so
+  the same move went through it unrefused.
 * ``without_global_scopes()`` / ``remove_global_scope("_tenant_filter")``
   dropped the scope outside ``Tenancy.central()``, which ``without_tenant()``
   already refuses.
@@ -94,6 +96,55 @@ def test_an_update_of_other_columns_still_compiles():
 def test_central_work_may_move_a_row():
     with Tenancy.central():
         _attributes().where("id", 1).update({"tenant_id": 9}, dry=True).to_sql()
+
+
+class _Recorder:
+    """Stands in for the connection wrapper: records the statement it is given."""
+
+    transaction_level = 0
+
+    def __init__(self):
+        self.statements: list[tuple[str, tuple]] = []
+
+    def query(self, sql, bindings=(), results="*"):
+        self.statements.append((sql, tuple(bindings)))
+        return 1
+
+
+def _bulk(records: list[dict]) -> list[tuple[str, tuple]]:
+    builder = _attributes()
+    recorder = _Recorder()
+    builder._connection = recorder
+    builder.bulk_update(records, key="id")
+    return recorder.statements
+
+
+def test_a_bulk_update_cannot_move_a_row_to_another_tenant():
+    with Tenancy.as_tenant(5), pytest.raises(RuntimeError, match="cross-tenant"):
+        _bulk([{"id": 1, "value": "x"}, {"id": 2, "tenant_id": 9}])
+
+
+def test_a_bulk_update_of_other_columns_still_runs_under_the_tenant_filter():
+    with Tenancy.as_tenant(5):
+        ((sql, bindings),) = _bulk([{"id": 1, "value": "x"}, {"id": 2, "value": "y"}])
+
+    assert sql.startswith('UPDATE "listing_attribute" SET "value" = _bulk."value" FROM')
+    assert sql.endswith('AND ("listing_attribute"."tenant_id" = \'?\')')
+    assert bindings == (1, "x", 2, "y", 5)
+
+
+def test_a_bulk_update_naming_its_own_tenant_is_allowed():
+    with Tenancy.as_tenant(5):
+        statements = _bulk([{"id": 1, "tenant_id": 5, "value": "x"}])
+
+    assert len(statements) == 1
+
+
+def test_central_work_may_bulk_move_a_row():
+    with Tenancy.central():
+        statements = _bulk([{"id": 1, "tenant_id": 9}])
+
+    assert len(statements) == 1
 
 
 @pytest.mark.parametrize(

@@ -87,7 +87,9 @@ def _amqp_delivery_register_immediate_delivery(
     database = self._delivery_store._db()
     try:
         with database.transaction():
-            db_job_id = self._create_job_record(job, job_id, job_opts)
+            db_job_id = self._create_job_record(
+                job, job_id, job_opts, queue=job_opts["queue"]
+            )
             timeout_seconds = self._delivery_store.execution_timeout_for(job)
             payload = {
                 "obj": job,
@@ -578,16 +580,26 @@ def _amqp_delivery_apply_retry_jitter(self, base_delay: int, instance: Any) -> i
     return max(1, int(round(base_delay + jitter)))
 
 
-def _amqp_delivery_create_job_record(self, job, job_id: str, opts: dict[str, Any]) -> int:
-    """Create job record via JobTracker for consistent tracking."""
+def _amqp_delivery_create_job_record(
+    self, job, job_id: str, opts: dict[str, Any], *, queue: str | None = None
+) -> int:
+    """Create job record via JobTracker for consistent tracking.
+
+    ``queue`` is the queue the delivery is routed to, when the caller
+    resolved it; the tracker row must file the job where it will run.
+    """
     tracker = self._resolve_job_tracker()
     if tracker is None or getattr(tracker, "job_model", None) is None:
         raise QueueException(
             "Durable AMQP dispatch requires a persistent JobTracker model."
         )
 
-    queue_name = job.queue if hasattr(job, "queue") and job.queue else opts.get("queue")
-    queue_name = self.require_canonical_queue(queue_name)
+    # Reading ``job.queue`` before the routed queue filed a job dispatched to
+    # an explicit queue under its class default in tracking. Without one,
+    # the job's queue over the options' default is how ``schedule`` routes.
+    if queue is None:
+        queue = job.queue if getattr(job, "queue", None) else opts.get("queue")
+    queue_name = self.require_canonical_queue(queue)
     job_name = job.__class__.__name__
     job_class = f"{job.__class__.__module__}.{job.__class__.__name__}"
 

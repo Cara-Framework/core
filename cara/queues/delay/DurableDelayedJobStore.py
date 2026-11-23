@@ -97,10 +97,14 @@ class DurableDelayedJobStore:
         database = self._db()
         with database.transaction():
             explicit_db_job_id = self._optional_positive_int(options.get("db_job_id"))
+            # ``queue=`` is the queue this delivery is routed to: without it
+            # the tracker row fell back to ``job.queue`` and a delayed job or
+            # retry sent to an explicit queue was tracked under another one.
             db_job_id = explicit_db_job_id or self.driver._create_job_record(
                 job,
                 job_id,
                 merged,
+                queue=queue_name,
             )
             payload = {
                 "obj": job,

@@ -4,6 +4,7 @@ import importlib
 
 import pytest
 
+from cara.configuration import Configuration
 from cara.exceptions import (
     CaraException,
     DriverNotRegisteredException,
@@ -17,7 +18,18 @@ NotificationManager = notification_module.Notification
 
 
 class _Recipient(Notifiable):
+    """A notifiable as a product has one: a stable key and ``find(key)``.
+
+    A queued notification carries the recipient as ``{"key": 7}`` and the
+    worker reloads it through ``find``; a class without it is refused at
+    dispatch.
+    """
+
     id = 7
+
+    @classmethod
+    def find(cls, key):
+        return cls() if key == cls.id else None
 
 
 class _Notification(BaseNotification):
@@ -27,6 +39,20 @@ class _Notification(BaseNotification):
 
     def via(self, notifiable):
         return self.channels
+
+
+class _QueuedNotification(_Notification, notification_module.ShouldQueue):
+    """Module level: a queued class travels as an importable class path."""
+
+
+@pytest.fixture
+def queue_allowlist(monkeypatch):
+    """Trust this test package for queued classes, as a product trusts
+    ``app.*`` through ``queue.job_allowed_prefixes``."""
+    monkeypatch.setattr(Configuration, "_instance", None)
+    Configuration.empty().set(
+        "queue.job_allowed_prefixes", ["app.jobs", "tests.notifications"]
+    )
 
 
 class _Channel(BaseChannel):
@@ -106,10 +132,7 @@ def test_channel_receives_the_original_notification() -> None:
     assert manager.send_now(_Recipient(), _RenderedNotification(["slack"]))
 
 
-def test_queue_dispatch_failures_propagate(monkeypatch) -> None:
-    class _QueuedNotification(_Notification, notification_module.ShouldQueue):
-        pass
-
+def test_queue_dispatch_failures_propagate(monkeypatch, queue_allowlist) -> None:
     def fail_dispatch(job):
         raise RuntimeError("broker unavailable")
 
@@ -127,7 +150,9 @@ def test_queue_dispatch_failures_propagate(monkeypatch) -> None:
         )
 
 
-def test_send_delayed_always_queues_even_without_should_queue(monkeypatch) -> None:
+def test_send_delayed_always_queues_even_without_should_queue(
+    monkeypatch, queue_allowlist
+) -> None:
     dispatched = []
 
     class _Queue:
@@ -195,3 +220,52 @@ def test_notification_fluent_metadata_rejects_ambiguous_values() -> None:
             notification.id(value)
         with pytest.raises(InvalidArgumentException):
             notification.on_queue(value)
+
+
+class _RaisingChannel(BaseChannel):
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls = 0
+
+    def send(self, notifiable, notification) -> bool:
+        self.calls += 1
+        raise self.error
+
+
+def test_one_raising_channel_does_not_abort_its_siblings() -> None:
+    manager = NotificationManager()
+    before, after = _Channel(), _Channel()
+    failing = _RaisingChannel(RuntimeError("smtp down"))
+    manager.add_channel("database", before)
+    manager.add_channel("mail", failing)
+    manager.add_channel("slack", after)
+
+    # The single failure surfaces exactly as it did before: its own exception.
+    with pytest.raises(RuntimeError, match="smtp down"):
+        manager.send_now(_Recipient(), _Notification(["database", "mail", "slack"]))
+    assert len(before.calls) == 1 and failing.calls == 1
+    assert len(after.calls) == 1, "the sibling after the failure still delivered"
+
+
+def test_several_failing_channels_are_all_reported_after_all_ran() -> None:
+    manager = NotificationManager()
+    survivor = _Channel()
+    manager.add_channel("mail", _RaisingChannel(RuntimeError("smtp down")))
+    manager.add_channel("slack", _RaisingChannel(TimeoutError("slack slow")))
+    manager.add_channel("database", survivor)
+
+    with pytest.raises(ExceptionGroup) as raised:
+        manager.send_now(_Recipient(), _Notification(["mail", "slack", "database"]))
+    assert [type(e) for e in raised.value.exceptions] == [RuntimeError, TimeoutError]
+    assert "mail, slack" in str(raised.value)
+    assert len(survivor.calls) == 1
+
+
+def test_an_unregistered_channel_is_found_before_any_delivery() -> None:
+    manager = NotificationManager()
+    delivered = _Channel()
+    manager.add_channel("database", delivered)
+
+    with pytest.raises(DriverNotRegisteredException):
+        manager.send_now(_Recipient(), _Notification(["database", "sms"]))
+    assert delivered.calls == []

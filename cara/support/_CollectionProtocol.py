@@ -233,19 +233,18 @@ def _collection_pad(self, target_size, value):
     Returns:
         New collection padded to the target size
     """
+    # A negative size pads on the LEFT to its absolute value. Comparing the
+    # signed size to the length returned early for every negative size, so
+    # the left-pad branch below could never run.
     current_size = len(self._items)
-    if target_size <= current_size:
+    padding_size = abs(target_size) - current_size
+    if padding_size <= 0:
         return self.__class__(self._items[:])
 
-    padding_size = target_size - current_size
-    if padding_size > 0:
-        padding = [value] * padding_size
-        if target_size > 0:
-            return self.__class__(self._items + padding)
-        else:
-            return self.__class__(padding + self._items)
-
-    return self.__class__(self._items)
+    padding = [value] * padding_size
+    if target_size > 0:
+        return self.__class__(self._items + padding)
+    return self.__class__(padding + self._items)
 
 
 def _collection_items(self):

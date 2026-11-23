@@ -66,8 +66,19 @@ def load_cors_policy() -> dict[str, Any]:
     path MUST translate a failure into "emit no CORS headers" rather than
     into a wildcard: a policy we could not read is not a policy that allows
     everyone.
+
+    The ``CORS`` dict of ``config/cors.py`` is read ONCE and its keys taken
+    from it. ``HandleCors`` is built per request, so this runs per request,
+    and eight separate dot-path walks through the configuration tree cost
+    17 us — the most expensive single step of the global middleware chain —
+    to fetch eight keys of one dict. A reader that does not hand back that
+    dict (a test double answering only full ``cors.cors.<key>`` paths) is
+    asked key by key, as before.
     """
 
+    section = configuration.config("cors.cors", None)
+    if isinstance(section, dict):
+        return {key: section.get(key, default) for key, default in CORS_DEFAULTS.items()}
     return {
         key: configuration.config(f"cors.cors.{key}", default)
         for key, default in CORS_DEFAULTS.items()
@@ -100,8 +111,15 @@ def origin_explicitly_allowed(origin: str, policy: dict[str, Any]) -> bool:
         return False
     if origin in (policy.get("allowed_origins") or []):
         return True
+    # ``fullmatch``, not ``match``: ``match`` anchors only the START, so a
+    # pattern written without a trailing ``$`` — ``https://.*\.example\.com``
+    # — also matched ``https://app.example.com.attacker.net``. With
+    # ``supports_credentials`` that origin was reflected beside
+    # ``Access-Control-Allow-Credentials: true``, handing the attacker's page
+    # the signed-in user's responses. A pattern names whole origins; an
+    # explicitly anchored one (``^…$``) means the same thing either way.
     return any(
-        re.match(pattern, origin)
+        re.fullmatch(pattern, origin)
         for pattern in (policy.get("allowed_origins_patterns") or [])
     )
 
@@ -136,13 +154,22 @@ def cors_headers(origin: str, policy: dict[str, Any]) -> list[tuple[str, str]]:
     ``Allow-Origin`` at all. ``Vary: Origin`` is in the list because ACAO
     then depends on the request; callers MERGE it into an existing ``Vary``
     rather than replace it.
+
+    ``Vary: Origin`` goes out whenever the answer DEPENDS on the origin —
+    which includes the answer "no ``Allow-Origin``". It used to be sent only
+    beside an ``Allow-Origin``, so a shared cache could store the response to
+    a request with no (or a refused) ``Origin`` — a crawler, a server-side
+    fetch — under the bare URL and replay it, without ``Allow-Origin``, to
+    the allowed cross-origin app, whose browser then blocked a response the
+    policy grants it. Every ``public, s-maxage`` endpoint was exposed to
+    that for the length of its cache lifetime.
     """
     headers: list[tuple[str, str]] = []
     allow_origin = resolve_allow_origin(origin, policy)
     if allow_origin is not None:
         headers.append(("Access-Control-Allow-Origin", allow_origin))
-        if allow_origin != "*":
-            headers.append(("Vary", "Origin"))
+    if allow_origin != "*":
+        headers.append(("Vary", "Origin"))
 
     for name, key in (
         ("Access-Control-Allow-Methods", "allowed_methods"),

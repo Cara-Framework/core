@@ -35,6 +35,10 @@ _UNIT_SECONDS: dict[str, int] = {
     "minutes": 60,
     "hours": 3600,
     "days": 86400,
+    # Every unit the registration forwards must be counted here: with
+    # ``weeks`` missing, ``{"weeks": 1, "hours": 6}`` read as a six-hour
+    # period and was moved onto a ``*/6`` cron — 28 runs a week for one.
+    "weeks": 604800,
 }
 
 

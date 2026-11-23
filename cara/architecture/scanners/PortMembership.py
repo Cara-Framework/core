@@ -24,7 +24,7 @@ from __future__ import annotations
 import ast
 import re
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import nodes_of, parse, python_files, relpath
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -90,9 +90,7 @@ def _implementor_index(manifest: Manifest) -> dict[str, set[str]]:
             tree = parse(path)
             if tree is None:
                 continue
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.ClassDef):
-                    continue
+            for node in nodes_of(tree, (ast.ClassDef,)):
                 for base_name in _base_names(node):
                     implementations.setdefault(base_name, set()).add(rel)
     return implementations

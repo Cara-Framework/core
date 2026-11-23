@@ -4,6 +4,10 @@ The middleware owns policy only — skip rules, the fire-and-forget write, the
 missing-relation kill switch, the sampled retention sweep and the row shape.
 Storage lives behind the ``RequestLogStore`` port, so every test here drives a
 stub store instead of a database.
+
+Rows are buffered and written in batches; the row-shape tests below run with a
+batch of one, so each request leaves as its own batch and the captured hop
+carries ``(writer._insert_batch, [row])``.
 """
 
 from __future__ import annotations
@@ -96,8 +100,37 @@ class _SettledTask:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _empty_buffer():
+    """The batch buffer is process-wide; every test starts and ends empty."""
+
+    def _reset() -> None:
+        timer = PersistRequestLog._buffer_state.get("timer")
+        if timer is not None:
+            timer.cancel()
+        PersistRequestLog._buffer.clear()
+        PersistRequestLog._buffer_state.update(writer=None, timer=None, loop=None)
+
+    _reset()
+    yield
+    _reset()
+
+
+def _one_row_batches(monkeypatch) -> None:
+    """Every request fills a batch, so its row leaves at once."""
+    monkeypatch.setattr(PersistRequestLog, "BATCH_SIZE", 1)
+
+
+def _row(calls: list[tuple], index: int = 0) -> dict:
+    """The single row of the ``index``-th captured batch write."""
+    (_fn, rows) = calls[index]
+    assert len(rows) == 1
+    return rows[0]
+
+
 def _capture_dispatch(monkeypatch) -> list[tuple]:
     """Intercept the fire-and-forget hop and record (callable, *args)."""
+    _one_row_batches(monkeypatch)
     calls: list[tuple] = []
 
     class _Context:
@@ -202,7 +235,7 @@ async def test_successful_request_persists_the_canonical_row(monkeypatch):
 
     await subject.handle(_request("/api/products"), lambda _req: _respond(201))
 
-    (_fn, payload) = calls[0]
+    payload = _row(calls)
     assert payload["method"] == "GET"
     assert payload["path"] == "/api/products"
     assert payload["status_code"] == 201
@@ -226,7 +259,7 @@ async def test_response_bytes_read_from_content_not_body(monkeypatch):
 
     await subject.handle(_request(), _weird)
 
-    assert calls[0][1]["response_bytes"] == 10
+    assert _row(calls)["response_bytes"] == 10
 
 
 @pytest.mark.asyncio
@@ -242,7 +275,7 @@ async def test_extra_columns_hook_is_merged_onto_the_row(monkeypatch):
 
     await subject.handle(_request(), lambda _req: _respond(200))
 
-    assert calls[0][1]["workspace_id"] == 42
+    assert _row(calls)["workspace_id"] == 42
 
 
 def _controller(_request=None, _response=None):
@@ -264,7 +297,7 @@ async def test_a_capability_in_the_path_is_stored_redacted(monkeypatch):
         lambda _req: _respond(405),
     )
 
-    assert calls[0][1]["path"] == (
+    assert _row(calls)["path"] == (
         f"/api/webhooks/shipstation/{PathRedaction.REDACTED_SEGMENT}"
     )
 
@@ -284,7 +317,7 @@ async def test_exception_path_records_the_exception_status_and_reraises(monkeypa
     with pytest.raises(_Boom):
         await subject.handle(_request(), _raise)
 
-    payload = calls[0][1]
+    payload = _row(calls)
     assert payload["status_code"] == 422
     assert payload["response_bytes"] is None
 
@@ -447,6 +480,7 @@ async def test_pending_write_is_strongly_referenced_until_it_completes(monkeypat
     middleware holds the task itself and releases it on completion.
     """
     _stub_config(monkeypatch, {})
+    _one_row_batches(monkeypatch)
     PersistRequestLog._table_missing = False
     PersistRequestLog._request_counter = 0
     PersistRequestLog._inflight_tasks.clear()
@@ -488,6 +522,7 @@ async def test_undispatchable_write_is_reported_not_swallowed(monkeypatch):
         middleware_module, "Log", SimpleNamespace(warning=warning, debug=Mock())
     )
     _stub_config(monkeypatch, {})
+    _one_row_batches(monkeypatch)
     PersistRequestLog._table_missing = False
     PersistRequestLog._request_counter = 0
     PersistRequestLog._inflight_tasks.clear()

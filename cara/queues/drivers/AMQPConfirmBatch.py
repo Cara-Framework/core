@@ -24,6 +24,7 @@ channel it numbered.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Any
 
@@ -60,7 +61,7 @@ class AMQPConfirmBatch:
             callback=lambda _frame: (selected.append(True), self._wake()),
         )
         self._impl.add_on_return_callback(self._on_return)
-        self._impl.add_on_close_callback(lambda *_args: self._wake())
+        self._impl.add_on_close_callback(self._on_close)
         self._wait_until(lambda: bool(selected), "Confirm.SelectOk")
 
     @property
@@ -122,6 +123,20 @@ class AMQPConfirmBatch:
             self._outstanding.discard(tag)
             self._settled[tag] = acked
         self._wake()
+
+    def _on_close(self, *_args: Any) -> None:
+        """Wake the waiter when the channel closes, without ever raising.
+
+        When the TCP stream drops, pika marks the connection CLOSED and only
+        then runs the channel's close callbacks; ``add_callback_threadsafe``
+        refuses a closed connection with ``ConnectionWrongStateError``. Raised
+        from inside pika's teardown, that replaced the real ``StreamLostError``
+        in the relay's log and skipped pika's own close bookkeeping. Nothing
+        is lost by staying quiet: ``_wait_until`` re-checks ``is_closed`` on
+        its own once ``process_data_events`` returns.
+        """
+        with contextlib.suppress(pika.exceptions.ConnectionWrongStateError):
+            self._wake()
 
     def _wake(self) -> None:
         """Make the blocked ``process_data_events`` return to re-check.

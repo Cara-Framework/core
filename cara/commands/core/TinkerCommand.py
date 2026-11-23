@@ -80,9 +80,9 @@ class TinkerCommand(CommandBase):
         try:
             # Handle different execution modes
             if execute:
-                self._execute_single_command(execute)
+                return self._execute_single_command(execute)
             elif file:
-                self._execute_file(file)
+                return self._execute_file(file)
             else:
                 self._start_interactive_shell(include)
         except Exception as e:
@@ -141,8 +141,11 @@ class TinkerCommand(CommandBase):
         repl = Repl(shell.namespace)
 
         try:
-            # Execute command
-            result = repl.execute(command)
+            # ``evaluate`` RAISES on failure. ``execute`` prints the error
+            # and answers None — the answer a successful statement gives —
+            # so the ``except`` below never ran: ``tinker --execute "1/0"``
+            # printed "Command executed successfully" and exited 0.
+            result = repl.evaluate(command)
 
             # Show result
             if result is not None:
@@ -154,6 +157,7 @@ class TinkerCommand(CommandBase):
 
         except Exception as e:
             self.error(f"❌ Command execution failed: {e}")
+            return 1
 
     def _execute_file(self, file_path: str):
         """Execute commands from a file."""
@@ -187,9 +191,12 @@ class TinkerCommand(CommandBase):
                 self.warning(
                     f"⚠️  File executed with errors ({successful}/{total} successful, {failed} failed)"
                 )
+                # A script with failed lines is a failed run for the caller.
+                return 1
 
         except Exception as e:
             self.error(f"❌ File execution failed: {e}")
+            return 1
 
     _add_enhanced_features = _TinkerFeatures._add_tinker_features
 

@@ -198,7 +198,13 @@ class InvariantAuditor:
             }
             return summary
 
-        broken = {(item.scope_id, item.subject_key) for item in violations}
+        # A finding is kept open by the row id its upsert returned, not by
+        # re-comparing (scope, subject) here: the store writes the subject
+        # truncated to 160 chars and as text, and without a scope column
+        # ignores the scope, so a key it altered never matched and the finding
+        # was closed in the same pass that refreshed it (open, close, reopen
+        # every pass — the gauge read 0 while the break stood).
+        kept: set[int] = set()
         with self._store.transaction():
             opened = 0
             for item in violations:
@@ -213,11 +219,8 @@ class InvariantAuditor:
                     now=now,
                 )
                 opened += 1 if written["opened"] else 0
-            holding = [
-                int(row["id"])
-                for row in open_rows
-                if (row.get("scope_id"), row.get("subject_key")) not in broken
-            ]
+                kept.add(int(written["id"]))
+            holding = [int(row["id"]) for row in open_rows if int(row["id"]) not in kept]
             closed = self._store.close(holding, now)
             if scope_id is None:
                 # One scope's subjects only must not move the cursor or the

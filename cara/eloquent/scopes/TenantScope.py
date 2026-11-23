@@ -75,6 +75,7 @@ class TenantScope(BaseScope):
             raise RuntimeError("Cannot upsert tenant-scoped models with UNSET tenancy.")
         rows = []
         for row in builder._upsert_values:
+            self._refuse_aliased_tenant_key(row)
             if state is Tenancy.CENTRAL:
                 if self.tenant_column not in row:
                     raise RuntimeError(
@@ -101,14 +102,44 @@ class TenantScope(BaseScope):
             return builder
         state = Tenancy.state()
         for update in getattr(builder, "_updates", ()) or ():
-            values = getattr(update, "column", None)
-            if (
-                isinstance(values, dict)
-                and self.tenant_column in values
-                and str(values[self.tenant_column]) != str(state)
-            ):
+            target = getattr(update, "column", None)
+            if isinstance(target, dict):
+                moved = any(
+                    self._names_tenant_column(column) and str(value) != str(state)
+                    for column, value in target.items()
+                )
+            else:
+                # ``increment`` / ``decrement`` name their column as a string:
+                # arithmetic on the tenant column is a move whatever the amount.
+                moved = self._names_tenant_column(target)
+            if moved:
                 raise RuntimeError("Tenant-scoped update attempted a cross-tenant move.")
         return builder
+
+    def _names_tenant_column(self, column) -> bool:
+        """Whether an update's column name is the tenant column, however it
+        is spelled. The guard compared the bare name only, so a qualified key
+        (``update({"listing.tenant_id": 9})``) and the counter verbs
+        (``increment("tenant_id")``) moved the caller's rows to another
+        tenant; the grammar writes every one of these to the same column."""
+        if not isinstance(column, str):
+            return False
+        name = column.rsplit(".", 1)[-1].strip().strip('"`[]').strip()
+        return name.casefold() == self.tenant_column.casefold()
+
+    def _refuse_aliased_tenant_key(self, row) -> None:
+        """Refuse an insert row that names the tenant column under any
+        spelling but the bare one. The injectors read the bare key only: under
+        ``{"listing.tenant_id": 9}`` the caller's value went unseen, the armed
+        tenant was stamped beside it, and the statement carried the column
+        twice — a database that takes the first value (SQLite) stored the row
+        in the caller's chosen tenant."""
+        for column in row:
+            if column != self.tenant_column and self._names_tenant_column(column):
+                raise RuntimeError(
+                    "Tenant-scoped insert attempted a cross-tenant write: "
+                    f"{column!r} is another spelling of {self.tenant_column}."
+                )
 
     def _apply_tenant_filter(self, builder):
         """Apply tenant filtering based on current request context.
@@ -148,6 +179,7 @@ class TenantScope(BaseScope):
 
             state = Tenancy.state()
             creates = builder._creates
+            self._refuse_aliased_tenant_key(creates)
             if state is Tenancy.UNSET:
                 raise RuntimeError(
                     "Cannot insert a tenant-scoped model with UNSET tenancy."
@@ -200,6 +232,7 @@ class TenantScope(BaseScope):
                     "Cannot bulk-insert tenant-scoped models with UNSET tenancy."
                 )
             for row in builder._creates:
+                self._refuse_aliased_tenant_key(row)
                 if state is Tenancy.CENTRAL:
                     if self.tenant_column not in row:
                         raise RuntimeError(

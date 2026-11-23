@@ -9,7 +9,9 @@ worker that dispatches events) maintains:
 
 1. A *publisher* (``RedisPublisher``) — one process-wide synchronous
    client for ``PUBLISH``, shared by every event loop. That module says
-   why a per-loop async client leaked a socket per queued job.
+   why a per-loop async client leaked a socket per queued job, and why
+   one writer keeps this process's frames in the order they were
+   broadcast.
 
 2. A *subscriber* pubsub object that listens for messages on the set
    of channels this node currently has local subscribers for. The
@@ -26,21 +28,32 @@ Self-broadcast deduplication
 ----------------------------
 Every published payload carries the originating ``_node_id``. When
 the listener receives a message originated from this node it skips
-delivery — local subscribers were already served synchronously by
-``broadcast`` before the message was put on the wire. Without this
-guard every event would be double-delivered to local subscribers.
+delivery — local subscribers are served by ``broadcast`` itself, next
+to the publish. Without this guard every event would be
+double-delivered to local subscribers.
 
 Reconnection
 ------------
 The listener task auto-reconnects with exponential backoff. On every
 reconnect it resubscribes to the full ``_redis_subscribed`` set so
 no channel is silently lost during a Redis blip.
+
+A connection that dies without saying so (a dropped NAT flow, a
+powered-off host) never fails a read on its own, so the listener
+polls: after a quiet spell it sends a PING, and a PING nobody answers
+is a dead connection, reconnected like any other failure.
+
+The pubsub connection has ONE owner, the listener task. While it is
+(re)connecting, ``_listener_pubsub`` is ``None`` and a subscription
+change only edits ``_redis_subscribed``; the listener applies that set
+to the new connection before it calls it live.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import uuid
 import weakref
 from collections import deque
@@ -60,6 +73,8 @@ from cara.exceptions import BroadcastingConfigurationException
 from cara.facades import Log
 from cara.support import json_dumps
 
+from . import _RedisListener
+
 # Pubsub channel name for per-user broadcasts. ``broadcast_to_user``
 # publishes here; nodes auto-subscribe whenever they hold a connection
 # for the relevant user. The ``__user:`` prefix is private to the
@@ -69,6 +84,20 @@ _USER_CHANNEL_PREFIX = "__user:"
 # Frames one channel may have waiting. A wedged subscriber is reaped within one
 # send timeout, so this only has to outlast that against a burst.
 _LANE_CAPACITY = 2048
+
+# Kernel keepalive for the listener's socket, the layer under the PING: probe
+# after 30 idle seconds, every 10 s, give up after 3. Only the options this
+# platform has (Linux names the idle one TCP_KEEPIDLE, macOS TCP_KEEPALIVE).
+_KEEPALIVE_OPTIONS: dict[int, int] = {
+    getattr(socket, name): value
+    for name, value in (
+        ("TCP_KEEPIDLE", 30),
+        ("TCP_KEEPALIVE", 30),
+        ("TCP_KEEPINTVL", 10),
+        ("TCP_KEEPCNT", 3),
+    )
+    if hasattr(socket, name)
+}
 
 
 class RedisBroadcaster(ConnectionManager, Broadcaster):
@@ -119,12 +148,24 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         self._publisher = RedisPublisher(self._redis_url, self._connection_config)
 
         # Listener bookkeeping. ``_listener_task`` is the long-running
-        # asyncio.Task that drains pubsub messages; ``_listener_pubsub``
-        # is the active pubsub object it owns.
+        # asyncio.Task that drains pubsub messages. ``_listener_pubsub``
+        # is the pubsub it owns, and is set ONLY while that pubsub is live:
+        # connected and subscribed to all of ``_redis_subscribed``. ``None``
+        # means the listener is (re)connecting and will apply the set itself.
         self._listener_task: asyncio.Task | None = None
         self._listener_pubsub: Any = None
         self._listener_ready: asyncio.Event = asyncio.Event()
         self._listener_lock: asyncio.Lock = asyncio.Lock()
+        # Held for every SUBSCRIBE / UNSUBSCRIBE sent on the live pubsub from
+        # outside the listener, and by the listener while it closes that
+        # pubsub: a change in flight finishes before its connection goes away.
+        self._pubsub_lock: asyncio.Lock = asyncio.Lock()
+        # A SUBSCRIBE failed on the live pubsub: the listener rebuilds its
+        # connection from ``_redis_subscribed`` at its next poll.
+        self._listener_resync: bool = False
+        self._poll_seconds: float = _RedisListener._POLL_SECONDS
+        self._ping_after: float = _RedisListener._PING_AFTER
+        self._pong_within: float = _RedisListener._PONG_WITHIN
 
         # Frames read but not yet delivered, one lane per pubsub channel.
         # See ``_enqueue_pubsub_message``.
@@ -196,14 +237,18 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             return self._redis_clients[loop_id]
 
         if loop_id not in self._redis_pools:
-            # Bounded socket timeouts: without them ``ping`` / ``listen``
+            # Bounded socket timeouts: without them ``ping`` / a SUBSCRIBE
             # block on the OS TCP timeout (minutes) when Redis black-holes
-            # (dropped node, network partition) rather than refusing.
+            # (dropped node, network partition) rather than refusing. They do
+            # NOT bound the listener's wait for the next frame; that is the
+            # watchdog in ``_read_until_silent``.
             pool_kwargs: dict[str, Any] = {
                 "decode_responses": True,
                 "max_connections": 10,
                 "socket_connect_timeout": 5,
                 "socket_timeout": 5,
+                "socket_keepalive": True,
+                "socket_keepalive_options": _KEEPALIVE_OPTIONS,
                 "health_check_interval": 30,
             }
             if self._redis_url.startswith("rediss://"):
@@ -280,32 +325,15 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
     ) -> None:
         unprefixed = self._unprefixed(channel)
 
-        # Local fan-out FIRST — never blocked by Redis. If the
-        # publish below fails for transport reasons (Redis briefly
-        # unreachable) at least the same-node subscribers got the
-        # message.
-        try:
-            await self.broadcast_to_channel(
-                unprefixed, event, data, except_socket_id=except_socket_id
-            )
-        except Exception as e:
-            Log.warning(
-                "Local fan-out failed for '%s' on %s: %s",
-                event,
-                unprefixed,
-                e,
-                category="cara.broadcasting",
-            )
-
-        # Cross-process publish. Skip-self is encoded into the payload
-        # so the listener can drop messages we originated.
+        # Skip-self is encoded into the payload so the listener can drop
+        # messages we originated.
         #
-        # Encoding sits OUTSIDE the try: the ``except`` below exists to
-        # tolerate a Redis blip, and a payload cara cannot encode is not
-        # a Redis blip — it is a programming error. Swallowing it into a
-        # ``Log.debug`` dropped the broadcast on every node and told
-        # nobody, which is how a Decimal could ship as a float here for
-        # as long as it did.
+        # Encoding comes first and sits outside any try: a payload cara
+        # cannot encode is not a Redis blip — it is a programming error.
+        # Swallowing it into a ``Log.debug`` dropped the broadcast on every
+        # node and told nobody, which is how a Decimal could ship as a float
+        # here for as long as it did. Raised here, before anyone is served,
+        # it fails this one broadcast and nothing else.
         payload = json_dumps(
             {
                 "event": event,
@@ -315,13 +343,48 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 "_except_socket_id": except_socket_id,
             },
         )
-        try:
-            await self._publish_redis(self._prefixed(unprefixed), payload)
-        except Exception as e:
+        await self._publish_and_deliver(
+            self._prefixed(unprefixed),
+            payload,
+            self.broadcast_to_channel(
+                unprefixed, event, data, except_socket_id=except_socket_id
+            ),
+            label=unprefixed,
+        )
+
+    async def _publish_and_deliver(
+        self, prefixed_channel: str, payload: str, deliver: Any, *, label: str
+    ) -> None:
+        """Put the frame on the wire and serve local sockets, side by side.
+
+        The publish used to wait behind the local fan-out, so one local client
+        that had stopped reading held the frame back from every other node for
+        a whole send timeout. Neither waits on the other now: a Redis blip
+        still never costs same-node subscribers their frame, and a slow local
+        socket never costs the other nodes theirs.
+
+        The publish is listed FIRST on purpose. ``gather`` starts its tasks in
+        that order and the publisher takes a frame's place in its queue before
+        its first await, so frames leave this process in the order they were
+        broadcast (see ``RedisPublisher``).
+        """
+        published, delivered = await asyncio.gather(
+            self._publish_redis(prefixed_channel, payload),
+            deliver,
+            return_exceptions=True,
+        )
+        if isinstance(delivered, BaseException):
+            Log.warning(
+                "Local fan-out failed on %s: %s",
+                label,
+                delivered,
+                category="cara.broadcasting",
+            )
+        if isinstance(published, BaseException):
             Log.debug(
-                "Redis publish failed for %s (local delivery succeeded): %s",
-                unprefixed,
-                e,
+                "Redis publish failed for %s (local delivery is unaffected): %s",
+                label,
+                published,
                 category="cara.broadcasting",
             )
 
@@ -336,12 +399,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         *,
         except_socket_id: str | None = None,
     ) -> None:
-        # Local delivery first — same reasoning as ``_broadcast_one``.
-        await self.broadcast_to_user_local(
-            user_id, event, data, except_socket_id=except_socket_id
-        )
-        # Then fan out across processes. Encoding sits outside the try
-        # for the reason spelled out in ``_broadcast_one``.
+        # Encode, then publish and deliver side by side — same reasoning as
+        # ``_broadcast_one``.
         payload = json_dumps(
             {
                 "event": event,
@@ -351,17 +410,14 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 "_except_socket_id": except_socket_id,
             },
         )
-        try:
-            await self._publish_redis(
-                self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"), payload
-            )
-        except Exception as e:
-            Log.debug(
-                "Redis publish to user %s failed (local delivery succeeded): %s",
-                user_id,
-                e,
-                category="cara.broadcasting",
-            )
+        await self._publish_and_deliver(
+            self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"),
+            payload,
+            self.broadcast_to_user_local(
+                user_id, event, data, except_socket_id=except_socket_id
+            ),
+            label=f"user:{user_id}",
+        )
 
     # ------------------------------------------------------------------
     # Connection lifecycle (with cross-process per-user channel
@@ -425,148 +481,15 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
     # ------------------------------------------------------------------
     # Listener task management
     # ------------------------------------------------------------------
-    async def _ensure_redis_subscription(self, prefixed_channel: str) -> None:
-        """Subscribe the Redis listener to ``prefixed_channel`` if not
-        already. Lazily starts the listener task on first call."""
-        if prefixed_channel in self._redis_subscribed:
-            return
-
-        async with self._listener_lock:
-            if prefixed_channel in self._redis_subscribed:
-                return  # Re-check inside the lock.
-
-            self._redis_subscribed.add(prefixed_channel)
-
-            # Start the listener task on first subscription. The task
-            # subscribes to every channel in ``_redis_subscribed`` so
-            # everything we've added so far is picked up.
-            if self._listener_task is None or self._listener_task.done():
-                self._listener_task = asyncio.create_task(self._listener_loop())
-                # Wait for initial subscribe to complete so callers can
-                # publish immediately after; bounded so we don't deadlock
-                # when Redis is unreachable.
-                try:
-                    await asyncio.wait_for(self._listener_ready.wait(), timeout=5.0)
-                except TimeoutError:
-                    Log.warning(
-                        "Redis listener didn't become ready within 5s; "
-                        "broadcasts may briefly miss subscribers",
-                        category="cara.broadcasting",
-                    )
-            else:
-                # Listener already running — just add the new channel.
-                # Avoid the previous double-SUBSCRIBE bug by NOT calling
-                # subscribe() again here unless we have an active pubsub.
-                pubsub = self._listener_pubsub
-                if pubsub is not None:
-                    try:
-                        await pubsub.subscribe(prefixed_channel)
-                    except Exception as e:
-                        Log.warning(
-                            "Failed to subscribe Redis listener to %s: %s",
-                            prefixed_channel,
-                            e,
-                            category="cara.broadcasting",
-                        )
-                        self._redis_subscribed.discard(prefixed_channel)
-
-    async def _drop_redis_subscription(self, prefixed_channel: str) -> None:
-        if prefixed_channel not in self._redis_subscribed:
-            return
-        self._redis_subscribed.discard(prefixed_channel)
-        pubsub = self._listener_pubsub
-        if pubsub is not None:
-            try:
-                await pubsub.unsubscribe(prefixed_channel)
-            except Exception as e:
-                Log.debug(
-                    "Redis unsubscribe of %s failed: %s",
-                    prefixed_channel,
-                    e,
-                    category="cara.broadcasting",
-                )
-        # Optimisation: if we no longer have any subscriptions, the
-        # listener can shut down to free a connection.
-        if (
-            not self._redis_subscribed
-            and self._listener_task
-            and not self._listener_task.done()
-        ):
-            Log.info(
-                "Redis listener idle (no subscriptions); shutting down",
-                category="cara.broadcasting",
-            )
-            self._listener_task.cancel()
-            self._listener_task = None
-            self._listener_ready.clear()
-
-    async def _listener_loop(self) -> None:
-        """Long-running task that drains pubsub messages and dispatches
-        them to local subscribers. Auto-reconnects with exponential
-        backoff on Redis failures."""
-        attempt = 0
-        while True:
-            try:
-                client = await self._redis()
-                if client is None:
-                    # ``client.pubsub()`` on None would be a confusing crash.
-                    # Treat as a connection failure -> backoff + retry.
-                    raise ConnectionError("Redis client unavailable")
-                # Bind the pubsub to a LOCAL before iterating. ``cleanup()``
-                # (graceful shutdown) and the ``finally`` below both null
-                # ``self._listener_pubsub`` from another task; iterating the
-                # instance attribute let it be set to None between creation
-                # and ``.listen()`` -> the "'NoneType' object has no attribute
-                # 'listen'" crash logged on every restart. A local ref is
-                # stable for the lifetime of this iteration.
-                pubsub = client.pubsub()
-                self._listener_pubsub = pubsub
-                if self._redis_subscribed:
-                    await pubsub.subscribe(*self._redis_subscribed)
-                self._listener_ready.set()
-                attempt = 0  # Reset after a successful (re)connect.
-
-                async for message in pubsub.listen():
-                    if message.get("type") != "message":
-                        continue
-                    self._enqueue_pubsub_message(message)
-            except asyncio.CancelledError:
-                Log.debug("Redis listener cancelled", category="cara.broadcasting")
-                break
-            except self._redis_async.TimeoutError, TimeoutError:
-                # A pub/sub subscriber legitimately BLOCKS waiting for the next
-                # message. The listener's pool sets ``socket_timeout`` so a
-                # black-holed Redis fails ``ping`` fast, so an IDLE
-                # ``listen()`` read raises a read-timeout every few seconds —
-                # that is EXPECTED, not a crash. Re-establish the listen quietly.
-                # DON'T log a traceback / bump ``attempt`` / back off here: on an
-                # idle node this fires continuously, and formatting the nested
-                # traceback + sleeping on every tick floods the log (MBs) and
-                # starves concurrent HTTP handlers on the shared event loop —
-                # the "every API response is slow" symptom. Reconnect cadence is
-                # unchanged (the ``finally`` still recycles the pubsub); we only
-                # drop the cost that made an idle timeout look like an outage.
-                continue
-            except Exception as e:
-                attempt += 1
-                backoff = min(60, 2 ** min(attempt - 1, 6))
-                Log.error(
-                    "Redis listener crashed (attempt %s): %s; retrying in %ss",
-                    attempt,
-                    e,
-                    backoff,
-                    category="cara.broadcasting",
-                    exc_info=True,
-                )
-                await asyncio.sleep(backoff)
-            finally:
-                if self._listener_pubsub is not None:
-                    with contextlib.suppress(
-                        OSError, RuntimeError, AttributeError, ConnectionError
-                    ):
-                        await self._listener_pubsub.aclose()
-                    self._listener_pubsub = None
-                self._listener_ready.clear()
+    # The subscriber side (who owns the pubsub connection, the reconnect and
+    # its watchdog) lives in ``_RedisListener``; bound here so callers and
+    # tests keep talking to one object.
+    _ensure_redis_subscription = _RedisListener._ensure_redis_subscription
+    _drop_redis_subscription = _RedisListener._drop_redis_subscription
+    _listener_loop = _RedisListener._listener_loop
+    _subscribe_until_settled = _RedisListener._subscribe_until_settled
+    _read_until_silent = _RedisListener._read_until_silent
+    _retire_pubsub = _RedisListener._retire_pubsub
 
     def _enqueue_pubsub_message(self, message: dict[str, Any]) -> None:
         """Hand a frame to its channel's lane without waiting on any socket.
@@ -617,8 +540,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
     async def _dispatch_pubsub_message(self, message: dict[str, Any]) -> None:
         """Decode an incoming pubsub frame and deliver it locally.
 
-        Skips frames originated by this node (already delivered
-        synchronously during ``broadcast``) and routes per-user
+        Skips frames originated by this node (``broadcast`` serves its
+        own local subscribers itself) and routes per-user
         channels to ``broadcast_to_user_local`` while regular
         channels go to ``broadcast_to_channel``.
         """
@@ -640,7 +563,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         if not isinstance(payload, dict):
             return
         if payload.get("_node_id") == self._node_id:
-            return  # Echo of our own publish — local already delivered.
+            return  # Echo of our own publish — ``broadcast`` delivers locally.
 
         except_sid = payload.get("_except_socket_id")
         event = payload.get("event") or "message"

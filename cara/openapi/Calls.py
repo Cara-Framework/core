@@ -27,6 +27,8 @@ from .Sources import (
     _first_parameter,
     _parameter_annotation,
     _simple_name,
+    _statements,
+    _walk,
 )
 
 # An exception travels as (class name, the HTTP status it answers, every class
@@ -87,14 +89,39 @@ class _FunctionScan:
         self._scan = scan
         self._module = node.function.module
         function = node.function.node
-        self._nested = {
-            statement.name: statement
-            for statement in ast.walk(function)
-            if isinstance(statement, _FUNCTION_NODES) and statement is not function
-        }
-        self._locals = _bound_names(function)
-        self._types = self._local_types(function)
-        self._evaluator = _Evaluator(_unpin(node.facts), self._builtin)
+        # A function is scanned once per set of facts its callers pin
+        # (Synkronus: 20,882 scans of 11,419 functions). What its own source
+        # settles — the definitions it nests, the names it binds, the locals
+        # it types — is the same under every one of them, so it is read once
+        # per function (the local types once per receiver name: a nested
+        # function keeps its enclosing method's).
+        own = binder.source
+        if function not in own:
+            own[function] = (
+                {
+                    statement.name: statement
+                    for statement in _statements(function)
+                    if isinstance(statement, _FUNCTION_NODES)
+                    and statement is not function
+                },
+                _bound_names(function),
+            )
+        self._nested, self._locals = own[function]
+        typed = (function, node.receiver)
+        if typed not in own:
+            own[typed] = self._local_types(function)
+        self._types = own[typed]
+        # Whether a name still means the Python builtin, as a function of its
+        # own and not a method of this scan: an evaluator holding its scan's
+        # method made every scan a reference cycle, and each cycle held the
+        # whole source index — every parsed module — until a full collection
+        # (458,523 unreachable objects after one Synkronus build). Without the
+        # cycle a scan is freed as it ends and the index with its extractor.
+        local_names, module = self._locals, self._module
+        self._evaluator = _Evaluator(
+            _unpin(node.facts),
+            lambda name: name not in local_names and index.resolve(module, name) is None,
+        )
 
     def run(self) -> None:
         self._block(self._node.function.node.body, ())
@@ -185,12 +212,6 @@ class _FunctionScan:
             self._expression(test, context)
         return self._evaluator.truth(test)
 
-    def _builtin(self, name: str) -> bool:
-        """Whether ``name`` here is the Python builtin of that name."""
-        return (
-            name not in self._locals and self._index.resolve(self._module, name) is None
-        )
-
     def _children(self, node: ast.AST, context: _Context) -> None:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.stmt):
@@ -234,7 +255,7 @@ class _FunctionScan:
     # -- calls -----------------------------------------------------------
 
     def _expression(self, expression: ast.expr, context: _Context) -> None:
-        for node in ast.walk(expression):
+        for node in _walk(expression):
             if not isinstance(node, ast.Call):
                 continue
             targets = self._targets(node.func, construct=True)
@@ -404,7 +425,7 @@ class _FunctionScan:
                 found.setdefault(parameter.arg, set()).add(
                     self._index.annotation_class(self._module, parameter.annotation)
                 )
-        for statement in ast.walk(function):
+        for statement in _statements(function):
             if isinstance(statement, ast.AnnAssign) and isinstance(
                 statement.target, ast.Name
             ):
@@ -509,7 +530,7 @@ def _bound_names(function: Any) -> frozenset[str]:
             *(p for p in (arguments.vararg, arguments.kwarg) if p is not None),
         )
     }
-    for node in ast.walk(function):
+    for node in _walk(function):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             names.add(node.id)
         elif isinstance(node, ast.pattern):

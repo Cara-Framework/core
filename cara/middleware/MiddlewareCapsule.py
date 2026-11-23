@@ -18,6 +18,25 @@ MiddlewareType = type[Middleware]
 class MiddlewareCapsule:
     """Middleware Capsule for managing middleware execution."""
 
+    #: Bumped by every registration method (see ``version``). A class default
+    #: so a capsule assembled without ``__init__`` still reports one.
+    _version: int = 0
+
+    @property
+    def version(self) -> int:
+        """A number that changes whenever a registration does.
+
+        Conductors keep resolved middleware stacks for as long as this is
+        unchanged instead of comparing every registration container on every
+        request. Only the registration methods bump it: editing the private
+        containers directly bypasses it, and is not a supported way to
+        register.
+        """
+        return self._version
+
+    def _changed(self) -> None:
+        self._version = self._version + 1
+
     def __init__(self, application):
         self.application = application
         self._global_middleware: list[MiddlewareType] = []
@@ -28,6 +47,17 @@ class MiddlewareCapsule:
         # how they were registered. Unknown middleware keep registration
         # order and appear after all prioritized ones.
         self._priority: list[MiddlewareType] = []
+        # ``(base class, parameters)`` → the proxy class built for it. A route
+        # declares ``throttle:api`` once, but the conductor resolves the
+        # route's middleware on every request, and each resolution used to
+        # build a brand-new proxy CLASS: ~10 us of ``type()`` work per
+        # parameterized alias per request, and a class is cyclic garbage only
+        # the cycle collector can free. The proxy closes over nothing but the
+        # base class and the parameter strings, so one class per distinct
+        # declaration is exact; instances are still built per request.
+        self._parameterized: dict[
+            tuple[MiddlewareType, tuple[str, ...]], MiddlewareType
+        ] = {}
 
     def __iter__(self) -> Iterator[MiddlewareType]:
         return iter(self._global_middleware)
@@ -47,12 +77,14 @@ class MiddlewareCapsule:
         """Add global middleware."""
         if middleware not in self._global_middleware:
             self._global_middleware.append(middleware)
+            self._changed()
         return self
 
     def create_group(self, name: str) -> MiddlewareCapsule:
         """Create a new middleware group."""
         if name not in self._route_middleware:
             self._route_middleware[name] = []
+            self._changed()
         return self
 
     def add_to_group(self, group: str, middleware: MiddlewareType) -> MiddlewareCapsule:
@@ -62,11 +94,13 @@ class MiddlewareCapsule:
 
         if middleware not in self._route_middleware[group]:
             self._route_middleware[group].append(middleware)
+            self._changed()
         return self
 
     def add_alias(self, name: str, middleware: MiddlewareType) -> MiddlewareCapsule:
         """Add middleware alias for easier reference in routes."""
         self._middleware_aliases[name] = middleware
+        self._changed()
         return self
 
     def resolve_alias(self, name: str) -> MiddlewareType | None:
@@ -124,6 +158,16 @@ class MiddlewareCapsule:
         self, base_middleware: MiddlewareType, parameters: list[str]
     ) -> MiddlewareType:
         """Create a parameterized middleware class using Laravel-style parameter parsing."""
+        # ``setdefault`` on the instance dict rather than ``self._parameterized``:
+        # a capsule assembled without ``__init__`` (``__new__`` in tests and
+        # tooling) has no cache attribute yet and must still resolve.
+        proxies = self.__dict__.setdefault("_parameterized", {})
+        cache_key = (base_middleware, tuple(parameters))
+        cached = proxies.get(cache_key)
+        if cached is not None:
+            return cached
+        # The proxy must not see a later mutation of the caller's list.
+        parameters = list(parameters)
 
         class ParameterizedMiddleware:
             def __init__(self, application):
@@ -163,6 +207,7 @@ class MiddlewareCapsule:
         ParameterizedMiddleware.__qualname__ = f"{base_middleware.__qualname__}WithParams"
         # Expose base class so priority-ordering can unwrap the proxy
         ParameterizedMiddleware.__base_middleware__ = base_middleware
+        proxies[cache_key] = ParameterizedMiddleware
         return ParameterizedMiddleware
 
     def remove(self, mw: str | MiddlewareType) -> MiddlewareCapsule:
@@ -173,6 +218,7 @@ class MiddlewareCapsule:
         else:
             with contextlib.suppress(ValueError):
                 self._global_middleware.remove(mw)
+        self._changed()
         return self
 
     def get_global_middleware(self) -> list[MiddlewareType]:
@@ -187,6 +233,7 @@ class MiddlewareCapsule:
         order and appear after prioritized ones.
         """
         self._priority = list(priority)
+        self._changed()
         return self
 
     def sort_by_priority(self, middleware: list[MiddlewareType]) -> list[MiddlewareType]:

@@ -397,10 +397,12 @@ class JWTGuard(Guard):
             record.get("sub")
         ):
             return None
-        family_id = claims.get("fid")
-        if not isinstance(family_id, str) or not family_id:
-            return None
-        if self._is_family_revoked(family_id):
+        try:
+            # Everything that revokes the access token revokes its ticket: the
+            # token's blacklist entry, its family and the user-level cutoff.
+            _JWTTokenLifecycle._validate_claims(claims)
+            self._assert_not_revoked(claims)
+        except _AUTH_FAILURES:
             return None
         user = self._resolve_user_by_id(str(record["sub"]), claims)
         if user is not None:
@@ -447,7 +449,10 @@ class JWTGuard(Guard):
                 # Token already past its natural lifetime; refuse rather
                 # than write a zero-TTL key that vanishes immediately.
                 return False
-            won = bool(Cache.add(f"jwt_blacklist:{_hash_token(token)}", True, ttl))
+            # Same key the blacklist reads (the verified ``jti``, not the token
+            # text): ``<token>=`` verifies as the same credential and must
+            # lose this claim, not win a second slot under another spelling.
+            won = bool(Cache.add(_JWTTokenLifecycle._blacklist_key(payload), True, ttl))
             if not won:
                 # REUSE DETECTION (OAuth 2.0 Security BCP §4.13.2): this
                 # refresh token was ALREADY burned — rotated once and now
@@ -659,6 +664,7 @@ class JWTGuard(Guard):
         return version
 
     _decode_token = _JWTTokenLifecycle._decode_token
+    _assert_not_revoked = _JWTTokenLifecycle._assert_not_revoked
     revoke_user_sessions = _JWTTokenLifecycle._revoke_user_sessions
     revoke_token_family = _JWTTokenLifecycle._revoke_token_family
     _is_family_revoked = _JWTTokenLifecycle._is_family_revoked

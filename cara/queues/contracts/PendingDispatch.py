@@ -20,7 +20,18 @@ class PendingDispatch:
         """Initialize with job instance."""
         self.job = job_instance
         self._queue_name = getattr(job_instance, "queue", None)
-        self._delay = None
+        # The job's own delay (``default_delay`` / ``job.delay(n)``, kept on
+        # ``_delay``) is the starting point. It started at None, so a delay
+        # the job declared never reached ``Queue.later`` — the job ran at
+        # once. ``.delay()`` on this builder still overrides it.
+        declared_delay = getattr(job_instance, "_delay", None)
+        self._delay = (
+            declared_delay
+            if isinstance(declared_delay, (int, float))
+            and not isinstance(declared_delay, bool)
+            and declared_delay > 0
+            else None
+        )
         self._routing_key = None
         self._job_id = None
         self._unique_key = None
@@ -142,8 +153,7 @@ class PendingDispatch:
         if hasattr(self.job, "queue"):
             self.job.queue = self._queue_name
 
-        if self._delay and hasattr(self.job, "delay"):
-            self.job.delay = self._delay
+        self._record_delay_on_job()
 
         # Push to queue (will raise exception if fails). A requested delay
         # MUST route through Queue.later. For AMQP this commits a signed
@@ -163,6 +173,17 @@ class PendingDispatch:
 
         return job_id
 
+    def _record_delay_on_job(self) -> None:
+        """Note the requested delay on the job's ``_delay`` for inspection.
+
+        Assigning ``job.delay`` replaced the job's ``delay()`` METHOD with an
+        int (``BaseQueueable`` / ``BaseNotification``), breaking the next
+        ``job.delay(...)`` call. The broker delay itself is applied through
+        ``Queue.later`` / the router, never read back off the job.
+        """
+        if self._delay and hasattr(self.job, "__dict__"):
+            self.job._delay = self._delay
+
     def _dispatch_via_router(self):
         """
         Resolve a routing key locally before durable queue registration.
@@ -173,8 +194,7 @@ class PendingDispatch:
         router = QueueRouter()
 
         # Set job properties
-        if self._delay and hasattr(self.job, "delay"):
-            self.job.delay = self._delay
+        self._record_delay_on_job()
 
         job_id = router.dispatch_job(
             routing_key=self._routing_key,

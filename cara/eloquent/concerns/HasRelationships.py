@@ -77,18 +77,14 @@ class HasRelationships:
         if not relations:
             return self
 
-        # Re-query the model alone, but attach the requested eagers. We
-        # don't care about the record itself — the query builder populates
-        # ``_relations`` on the hydrated model via the eager-load pipeline,
-        # and we copy those back onto ``self``.
+        # Eager-load straight onto this instance from the keys it already
+        # holds (Laravel's ``load`` does the same). The old path re-SELECTed
+        # the model's own row first only to copy the relations off the copy:
+        # one wasted round trip per call, and a row the default scopes now
+        # hide (trashed, another tenant) silently loaded nothing.
         primary = self.get_primary_key() if hasattr(self, "get_primary_key") else "id"
-        value = getattr(self, primary, None)
-        if value is None:
+        if getattr(self, primary, None) is None:
             return self
 
-        reloaded = self.__class__.query().with_(*relations).where(primary, value).first()
-        if reloaded is not None:
-            loaded = getattr(reloaded, "_relations", {}) or {}
-            for name, val in loaded.items():
-                self.set_relation(name, val)
+        self.__class__.query().with_(*relations).load_eagers_onto(self)
         return self

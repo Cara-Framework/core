@@ -57,16 +57,23 @@ class BelongsTo(BaseRelationship):
             callback(builder)
 
         if isinstance(relation, Collection):
+            keys = self._eager_keys(relation)
+            if keys.is_empty():
+                return Collection([])
             return builder.where_in(
                 f"{builder.get_table_name()}.{self.foreign_key}",
-                Collection(relation._get_value(self.local_key)).unique(),
+                keys,
             ).get()
 
-        else:
-            return builder.where(
-                f"{builder.get_table_name()}.{self.foreign_key}",
-                getattr(relation, self.local_key),
-            ).first()
+        local_value = getattr(relation, self.local_key)
+        if local_value is None:
+            # The lazy path (``_resolve``) answers a NULL foreign key without
+            # a query; ``first()`` + ``with_`` sent ``WHERE id IS NULL``.
+            return None
+        return builder.where(
+            f"{builder.get_table_name()}.{self.foreign_key}",
+            local_value,
+        ).first()
 
     def register_related(self, key, model, collection):
         local_value = getattr(model, self.local_key, None)

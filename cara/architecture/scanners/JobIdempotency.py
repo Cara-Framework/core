@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import nodes_of, parse, python_files, relpath
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -88,9 +88,7 @@ def _collect(manifest: Manifest, files: list[Path]) -> dict[str, list[_ClassInfo
         source = path.read_text(encoding="utf-8")
         lines = source.splitlines()
         rel = relpath(path, manifest.roots.deployable)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef):
-                continue
+        for node in nodes_of(tree, (ast.ClassDef,)):
             bases: list[str] = []
             for base in node.bases:
                 if isinstance(base, ast.Name):

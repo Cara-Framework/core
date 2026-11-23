@@ -40,10 +40,15 @@ class _PubSub:
     async def aclose(self) -> None:
         return None
 
-    async def listen(self):
-        for frame in self.frames:
-            yield frame
-        await asyncio.Event().wait()
+    async def get_message(self, timeout: float = 0.0):
+        # The listener polls; once the frames are out the line is just quiet.
+        if self.frames:
+            return self.frames.pop(0)
+        await asyncio.sleep(timeout)
+        return None
+
+    async def ping(self) -> None:
+        return None
 
 
 class _Client:

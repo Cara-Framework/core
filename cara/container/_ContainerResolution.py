@@ -4,19 +4,35 @@ from __future__ import annotations
 
 import inspect
 import sys
+import threading
 import types as _types
 from typing import Any, Union
 
+_container_exceptions: tuple[type, type, type] | None = None
+
+# "No binding under this key" — ``None`` is a value a key may be bound to.
+_UNBOUND = object()
+
 
 def _get_container_exceptions():
-    """Lazy import container exceptions to avoid circular imports."""
-    import cara.exceptions as exceptions  # local: cycle with cara.exceptions
+    """Lazy import container exceptions to avoid circular imports.
 
-    return (
-        exceptions.GenericContainerException,
-        exceptions.MissingContainerBindingException,
-        exceptions.StrictContainerException,
-    )
+    Resolved once. The cycle only exists while the packages are importing;
+    after that the answer never changes, yet every ``make`` and ``resolve``
+    re-ran the import statement and three lazy-barrel attribute lookups —
+    ten times for one controller with three injected dependencies, about a
+    third of that resolution's cost.
+    """
+    global _container_exceptions
+    if _container_exceptions is None:
+        import cara.exceptions as exceptions  # local: cycle with cara.exceptions
+
+        _container_exceptions = (
+            exceptions.GenericContainerException,
+            exceptions.MissingContainerBindingException,
+            exceptions.StrictContainerException,
+        )
+    return _container_exceptions
 
 
 def _extract_optional_class(ann: Any, module: Any) -> type | None:
@@ -74,12 +90,103 @@ def _annotation_module(obj: Any) -> Any:
     return module if module is not None else inspect.getmodule(obj)
 
 
+class _DeferredLoad:
+    """One deferred provider being registered: who runs it, and when it is done."""
+
+    __slots__ = ("done", "owner")
+
+    def __init__(self) -> None:
+        self.owner = threading.get_ident()
+        self.done = threading.Event()
+
+
+def _container_load_deferred(self, registry: dict[Any, Any], key: Any) -> None:
+    """Register and boot the deferred provider behind ``key`` exactly once.
+
+    ``registry`` maps binding keys to provider classes (``Container._deferred``;
+    ``Application`` keeps its own). The container lock is held only to move
+    the provider's keys from ``registry`` to ``_loading``; ``register()`` and
+    ``boot()`` — which build managers, open drivers, read config — run with
+    no lock at all. What used to be guaranteed by holding the lock across
+    them is kept without it:
+
+    * a second thread asking for one of the provider's keys WAITS for this
+      registration instead of finding the key in neither table (the race of
+      2026-04-24);
+    * the registering thread itself is never made to wait: a ``make`` of the
+      provider's own key from inside ``register()``/``boot()`` goes straight
+      to the bindings, as it did under the re-entrant lock;
+    * two providers that resolve each other's keys while registering on two
+      threads do not wait on each other for ever: a wait that would close
+      such a circle is skipped, which is the outcome one thread gets;
+    * a ``register()`` that raises puts the keys back, so the next ``make``
+      (a thread that was waiting included) runs the provider again instead
+      of reporting a missing binding for the rest of the process.
+    """
+    me = threading.get_ident()
+    while True:
+        with self._deferred_lock:
+            provider_class = registry.get(key)
+            if provider_class is not None:
+                keys = [k for k, cls in registry.items() if cls is provider_class]
+                load = _DeferredLoad()
+                for k in keys:
+                    self._loading[k] = load
+                    del registry[k]
+                break
+            load = self._loading.get(key)
+            if load is None or load.owner == me or _closes_wait_circle(self, load, me):
+                return
+            self._waiting[me] = load
+        try:
+            load.done.wait()
+        finally:
+            with self._deferred_lock:
+                self._waiting.pop(me, None)
+        # Registered by now — or its ``register()`` raised and the key is
+        # deferred again, in which case this thread runs it: look once more.
+
+    registered = False
+    try:
+        provider = provider_class(self)
+        provider.register()
+        registered = True
+        self.providers.append(provider)
+        if hasattr(provider, "boot"):
+            provider.boot()
+    finally:
+        with self._deferred_lock:
+            for k in keys:
+                if self._loading.get(k) is load:
+                    del self._loading[k]
+                if not registered:
+                    registry.setdefault(k, provider_class)
+        load.done.set()
+
+
+def _closes_wait_circle(self, load: _DeferredLoad, me: int) -> bool:
+    """Whether waiting for ``load`` would wait on this very thread: its owner
+    is itself waiting, directly or through others, for a registration that
+    ``me`` is running. Called with the container lock held."""
+    seen: set[int] = set()
+    owner = load.owner
+    while owner not in seen:
+        seen.add(owner)
+        awaited = self._waiting.get(owner)
+        if awaited is None:
+            return False
+        if awaited.owner == me:
+            return True
+        owner = awaited.owner
+    return False
+
+
 def _container_make(self, name: Any, *arguments: Any) -> Any:
     """
     Resolve an object from the container.
 
     1) If `name` is a class:
-       - First check deferred providers by lowercased class name; if found, register and boot it.
+       - First check deferred providers by class; if found, register and boot it.
        - Next, try to find an already-bound instance via _find_obj(name). If found, return it.
        - Otherwise, call resolve(name, *arguments) to perform constructor injection.
 
@@ -94,45 +201,39 @@ def _container_make(self, name: Any, *arguments: Any) -> Any:
 
     4) Otherwise, raise missing_container_binding_exception.
 
-    ROOT CAUSE (2026-04-24): the lookup used to be split — the
-    deferred check + register was inside the lock, but the final
-    ``self.objects[name]`` lookup and DI fallthrough ran OUTSIDE
-    it. Under concurrent workers, Thread A could pop the key and
-    be mid-``register()`` (still computing the config, building
-    drivers) while Thread B's lock-free outer check saw the key
-    absent and dropped through to the lookup, which hit an empty
-    ``self.objects`` and raised missing_container_binding_exception.
-    Wrapping the whole resolution path in the lock forces B to
-    wait until A's ``bind()`` completes. Application.make() has
-    the same pattern — both must be under their respective locks
-    for the serialization to hold end-to-end.
-    """
-    # (1) If name is a class type — lock covers deferred fire-once
-    # + object lookup + DI fallthrough so a racing make() can't see
-    # the window between pop() and bind().
-    if inspect.isclass(name):
-        with self._deferred_lock:
-            (
-                generic_container_exception,
-                missing_container_binding_exception,
-                strict_container_exception,
-            ) = _get_container_exceptions()
-            # NOTE: no ``or _attempt_load_deferred(name)`` here — that
-            # helper POPPED and registered the provider itself, so the
-            # pop() below KeyError'd whenever the OR's second arm won.
-            if name in self._deferred:
-                provider_class = self._deferred.pop(name)
-                for k, cls in list(self._deferred.items()):
-                    if cls is provider_class:
-                        self._deferred.pop(k, None)
-                provider = provider_class(self)
-                provider.register()
-                self.providers.append(provider)
-                if hasattr(provider, "boot"):
-                    provider.boot()
+    **What the lock covers.** Only the registry: the deferred-provider
+    hand-off (``load_deferred``) and the binding lookup. The whole resolution
+    used to run inside it — the constructor call included — so one slow or
+    blocking constructor (a client that connects in ``__init__``, a factory
+    that reads a file) stalled every ``make`` of every other thread, for
+    bindings that had nothing to do with it. The race that lock was widened
+    for (2026-04-24: a second thread finding a deferred key in neither
+    table while the first was still registering it) is closed by
+    ``load_deferred`` itself, which makes that second thread wait for THAT
+    provider and for nothing else.
 
-            # Try to find a previously bound value matching this class
-            try:
+    Construction runs unlocked. A lazy singleton is still built exactly once:
+    its factory carries its own lock (``Container.singleton``), held for that
+    binding alone, released when its factory raises, and re-entrant
+    resolution from inside a constructor takes no lock this thread could be
+    waiting on.
+    """
+    (
+        generic_container_exception,
+        missing_container_binding_exception,
+        strict_container_exception,
+    ) = _get_container_exceptions()
+
+    # (1) If name is a class type
+    if inspect.isclass(name):
+        # NOTE: no ``or _attempt_load_deferred(name)`` here — that
+        # helper POPPED and registered the provider itself, so the
+        # pop() KeyError'd whenever the OR's second arm won.
+        self.load_deferred(self._deferred, name)
+
+        # Try to find a previously bound value matching this class
+        try:
+            with self._deferred_lock:
                 found = self._find_obj(name)
                 if inspect.isclass(found) and inspect.isabstract(found):
                     concrete = self._find_concrete_binding(name)
@@ -141,70 +242,54 @@ def _container_make(self, name: Any, *arguments: Any) -> Any:
                     else:
                         raise TypeError(f"No concrete implementation found for '{name}'")
 
-                # If found is a class, resolve it (instantiate with DI)
-                if inspect.isclass(found):
-                    instance = self.resolve(found, *arguments)
-                    return instance
+            # If found is a class, resolve it (instantiate with DI)
+            if inspect.isclass(found):
+                return self.resolve(found, *arguments)
 
-                # If found is a callable factory, call it
-                if callable(found):
-                    result = found(self) if self._accepts_container(found) else found()
-                    return result
+            # If found is a callable factory, call it
+            if callable(found):
+                return found(self) if self._accepts_container(found) else found()
 
-                # Otherwise return the bound value (already an instance)
-                return found
+            # Otherwise return the bound value (already an instance)
+            return found
 
-            except missing_container_binding_exception:
-                # If not found in bindings, try to instantiate directly
-                return self.resolve(name, *arguments)
+        except missing_container_binding_exception:
+            # If not found in bindings, try to instantiate directly
+            return self.resolve(name, *arguments)
 
-    # (2) String path — serialize deferred register + objects lookup.
+    # (2) String path
     if isinstance(name, str):
+        self.load_deferred(self._deferred, name)
+
         with self._deferred_lock:
-            if name in self._deferred:
-                provider_class = self._deferred.pop(name)
-                for k, cls in list(self._deferred.items()):
-                    if cls is provider_class:
-                        self._deferred.pop(k, None)
-                provider = provider_class(self)
-                provider.register()
-                self.providers.append(provider)
-                if hasattr(provider, "boot"):
-                    provider.boot()
+            bound = self.objects.get(name, _UNBOUND)
+            if bound is _UNBOUND:
+                # (3) If a swap (test/mock) exists, return that
+                if name in self.swaps:
+                    return self.swaps[name]
 
-            if name in self.objects:
-                bound = self.objects[name]
+                # (4) No binding found → raise an error
+                raise missing_container_binding_exception(
+                    f"'{name}' key was not found in the container"
+                )
 
-                # a) If the bound value is a class, resolve its constructor
-                if inspect.isclass(bound) and inspect.isabstract(bound):
-                    concrete = self._find_concrete_binding(name)
-                    if concrete:
-                        bound = concrete
-                    else:
-                        raise TypeError(f"No concrete implementation found for '{name}'")
-                if inspect.isclass(bound):
-                    return self.resolve(bound, *arguments)
+            if inspect.isclass(bound) and inspect.isabstract(bound):
+                concrete = self._find_concrete_binding(name)
+                if concrete:
+                    bound = concrete
+                else:
+                    raise TypeError(f"No concrete implementation found for '{name}'")
 
-                # b) If the bound value is a function or method (factory), call it
-                if inspect.isfunction(bound) or inspect.ismethod(bound):
-                    return bound()
+        # a) If the bound value is a class, resolve its constructor
+        if inspect.isclass(bound):
+            return self.resolve(bound, *arguments)
 
-                # c) Otherwise, assume it's already an instance
-                return bound
+        # b) If the bound value is a function or method (factory), call it
+        if inspect.isfunction(bound) or inspect.ismethod(bound):
+            return bound()
 
-            # (3) If a swap (test/mock) exists, return that
-            if name in self.swaps:
-                return self.swaps[name]
-
-            # (4) No binding found → raise an error
-            (
-                generic_container_exception,
-                missing_container_binding_exception,
-                strict_container_exception,
-            ) = _get_container_exceptions()
-            raise missing_container_binding_exception(
-                f"'{name}' key was not found in the container"
-            )
+        # c) Otherwise, assume it's already an instance
+        return bound
 
     # Else, fallback: resolve by constructor injection
     return self.resolve(name, *arguments)

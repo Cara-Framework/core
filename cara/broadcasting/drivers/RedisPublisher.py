@@ -8,25 +8,32 @@ Redis client can neither outlive nor be shared across event loops. The
 broadcaster used to pool one async client per loop and never closed a pool
 when its loop ended, so every job that broadcast left one ESTABLISHED socket
 behind until the process hit its open-file ceiling (Errno 24, "Too many open
-files"). One synchronous client serves every loop instead; each publish runs
-on the default executor, off the event loop thread.
+files"). One synchronous client serves every loop instead; the wire work runs
+on this publisher's own thread, off the event loop thread.
 
-Why a blocking pool
--------------------
-Publishes reach the pool from many executor threads at once — a many-channel
-``broadcast``, or a busy API process. A non-blocking pool answers that
-overflow with "Too many connections", which the broadcaster tolerates as a
-Redis blip and logs at debug level: the broadcast is dropped on every other
-node and nobody hears about it. This pool waits, bounded, for a free
-connection instead.
+Why one writer
+--------------
+Frames used to go out on sixteen threads, one round trip each. Two frames
+published back to back raced each other to the wire and reached the other
+nodes reversed about half the time (measured 48 %): "paid" before "created".
+Every frame now joins one FIFO, and ONE thread drains it. The order other
+nodes see is the order ``publish`` was called in this process, whichever
+thread or event loop called it.
+
+Why a pipeline
+--------------
+Whatever is waiting when the writer comes round goes out in one pipeline, one
+round trip for the lot, so a burst costs the writer no more round trips than
+it has to. A frame on its own is a plain ``PUBLISH``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import queue
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 try:
@@ -36,11 +43,16 @@ except ImportError:
 
 from cara.exceptions import BroadcastingConfigurationException
 
-_MAX_CONNECTIONS = 16
+# The writer's socket, and one spare for a caller that uses ``client()``.
+_MAX_CONNECTIONS = 2
+
+# Frames per pipeline. A burst past this goes out as several round trips, so
+# one reply never has to carry an unbounded batch.
+_MAX_BATCH = 512
 
 
 class RedisPublisher:
-    """One lazily built, blocking-pool sync Redis client per broadcaster."""
+    """One lazily built sync Redis client and one writer per broadcaster."""
 
     def __init__(self, redis_url: str, connection_config: dict[str, Any]) -> None:
         if redis_sync is None:
@@ -51,11 +63,18 @@ class RedisPublisher:
         self._connection_config = connection_config
         self._client: Any | None = None
         self._pool: Any | None = None
-        # The first publishes can race here from several executor threads.
+        # ``client()`` is public, so the first calls can still race here.
         self._lock = threading.Lock()
-        # One thread per pooled socket; threads start only as they are needed.
+        # Frames waiting for the writer, in the order ``publish`` took them.
+        self._outbox: queue.SimpleQueue[tuple[str, str, Future[None]]] = (
+            queue.SimpleQueue()
+        )
+        # ONE worker: it is the single writer. An executor rather than a bare
+        # thread because the interpreter joins executor threads on exit, so a
+        # frame already taken is still sent when the process stops; the thread
+        # starts only when the first frame needs it.
         self._executor = ThreadPoolExecutor(
-            max_workers=_MAX_CONNECTIONS, thread_name_prefix="cara-broadcast-publish"
+            max_workers=1, thread_name_prefix="cara-broadcast-publish"
         )
 
     def client(self) -> Any:
@@ -71,17 +90,68 @@ class RedisPublisher:
         return self._client
 
     async def publish(self, channel: str, payload: str) -> None:
-        """PUBLISH off the event loop thread, on this publisher's own threads.
+        """PUBLISH in call order, off the event loop thread.
+
+        The frame takes its place in the outbox BEFORE the first await: the
+        place is the ordering guarantee, and a caller that is cancelled while
+        it waits has still published. What is awaited is only the outcome.
 
         Not the loop's default executor: ``asyncio.run`` joins that one before
         it returns, so a publish stuck on a slow Redis would hold a finished
         job for a full socket timeout, past the drain's bound and into the
         worker's hard-kill window.
         """
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            self._executor, self.client().publish, channel, payload
-        )
+        sent: Future[None] = Future()
+        self._outbox.put((channel, payload, sent))
+        # One drain per frame is the simple way to never strand a frame: a
+        # drain that finds the outbox already emptied by an earlier one
+        # returns at once.
+        self._executor.submit(self._drain)
+        await asyncio.wrap_future(sent)
+
+    def _drain(self) -> None:
+        """Send everything waiting, oldest first. Runs on the writer thread."""
+        while True:
+            frames: list[tuple[str, str]] = []
+            waiting: list[Future[None]] = []
+            while len(frames) < _MAX_BATCH:
+                try:
+                    channel, payload, sent = self._outbox.get_nowait()
+                except queue.Empty:
+                    break
+                # A caller that was cancelled before its turn has still
+                # published: the frame goes out, there is just nobody left to
+                # tell. Marking the future running also pins it, so a cancel
+                # that lands mid-send cannot make settling it below raise and
+                # strand the rest of the batch.
+                frames.append((channel, payload))
+                if sent.set_running_or_notify_cancel():
+                    waiting.append(sent)
+            if not frames:
+                return
+            try:
+                self._send(frames)
+            except Exception as error:
+                # Not retried: a batch that failed mid-flight may have reached
+                # Redis in part, and a second send would deliver those frames
+                # twice. Every waiting caller learns its frame may be lost.
+                for sent in waiting:
+                    sent.set_exception(error)
+            else:
+                for sent in waiting:
+                    sent.set_result(None)
+
+    def _send(self, frames: list[tuple[str, str]]) -> None:
+        client = self.client()
+        if len(frames) == 1:
+            client.publish(*frames[0])
+            return
+        # Not a transaction: MULTI/EXEC buys nothing for independent frames,
+        # and a pipeline already writes them in order on one connection.
+        pipeline = client.pipeline(transaction=False)
+        for channel, payload in frames:
+            pipeline.publish(channel, payload)
+        pipeline.execute()
 
     def close(self) -> None:
         """Release every pooled connection; the next publish rebuilds the pool."""
@@ -102,8 +172,9 @@ class RedisPublisher:
 
     def _pool_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
-            # Sixteen sockets at most; a publish waits up to five seconds for
-            # one, then fails like any other Redis error.
+            # A blocking pool: past its size a caller waits up to five seconds
+            # for a socket, then fails like any other Redis error, where a
+            # plain pool would answer "Too many connections" at once.
             "max_connections": _MAX_CONNECTIONS,
             "timeout": 5,
             "decode_responses": True,

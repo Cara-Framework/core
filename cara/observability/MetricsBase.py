@@ -559,9 +559,9 @@ class MetricsBase:
 
     # ─── Database connection pool ───────────────────────────────────────
     # Saturation signal for the ORM connection pool (see
-    # ``cara.eloquent.connections.PostgresConnection``). ``in_use`` vs
+    # ``cara.eloquent.connections.PostgresPool``). ``in_use`` vs
     # ``max`` is the headline ratio — when it pins at 1.0, callers start
-    # blocking on ``_pool_semaphore.acquire`` and eventually 503 with
+    # blocking on a pool permit and eventually 503 with
     # ``DatabaseUnavailableException``. ``idle`` is the count of warm
     # connections parked in the reuse list (checked out → checked back
     # in). Populated by :func:`sample_db_pool_metrics`, which is wired

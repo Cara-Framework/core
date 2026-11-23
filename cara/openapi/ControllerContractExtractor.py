@@ -18,13 +18,14 @@ from .Controllers import (
     _resource_statuses,
     _response_kind,
     _response_statuses,
+    _self_calls,
     _status_bindings,
     controller_action_functions,
 )
 from .ReachableErrors import ReachableErrors
 from .SourceClass import SourceClass
 from .SourceIndex import SourceIndex
-from .Sources import _import_root, _module_name
+from .Sources import _import_root, _module_name, _walk
 from .UnknownDeclaredError import UnknownDeclaredError
 
 
@@ -74,10 +75,11 @@ class ControllerContractExtractor:
                 ControllerResponse(status, "error")
                 for _, status in self._reachable(controller, action)
             }
+            calls = _self_calls(functions)
             for function in functions:
-                bindings = _status_bindings(function, functions)
+                bindings = _status_bindings(function, calls)
                 errors.update(self._declared(controller, action, function))
-                for node in ast.walk(function):
+                for node in _walk(function):
                     if not isinstance(node, ast.Call):
                         continue
                     if request := _request_name(node):

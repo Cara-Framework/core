@@ -5,11 +5,17 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qs
 
+from cara.authentication import JWTGuard
 from cara.configuration import config
 from cara.exceptions import WebSocketException
 from cara.facades import Log
 from cara.middleware.Middleware import Middleware
 from cara.websocket import Socket
+
+#: The stock ``JWTGuard.validate_token`` function, taken once at import, so
+#: ``_user_for_token`` can tell an unmodified guard from one whose check was
+#: replaced (see there).
+_STOCK_VALIDATE_TOKEN = JWTGuard.validate_token
 
 
 class Authenticate(Middleware):
@@ -111,11 +117,9 @@ class Authenticate(Middleware):
         for guard_name in self.guards:
             guard = auth_manager.guard(guard_name)
             try:
-                if hasattr(guard, "validate_token") and guard.validate_token(token):
+                user = self._user_for_token(guard, token)
+                if user:
                     # Set guard state for this connection
-                    user = guard._resolve_user_from_token(token)  # type: ignore[attr-defined]
-                    if not user:
-                        continue
                     guard._user = user  # type: ignore[attr-defined]
                     socket._user = user  # attach to socket
                     socket.jwt_claims = getattr(guard, "last_payload", {})
@@ -132,6 +136,27 @@ class Authenticate(Middleware):
                 )
                 continue
         return False
+
+    @staticmethod
+    def _user_for_token(guard: Any, token: str) -> Any | None:
+        """The user ``token`` authenticates on ``guard``, or None.
+
+        The stock ``JWTGuard.validate_token`` IS ``_resolve_user_from_token``
+        compared against None, so asking it first and then resolving the user
+        ran the whole credential check twice per handshake: two signature
+        verifications, two revocation round trips to the cache and two user reads
+        where one of each decides. A guard that overrides ``validate_token``
+        may check more than the resolver does, so it keeps both calls.
+        """
+        # Decided on the callable the instance would ACTUALLY run: a
+        # ``validate_token`` set on the instance or patched onto a subclass
+        # must still be called, never skipped by a check on the class alone.
+        validate = getattr(guard, "validate_token", None)
+        if getattr(validate, "__func__", None) is _STOCK_VALIDATE_TOKEN:
+            return guard._resolve_user_from_token(token)
+        if validate is not None and validate(token):
+            return guard._resolve_user_from_token(token)
+        return None
 
     @staticmethod
     def _read_origin(socket: Socket) -> str:
@@ -168,6 +193,12 @@ class Authenticate(Middleware):
         key and never raises, so the handler only ever hid real faults.
         """
         allowed = config("broadcasting.websocket.allowed_origins", None) or []
+        if isinstance(allowed, str):
+            # An environment value passed straight through
+            # (``"https://a.example,https://b.example"``): ``in`` on a string
+            # is a SUBSTRING test, which let ``https://a.exam`` — any origin
+            # that is a piece of the list — through. Read it as the list it is.
+            allowed = [entry.strip() for entry in allowed.split(",") if entry.strip()]
         if not allowed:
             return True
         origin = self._read_origin(socket)
@@ -178,9 +209,15 @@ class Authenticate(Middleware):
 
     def _extract_token(self, socket: Socket) -> str | None:
         """Extract JWT token from Authorization header or subprotocol."""
-        headers = {k.decode(): v.decode() for k, v in socket.scope.get("headers", [])}
+        # Only the one header is decoded, as latin-1 (the wire encoding, RFC
+        # 9110). Decoding EVERY header as strict UTF-8 raised on any high byte
+        # anywhere — a latin-1 ``User-Agent`` or cookie — and refused a
+        # connection whose ``Authorization`` was perfectly valid.
+        auth_header: str | None = None
+        for name, value in socket.scope.get("headers", []):
+            if name == b"authorization":
+                auth_header = value.decode("latin-1")
         token_val: str | None = None
-        auth_header = headers.get("authorization")
         if auth_header and auth_header.lower().startswith("bearer "):
             token_val = auth_header[7:]
 

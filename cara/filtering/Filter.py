@@ -60,6 +60,21 @@ FILTER_GROUP_AVAILABILITY: str = "availability"  # in-stock toggle
 FILTER_GROUP_QUALITY: str = "quality"  # condition, rating
 FILTER_GROUP_SPECS: str = "specs"  # attributes
 
+#: The characters that give a filter cache key its structure
+#: (``name=value|name=value``, ``a,b`` lists, ``{k=v;k=v}`` dicts), and ``%``
+#: itself. Percent-encoded inside every scalar (``Filter._cache_value``).
+_CACHE_KEY_ESCAPES = str.maketrans(
+    {
+        "%": "%25",
+        "|": "%7C",
+        "=": "%3D",
+        ",": "%2C",
+        ";": "%3B",
+        "{": "%7B",
+        "}": "%7D",
+    }
+)
+
 
 class Filter(ABC):
     """One filter dimension. Subclass to add a new dimension.
@@ -182,11 +197,11 @@ class Filter(ABC):
     def cache_key(self, value: Any) -> str:
         """Stable string fragment used by ``FilterSet.cache_key``.
 
-        Override only if the default ``_serialize_value`` doesn't
+        Override only if the default serialisation doesn't
         produce a deterministic result (e.g. case-insensitive strings
         where ``"Sony"`` and ``"sony"`` should hash to the same key).
         """
-        return f"{self.name}={self._serialize_value(value)}"
+        return f"{self.name}={self._cache_value(value)}"
 
     def encode_value(self, value: Any) -> dict[str, str]:
         """Render the canonical value back to URL-friendly query params.
@@ -250,6 +265,38 @@ class Filter(ABC):
             ]
             return f"{{{';'.join(parts)}}}"
         return str(value).strip()
+
+    @staticmethod
+    def _cache_value(value: Any) -> str:
+        """``_serialize_value`` for a cache key: its delimiters escaped in every scalar.
+
+        ROOT CAUSE: the key is assembled from ``name=value`` fragments joined
+        with ``|``, lists joined with ``,`` and dicts written ``{k=v;k=v}`` —
+        and the VALUES were written into it raw. A value containing a
+        delimiter therefore spelled another filter state's key:
+        ``{"q": "tv|stock=1"}`` and ``{"q": "tv", "stock": True}`` both gave
+        ``q=tv|stock=1``, ``["a,b"]`` and ``["a", "b"]`` both ``a,b`` —
+        different SQL behind one cache entry, so a client could make a cached
+        page answer for a filter combination it was never computed for.
+
+        Only the structural characters are escaped (percent-encoded), so the
+        key of every value that contains none of them is byte for byte what
+        it was: no cache is invalidated by this fix.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (list, tuple, set)):
+            items = sorted(str(x).strip() for x in value if str(x).strip())
+            return ",".join(item.translate(_CACHE_KEY_ESCAPES) for item in items)
+        if isinstance(value, dict):
+            parts = [
+                f"{str(k).translate(_CACHE_KEY_ESCAPES)}={Filter._cache_value(value[k])}"
+                for k in sorted(value.keys())
+            ]
+            return f"{{{';'.join(parts)}}}"
+        return str(value).strip().translate(_CACHE_KEY_ESCAPES)
 
     # Hard cap on multi-select payload length. The client UIs that
     # drive these filters advertise on the order of 5-50 options at

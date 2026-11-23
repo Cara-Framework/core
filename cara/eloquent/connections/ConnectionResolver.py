@@ -207,7 +207,9 @@ class ConnectionResolver:
             "full_details": connection_info.get("full_details", {}),
         }
 
-        return connection_class(**clean_info).make_connection()
+        instance = connection_class(**clean_info)
+        instance.connection_name = connection_info.get("name", connection_name)
+        return instance.make_connection()
 
     # === Transaction Management - Single Responsibility ===
 
@@ -434,9 +436,28 @@ class ConnectionResolver:
         try:
             self.commit(connection_name)
         except BaseException:
-            with suppress(OSError, RuntimeError, AttributeError):
-                self.rollback(connection_name)
+            self.rollback_failed_commit(connection_name)
             raise
+
+    def rollback_failed_commit(self, connection_name) -> None:
+        """Unwind what a ``commit()`` that raised left behind — if anything.
+
+        A COMMIT can fail on its own (a deferred constraint, a serialization
+        failure reported at commit, a session lost mid-commit). The wrapper
+        is then still pinned in this context's registry, so the level is
+        rolled back: that unpins it, hands its pool permit back and settles
+        the callbacks as for any rollback. Shared by ``transaction()`` and
+        ``atomic()`` so the two transaction doors cannot drift apart again.
+
+        When the name is NO LONGER pinned, the commit itself landed and what
+        raised was an after-commit callback. There is nothing to roll back,
+        and asking anyway raised "No active transaction found for
+        connection", which replaced the callback's own error.
+        """
+        if connection_name not in _get_registry():
+            return
+        with suppress(OSError, RuntimeError, AttributeError):
+            self.rollback(connection_name)
 
     def _get_active_connection(self, connection_name):
         """Helper method - DRY principle"""

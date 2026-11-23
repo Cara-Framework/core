@@ -93,7 +93,10 @@ def cooldown_remaining(key: str) -> float:
         return 0.0
     try:
         until = _cache().get(cooldown_key(key))
-    except Exception:  # noqa: BLE001 — fail open
+    except Exception as exc:  # noqa: BLE001 — fail open
+        # Fail open (the job runs; the upstream still enforces its limit),
+        # but visibly: debug, as this runs on every job of a keyed lane.
+        _logger.debug("key cooldown unreadable for %s: %s", key, type(exc).__name__)
         return 0.0
     if until is None:
         return 0.0
@@ -107,8 +110,10 @@ def clear_cooldown(key: str) -> None:
     """End ``key``'s cooldown now (operators, tests)."""
     try:
         _cache().forget(cooldown_key(key))
-    except Exception:  # noqa: BLE001 — nothing to clear when the cache is down
-        return
+    except Exception as exc:  # noqa: BLE001 — the cooldown still expires on its TTL
+        # Reported, not swallowed: an operator who cleared a cooldown must
+        # learn it is still in force until its TTL ends.
+        _logger.warning("key cooldown not cleared for %s: %s", key, type(exc).__name__)
 
 
 class KeyCooldown:

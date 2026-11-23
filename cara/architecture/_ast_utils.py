@@ -10,6 +10,7 @@ application — the boot-free contract every scanner and craft command in
 from __future__ import annotations
 
 import ast
+import os
 import sys
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -69,8 +70,27 @@ def relpath(path: Path, root: Path) -> str:
     # Preserve the logical path through a deployable's symlinked dev kernel.
     # Resolving first turns ``api/commons/models/Foo.py`` into a sibling path
     # outside ``api/`` and collapses every finding to the basename.
+    absolute, base = path.absolute(), root.absolute()
+    if os.sep == "/":
+        # The same answer ``relative_to`` gives, without building the Path
+        # objects it builds to give it — this runs once per file per scanner
+        # (53k times over synkronus api). A POSIX path's string is already
+        # normalized (no doubled or trailing separator, no ``.`` part), so a
+        # prefix that ends ON a separator is exactly a prefix of path parts.
+        # A ``//`` root is its own anchor and is left to pathlib, as is
+        # ``path == root`` (which answers ``.``).
+        text, prefix = str(absolute), str(base)
+        if not prefix.endswith("/"):
+            prefix += "/"
+        if (
+            len(text) > len(prefix)
+            and text.startswith(prefix)
+            and not text.startswith("//")
+            and not prefix.startswith("//")
+        ):
+            return text[len(prefix) :]
     try:
-        return path.absolute().relative_to(root.absolute()).as_posix()
+        return absolute.relative_to(base).as_posix()
     except ValueError:
         pass
     try:
@@ -134,9 +154,19 @@ _PARSE_CACHE: dict[tuple[str, str], ast.Module | None] = {}
 #: its address to an unrelated one.
 _NODES_CACHE: dict[int, tuple[ast.Module, list[ast.AST]]] = {}
 
+#: Type-filtered views of those node lists, keyed by ``(id(tree), types)``.
+#: An entry is only ever written after ``all_nodes`` pinned its tree in
+#: ``_NODES_CACHE`` and only ever dropped together with it, so the ``id()``
+#: half of the key is as stable here as it is there.
+_TYPED_NODES_CACHE: dict[tuple[int, tuple[type, ...]], list[ast.AST]] = {}
+
+#: The one type pair half the pack asks for — every import-law scanner.
+IMPORT_NODE_TYPES: tuple[type, ...] = (ast.Import, ast.ImportFrom)
+
 
 def clear_parse_cache() -> None:
-    """Drop every memoized tree AND its materialized node list.
+    """Drop every memoized tree, its materialized node list and every
+    type-filtered view of that list.
 
     Together they roughly double the scan's peak RSS (189 MB -> 419 MB for
     cheapa services' 14 MB of Python). ``craft arch:check`` simply exits; a
@@ -145,6 +175,7 @@ def clear_parse_cache() -> None:
     """
     _PARSE_CACHE.clear()
     _NODES_CACHE.clear()
+    _TYPED_NODES_CACHE.clear()
 
 
 def parse(path: Path) -> ast.Module | None:
@@ -257,9 +288,44 @@ def all_nodes(tree: ast.Module) -> list[ast.AST]:
     cached = _NODES_CACHE.get(id(tree))
     if cached is not None:
         return cached[1]
-    nodes = list(ast.walk(tree))
+    # ``ast.walk`` itself, minus its machinery: a list that is appended to
+    # while it is iterated IS the BFS queue, and reading ``_fields`` directly
+    # drops the ``iter_fields``/``iter_child_nodes`` generator pair and the
+    # deque round-trip per node. Same children, same order (field order, list
+    # order), same objects — pinned against ``ast.walk`` by the test suite.
+    nodes: list[ast.AST] = [tree]
+    for node in nodes:
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, ast.AST):
+                nodes.append(value)
+            elif isinstance(value, list):
+                nodes.extend(item for item in value if isinstance(item, ast.AST))
     _NODES_CACHE[id(tree)] = (tree, nodes)
     return nodes
+
+
+def nodes_of(tree: ast.Module, types: tuple[type, ...]) -> list[ast.AST]:
+    """The nodes of ``tree`` that are instances of ``types``, in ``ast.walk``
+    order — ``[n for n in all_nodes(tree) if isinstance(n, types)]``, built
+    once per ``(tree, types)``.
+
+    ``all_nodes`` removed the repeated WALK; this removes the repeated SIEVE.
+    Most scanners want a sliver of a tree — its imports, its calls, its class
+    definitions — and each used to test every node of every file to find it:
+    synkronus api asked ``isinstance`` 85M times per run for a 3.9M-node
+    census. Ten import-law passes now share one import list per file.
+
+    Order is the caller's contract, not a detail: findings and their
+    ``"; "``-joined details are emitted in walk order, so a multi-type request
+    returns ONE interleaved list rather than one list per type.
+    """
+    key = (id(tree), types)
+    cached = _TYPED_NODES_CACHE.get(key)
+    if cached is None:
+        cached = [node for node in all_nodes(tree) if isinstance(node, types)]
+        _TYPED_NODES_CACHE[key] = cached
+    return cached
 
 
 def docstring_node_ids(tree: ast.Module) -> set[int]:

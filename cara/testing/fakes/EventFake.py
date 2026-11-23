@@ -12,7 +12,7 @@ class EventFake:
     def __init__(self) -> None:
         self.events: list[DispatchedEvent] = []
 
-    # Production surface — accept the common names so any caller works.
+    # Production surface — the real ``Event`` signatures, and nothing wider.
     #
     # ``async def`` matches the real ``Event.fire`` / ``Event.dispatch``
     # signatures (commons/cara/cara/events/Event.py:204, :437).
@@ -21,16 +21,20 @@ class EventFake:
     # ``TypeError: 'NoneType' object is not awaitable``. The body is a
     # plain list append so it's still safe to ``asyncio.run`` in
     # synchronous test cases.
-    async def dispatch(self, event: Any, payload: dict | None = None) -> None:
-        self.events.append(DispatchedEvent(event=event, payload=payload))
+    #
+    # ONE argument, as in production: the event carries its own payload. The
+    # fake used to take ``(event, payload=None)`` and an ``emit`` alias the
+    # real ``Event`` has never had, so ``await Event.fire("name", {...})`` or
+    # ``Event.emit(evt)`` passed its test and raised ``TypeError`` /
+    # ``AttributeError`` on the first real dispatch (the ``Mail.raw`` outage
+    # in another facade — see ``MailFake``).
+    async def dispatch(self, event: Any) -> None:
+        self.events.append(DispatchedEvent(event=event))
 
-    async def fire(self, event: Any, payload: dict | None = None) -> None:
-        await self.dispatch(event, payload)
+    async def fire(self, event: Any) -> None:
+        await self.dispatch(event)
 
-    async def emit(self, event: Any, payload: dict | None = None) -> None:
-        await self.dispatch(event, payload)
-
-    def fire_sync(self, event: Any, payload: dict | None = None) -> None:
+    def fire_sync(self, event: Any) -> None:
         # Mirrors the real ``Event.fire_sync`` (commons/cara/cara/events/
         # Event.py) — a SYNCHRONOUS entry point used by code running
         # outside an event loop (e.g. service methods invoked via
@@ -39,9 +43,9 @@ class EventFake:
         # plain (non-coroutine) method or those callers crash trying to
         # await ``None`` / pass a coroutine to a sync caller. Records the
         # event the same way ``dispatch`` does so assertions are uniform.
-        self.events.append(DispatchedEvent(event=event, payload=payload))
+        self.events.append(DispatchedEvent(event=event))
 
-    def listen(self, *args: Any, **kwargs: Any) -> None:
+    def listen(self, event_name: str, callback: Callable) -> None:
         # No-op in tests — listeners aren't invoked under the fake.
         return None
 

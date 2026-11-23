@@ -15,6 +15,10 @@ class BaseConnection:
     _connection = None
     _cursor = None
     _dry = False
+    # The configured connection this wrapper serves (``"app"``,
+    # ``"analytics"``), set by whoever builds it from the database config.
+    # ``name`` is the DRIVER's name; a pool is kept per configured connection.
+    connection_name = None
     # What to hand the driver when a statement has no bindings. psycopg2
     # wants None (skips placeholder parsing — literal `%` stays intact);
     # sqlite3 rejects None outright and needs an empty tuple.

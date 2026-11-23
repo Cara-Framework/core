@@ -41,7 +41,7 @@ class BaseQueueable(Queueable, ShouldQueue):
 
     def _setup_queueable_properties(self):
         """Initialize queueable-specific properties."""
-        self._queue_name = self.default_queue
+        self.queue_name = self.default_queue
         self._delay = self.default_delay
         self._retry_attempts = self.default_retry_attempts
 
@@ -55,18 +55,51 @@ class BaseQueueable(Queueable, ShouldQueue):
         return self._queue_name
 
     @queue_name.setter
-    def queue_name(self, name: str):
-        """Set the queue name for this job."""
+    def queue_name(self, name: str | None):
+        """Set the queue name for this job.
+
+        Mirrored onto ``queue``, the attribute the queue driver and
+        ``PendingDispatch`` actually read: kept apart, ``default_queue`` and
+        ``on_queue()`` never reached the broker and every such job was
+        refused for declaring no canonical queue.
+        """
         self._queue_name = name
+        self.queue = name
+
+    @property
+    def max_attempts(self) -> int:
+        """The delivery budget the worker reads (``JobProcessor``).
+
+        ``default_retry_attempts`` and :meth:`attempts` wrote
+        ``_retry_attempts``, which nothing read: the worker asks for
+        ``max_attempts``, so ``SendMailableJob``'s declared 5 ran as the
+        default 3. A subclass declaring ``max_attempts = n`` still wins (a
+        plain class attribute shadows this property).
+        """
+        return getattr(self, "_retry_attempts", self.default_retry_attempts)
+
+    @max_attempts.setter
+    def max_attempts(self, count: int) -> None:
+        self._retry_attempts = count
 
     def delay(self, seconds: int) -> BaseQueueable:
-        """Delay the job execution by specified seconds."""
+        """Delay the job execution by specified seconds.
+
+        ``PendingDispatch(job)`` starts from this value (and
+        ``default_delay``); an explicit ``PendingDispatch.delay()`` wins.
+        """
         self._delay = seconds
         self._chained = True
         return self
 
     def attempts(self, count: int) -> BaseQueueable:
-        """Set the number of retry attempts."""
+        """Set the number of delivery attempts (read as :attr:`max_attempts`).
+
+        The class-level ``default_retry_attempts`` (or ``max_attempts``) is
+        what a worker sees: the worker rebuilds the job from its constructor
+        parameters, so a value set on one instance at dispatch does not
+        cross the broker.
+        """
         self._retry_attempts = count
         self._chained = True
         return self

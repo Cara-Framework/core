@@ -6,11 +6,28 @@ This module provides a CLI command to completely reset the database schema.
 
 from __future__ import annotations
 
+import re
+
 import cara.facades as facades
 from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException
 from cara.queues import MakesIdempotentBase
+
+#: A plain PostgreSQL identifier, at most NAMEDATALEN-1 bytes. ``--schema``
+#: reaches a DO block, which takes no bind parameters, so it is validated
+#: here and then only ever used through ``format('%I')`` and as a literal.
+_SCHEMA_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_$]{0,62}")
+
+
+def _checked_schema(schema: str) -> str:
+    """``schema`` if it is a plain identifier; refuse anything else."""
+    if not _SCHEMA_NAME.fullmatch(str(schema)):
+        raise InvalidArgumentException(
+            f"--schema {schema!r} is not a plain identifier (letters, digits, "
+            "_ and $, at most 63 characters, not starting with a digit)"
+        )
+    return str(schema)
 
 
 @command(
@@ -62,8 +79,18 @@ class MigrateResetCommand(CommandBase):
         """
         self._display_warning()
 
+        try:
+            # Before the prompt: nobody should confirm a reset that cannot run.
+            _checked_schema(self.option("schema") or "public")
+        except InvalidArgumentException as error:
+            self.error(f"❌ {error}")
+            return 1
+
         if self._should_block_execution():
-            return
+            # A refused destructive command is a failure to its caller: the
+            # bare ``return`` exited 0, so ``migrate:reset && migrate`` in a
+            # script ran on as if the reset had happened.
+            return 1
 
         if not force and not self.option("confirm") and not self._get_user_confirmation():
             self.info("❌ Reset operation cancelled by user.")
@@ -187,71 +214,77 @@ class MigrateResetCommand(CommandBase):
         skips those objects; the extensions stay in place across reset
         (which every migration assumes — none of them ``CREATE EXTENSION
         IF NOT EXISTS pgcrypto`` themselves).
+
+        The schema is a validated identifier held in ``target``: compared as
+        a value and spliced into each DROP with ``%I``, so a mixed-case name
+        is quoted rather than folded to another schema's name.
         """
+        target = _checked_schema(schema)
         reset_sql = f"""
 DO $do$
 DECLARE
     r RECORD;
+    target text := '{target}';
 BEGIN
     -- Drop all tables with CASCADE to handle dependencies
-    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = '{schema}')
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = target)
     LOOP
-        EXECUTE 'DROP TABLE IF EXISTS {schema}.' || quote_ident(r.tablename) || ' CASCADE';
+        EXECUTE format('DROP TABLE IF EXISTS %I.%I CASCADE', target, r.tablename);
     END LOOP;
 
     -- Drop all sequences (skip extension-owned)
     FOR r IN (SELECT c.relname AS sequencename
               FROM pg_class c
               JOIN pg_namespace n ON c.relnamespace = n.oid
-              WHERE n.nspname = '{schema}'
+              WHERE n.nspname = target
                 AND c.relkind = 'S'
                 AND NOT EXISTS (
                     SELECT 1 FROM pg_depend d
                     WHERE d.objid = c.oid AND d.deptype = 'e'
                 ))
     LOOP
-        EXECUTE 'DROP SEQUENCE IF EXISTS {schema}.' || quote_ident(r.sequencename) || ' CASCADE';
+        EXECUTE format('DROP SEQUENCE IF EXISTS %I.%I CASCADE', target, r.sequencename);
     END LOOP;
 
     -- Drop all views (skip extension-owned)
     FOR r IN (SELECT c.relname AS viewname
               FROM pg_class c
               JOIN pg_namespace n ON c.relnamespace = n.oid
-              WHERE n.nspname = '{schema}'
+              WHERE n.nspname = target
                 AND c.relkind = 'v'
                 AND NOT EXISTS (
                     SELECT 1 FROM pg_depend d
                     WHERE d.objid = c.oid AND d.deptype = 'e'
                 ))
     LOOP
-        EXECUTE 'DROP VIEW IF EXISTS {schema}.' || quote_ident(r.viewname) || ' CASCADE';
+        EXECUTE format('DROP VIEW IF EXISTS %I.%I CASCADE', target, r.viewname);
     END LOOP;
 
     -- Drop all functions (skip extension-owned, e.g. pgcrypto's gen_salt)
     FOR r IN (SELECT p.proname, oidvectortypes(p.proargtypes) AS argtypes
               FROM pg_proc p
               JOIN pg_namespace n ON p.pronamespace = n.oid
-              WHERE n.nspname = '{schema}'
+              WHERE n.nspname = target
                 AND NOT EXISTS (
                     SELECT 1 FROM pg_depend d
                     WHERE d.objid = p.oid AND d.deptype = 'e'
                 ))
     LOOP
-        EXECUTE 'DROP FUNCTION IF EXISTS {schema}.' || quote_ident(r.proname) || '(' || r.argtypes || ') CASCADE';
+        EXECUTE format('DROP FUNCTION IF EXISTS %I.%I(%s) CASCADE', target, r.proname, r.argtypes);
     END LOOP;
 
     -- Drop all custom types (skip extension-owned)
     FOR r IN (SELECT t.typname
               FROM pg_type t
               JOIN pg_namespace n ON t.typnamespace = n.oid
-              WHERE n.nspname = '{schema}'
+              WHERE n.nspname = target
                 AND t.typtype = 'c'
                 AND NOT EXISTS (
                     SELECT 1 FROM pg_depend d
                     WHERE d.objid = t.oid AND d.deptype = 'e'
                 ))
     LOOP
-        EXECUTE 'DROP TYPE IF EXISTS {schema}.' || quote_ident(r.typname) || ' CASCADE';
+        EXECUTE format('DROP TYPE IF EXISTS %I.%I CASCADE', target, r.typname);
     END LOOP;
 END $do$;"""
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from email.utils import formataddr
 
-from cara.facades import Log, Queue
+from cara.facades import Queue
 from cara.mail.jobs import SendMailableJob
 from cara.mail.Mailable import Mailable
 
@@ -107,20 +107,17 @@ class MailMessage:
     def queue(self, driver_name: str | None = None) -> bool:
         """
         Queue the message for background processing.
+
+        Returns True once the job is on the broker; every failure RAISES.
+        This used to wrap the whole path in ``except Exception: return
+        False``, so a message that was never queued — and, until the job
+        carried plain data, none ever was — read like a queued one to
+        callers that ignore the return value.
         """
-        try:
-            # Build the mailable first to avoid references issues
-            self.mailable.set_application(self.manager.application)
-            self.mailable.build()
-
-            # Clear application reference to avoid circular reference
-            self.mailable.set_application(None)
-
-            # Create job with the mailable - SerializesModels will handle serialization
-            job = SendMailableJob(self.mailable, driver_name)
-            Queue.dispatch(job)
-            return True
-
-        except Exception as e:
-            Log.error("Failed to queue mail message: %s", e, exc_info=True)
-            return False
+        job = SendMailableJob.for_mailable(
+            self.mailable,
+            driver_name,
+            application=getattr(self.manager, "application", None),
+        )
+        Queue.dispatch(job)
+        return True

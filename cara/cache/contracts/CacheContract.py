@@ -7,6 +7,7 @@ Any cache driver (file, redis, etc.) must implement these methods. This ensures 
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from cara.exceptions import CacheConfigurationException
@@ -35,6 +36,19 @@ class CacheContract:
         outage with a cache miss.
         """
         raise NotImplementedError
+
+    def many(
+        self, keys: Iterable[str], default: Any = None, *, strict: bool = True
+    ) -> dict[str, Any]:
+        """Read several keys at once: ``{key: value}`` in the order given,
+        with ``default`` for each key that is absent.
+
+        The failure contract is :meth:`get`'s, key for key — ``strict=True``
+        raises on a backend or integrity failure, never answering a default
+        for a key it could not read. A driver that can fetch the keys in one
+        backend round trip overrides this; the default reads them in turn.
+        """
+        return {key: self.get(key, default, strict=strict) for key in keys}
 
     def put(
         self,

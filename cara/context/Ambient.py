@@ -9,13 +9,14 @@ it around the job body with ``restored()``. Inside one process the vars ride
 context), so an inline ``Bus.dispatch`` needs nothing.
 
 Values are small, PII-free primitives (ids and closed words). A carrier that
-fails to encode or decode is skipped, never fatal: ambient context informs a
-record, it never decides whether a job runs.
+fails to encode or decode is skipped with a warning, never fatal: ambient
+context informs a record, it never decides whether a job runs.
 """
 
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from typing import Any
 
 #: Envelope key the queue signs the captured carriers under.
 AMBIENT_KEY = "_ambient"
+_logger = logging.getLogger("cara.context")
 _MAX_CARRIERS = 16
 
 
@@ -82,7 +84,15 @@ class Ambient:
                 continue
             try:
                 encoded = carrier.encode(value)
-            except Exception:
+            except Exception as exc:
+                # Skipped, never fatal (see the module docstring) — but said:
+                # the job will run without this fact. Type only: the value
+                # never reaches the log.
+                _logger.warning(
+                    "ambient carrier %r failed to encode (%s); not carried",
+                    name,
+                    type(exc).__name__,
+                )
                 continue
             if encoded is not None:
                 captured[name] = encoded
@@ -101,7 +111,12 @@ class Ambient:
                     continue
                 try:
                     value = carrier.decode(raw)
-                except Exception:
+                except Exception as exc:
+                    _logger.warning(
+                        "ambient carrier %r failed to decode (%s); not restored",
+                        name,
+                        type(exc).__name__,
+                    )
                     continue
                 if value is not None:
                     tokens.append((carrier.var, carrier.var.set(value)))

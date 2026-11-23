@@ -46,7 +46,13 @@ from __future__ import annotations
 
 import ast
 
-from cara.architecture._ast_utils import _path_has_fragment, iter_modules
+from cara.architecture._ast_utils import (
+    IMPORT_NODE_TYPES,
+    _path_has_fragment,
+    all_nodes,
+    iter_modules,
+    nodes_of,
+)
 from cara.architecture._ratchet import _ratchet
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
@@ -105,7 +111,7 @@ def _imported_model_names(tree: ast.Module, roots: tuple[str, ...]) -> set[str]:
     constant name is never a model; every class-cased name still is.
     """
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes_of(tree, IMPORT_NODE_TYPES):
         if (
             isinstance(node, ast.ImportFrom)
             and node.module
@@ -119,17 +125,77 @@ def _imported_model_names(tree: ast.Module, roots: tuple[str, ...]) -> set[str]:
     return names
 
 
+def _is_model_home(module: str, roots: tuple[str, ...]) -> bool:
+    return any(module == r or module.startswith(r + ".") for r in roots)
+
+
+def _imported_model_modules(tree: ast.Module, roots: tuple[str, ...]) -> dict[str, str]:
+    """Names bound to a model-home MODULE (not a class): ``name -> dotted``.
+
+    ``import commons.models as m`` then ``m.Product.where(...)`` is the same
+    reach as ``from commons.models import Product``, but the receiver's root
+    name ``m`` was never a model name, so the chain was invisible. Recorded
+    here: ``import X.Y as m`` binds ``m`` to ``X.Y``; ``import X.Y`` binds
+    ``X`` to ``X`` (the chain then spells the rest); ``from app import
+    models`` binds ``models`` to ``app.models``.
+    """
+    modules: dict[str, str] = {}
+    for node in nodes_of(tree, IMPORT_NODE_TYPES):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname and _is_model_home(alias.name, roots):
+                    modules[alias.asname] = alias.name
+                elif not alias.asname and any(
+                    r.startswith(alias.name.split(".")[0] + ".")
+                    or r == alias.name.split(".")[0]
+                    for r in roots
+                ):
+                    head = alias.name.split(".")[0]
+                    modules[head] = head
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                dotted = f"{node.module}.{alias.name}"
+                if _is_model_home(dotted, roots) and not _is_model_home(
+                    node.module, roots
+                ):
+                    modules[alias.asname or alias.name] = dotted
+    return modules
+
+
+def _module_chain_model(
+    current: ast.AST, modules: dict[str, str], roots: tuple[str, ...]
+) -> str | None:
+    """The model class a ``<module alias>.….<Model>`` receiver names."""
+    parts: list[str] = []
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name) or current.id not in modules or not parts:
+        return None
+    dotted = [*modules[current.id].split("."), *reversed(parts)]
+    for index, part in enumerate(dotted):
+        if part[:1].isupper() and not part.isupper():
+            return part if _is_model_home(".".join(dotted[:index]), roots) else None
+    return None
+
+
 def _chain_root(
     expression: ast.AST,
     models: set[str],
     *,
     model_home: bool = False,
+    modules: dict[str, str] | None = None,
+    roots: tuple[str, ...] = (),
 ) -> str | None:
     """The model a builder chain started from, if it started at one."""
     current = expression
     through_dunder_class = False
     while isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute):
         current = current.func.value
+    if modules:
+        model = _module_chain_model(current, modules, roots)
+        if model is not None:
+            return model
     while isinstance(current, ast.Attribute):
         through_dunder_class = through_dunder_class or current.attr == "__class__"
         current = current.value
@@ -207,24 +273,34 @@ class ModelQueryDiscipline:
                 continue
             model_home = _path_has_fragment(rel, model_homes)
             models = _imported_model_names(tree, manifest.model_import_roots)
-            if not models and not model_home:
+            modules = _imported_model_modules(tree, manifest.model_import_roots)
+            if not models and not modules and not model_home:
                 continue
-            parents = {
-                child: parent
-                for parent in ast.walk(tree)
-                for child in ast.iter_child_nodes(parent)
-            }
+            # Built on the first candidate hit only: the map costs a full
+            # child-iteration of the tree, and a clean file never asks for it.
+            parents: dict[ast.AST, ast.AST] | None = None
             hits: list[Finding] = []
-            for node in ast.walk(tree):
+            for node in nodes_of(tree, (ast.Call,)):
                 if (
-                    not isinstance(node, ast.Call)
-                    or not isinstance(node.func, ast.Attribute)
+                    not isinstance(node.func, ast.Attribute)
                     or node.func.attr not in ORM_METHODS
                 ):
                     continue
-                model = _chain_root(node.func.value, models, model_home=model_home)
+                model = _chain_root(
+                    node.func.value,
+                    models,
+                    model_home=model_home,
+                    modules=modules,
+                    roots=manifest.model_import_roots,
+                )
                 if model is None or _is_primary_key_lookup(node):
                     continue
+                if parents is None:
+                    parents = {
+                        child: parent
+                        for parent in all_nodes(tree)
+                        for child in ast.iter_child_nodes(parent)
+                    }
                 if _locking_transaction_owns(node, parents):
                     continue
                 hits.append(

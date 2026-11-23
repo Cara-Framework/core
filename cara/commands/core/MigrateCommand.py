@@ -85,8 +85,22 @@ class MigrateCommand(CommandBase):
 
             self.info("Checking migration table...")
 
-            # Ensure migrations table exists
-            migration_manager.create_table_if_not_exists()
+            # Ensure migrations table exists — except under ``--show``. The
+            # bootstrap CREATEs the ledger (and ALTERs an older one: checksum
+            # column, unique index), and it ran right under "DRY RUN (no
+            # changes will be made)". A preview against a database without a
+            # ledger reads it as empty instead: every file is pending.
+            if self.option("show") and not self._ledger_exists(migration_manager):
+                pending = sorted(migration_manager.file_manager.get_migration_files())
+                if not pending:
+                    self.success("No pending migrations. Database is up to date!")
+                    return
+                self._show_pending_migrations(pending)
+                self.info("SQL Preview Mode - No changes will be made:")
+                self._show_sql_preview(migration_manager, pending)
+                return
+            if not self.option("show"):
+                migration_manager.create_table_if_not_exists()
 
             # EVOLVE-mode gate (DOCTRINE §7). In production a database that
             # already has applied migrations is a lasting database: the
@@ -158,6 +172,20 @@ class MigrateCommand(CommandBase):
         """
         migration_files = sorted(migration_manager.file_manager.get_migration_files())
         migration_manager.executor._validate_applied_checksums(migration_files)
+
+    def _ledger_exists(self, migration_manager: Migration) -> bool:
+        """Whether the migrations ledger is there — a catalogue read, no DDL.
+
+        ``migration_manager.schema`` is the DRY Schema under ``--show`` (it
+        returns the SQL instead of running it, which is always truthy), so the
+        question goes to a live Schema on the same connection.
+        """
+        from cara.eloquent.schema import Schema  # local: heavy optional dep
+
+        live = Schema(schema=self.option("schema")).on(
+            self.option("connection") or "default"
+        )
+        return bool(live.has_table(migration_manager.tracker.table_name))
 
     def _confirm_production(self) -> bool:
         """Confirm migration in production environment."""
@@ -270,10 +298,13 @@ class MigrateCommand(CommandBase):
         connection: str,
         directory: str | None,
         schema: str | None,
+        direction: str = "up",
     ) -> list[str]:
         """Build a single migration in dry mode and collect the SQL it emits.
 
-        Returns the ordered list of SQL statements ``up()`` would execute.
+        Returns the ordered list of SQL statements ``up()`` would execute —
+        or ``down()`` with ``direction="down"``, which is how
+        ``migrate:rollback --show`` previews a rollback without running it.
         Never opens a write connection — the dry executor short-circuits
         before touching the pool.
         """
@@ -298,10 +329,10 @@ class MigrateCommand(CommandBase):
             # through the ``DB`` facade (``DB.statement(...)``), which has NO
             # dry-run awareness and would EXECUTE against the live database
             # during a preview. Guard the facade's mutating methods for the
-            # duration of ``up()`` so they record + skip instead of running.
+            # duration of the call so they record + skip instead of running.
             restore_db = self._install_db_facade_guard(statements)
             try:
-                migration_instance.up()
+                getattr(migration_instance, direction)()
             finally:
                 restore_db()
         except Exception as exc:  # preview must not abort the loop

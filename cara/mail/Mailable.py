@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from cara.mail.JinjaRenderer import render_mail_view
+from cara.queues import QueuePayload
 from cara.queues.contracts import SerializesModels
 
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$")
@@ -76,6 +77,7 @@ class Mailable(SerializesModels):
         # every send (sync Mail._send_now and queued SendMailableJob)
         # raised AttributeError before any driver ran.
         self._headers: dict[str, str] = {}
+        self._queue: str | None = None
         self._application = None
 
     def to(self, address: str | list[str]) -> Mailable:
@@ -184,11 +186,75 @@ class Mailable(SerializesModels):
 
     def attach(self, name: str, path: str) -> Mailable:
         """
-        Attach a file to the email.
+        Attach a file to the email, or raise ``FileNotFoundError``.
+
+        A missing file used to be skipped silently and the mail went out
+        without the attachment it promised. That is a failed send, and the
+        earliest point it is knowable is here, where the caller still holds
+        the context to handle it.
         """
-        if os.path.exists(path):
-            self._attachments.append({"name": name, "path": path})
+        if not isinstance(path, str) or not os.path.isfile(path):
+            raise FileNotFoundError(f"Mail attachment {name!r} does not exist: {path!r}")
+        self._attachments.append({"name": name, "path": path})
         return self
+
+    def on_queue(self, queue: str) -> Mailable:
+        """Name the canonical queue a queued send of this mailable rides."""
+        if not isinstance(queue, str) or not queue.strip():
+            raise ValueError("Mail queue must be a non-empty string.")
+        self._queue = queue.strip()
+        return self
+
+    def get_queue(self) -> str | None:
+        """The queue set by :meth:`on_queue`, or None for the job's default."""
+        return self._queue
+
+    def to_queue_payload(self) -> dict[str, Any]:
+        """The BUILT message as plain data for a queued send.
+
+        Call after ``build()``: the HTML is rendered here, on the dispatching
+        side that has the application and the view data, so the worker
+        never needs the (often model-bearing) ``view_data``. Anything that is
+        not plain JSON data is refused with the field named.
+        """
+        message = self.to_dict()
+        message.pop("view", None)
+        message.pop("view_data", None)
+        return QueuePayload.require_plain(message, "mailable_data")
+
+    @classmethod
+    def from_queue_payload(cls, data: dict[str, Any]) -> Mailable:
+        """Rebuild the message :meth:`to_queue_payload` produced.
+
+        Returns a plain :class:`Mailable` carrying the rendered message, not
+        an instance of ``cls``: the subclass's ``build()`` already ran at
+        dispatch and its constructor state was never queued. A subclass that
+        queues more than the rendered message overrides both methods.
+        Attachments go back through :meth:`attach`, so a file absent on the
+        worker fails the send instead of being dropped.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("Queued mailable data must be an object.")
+        mailable = Mailable()
+        mailable.to(list(data.get("to") or []))
+        mailable.cc(list(data.get("cc") or []))
+        mailable.bcc(list(data.get("bcc") or []))
+        if data.get("from") is not None:
+            mailable.from_(data["from"])
+        if data.get("reply_to") is not None:
+            mailable.reply_to(data["reply_to"])
+        if data.get("subject") is not None:
+            mailable.subject(data["subject"])
+        if data.get("html") is not None:
+            mailable.html(data["html"])
+        if data.get("text") is not None:
+            mailable.text(data["text"])
+        if data.get("priority") is not None:
+            mailable.priority(int(data["priority"]))
+        mailable.headers(dict(data.get("headers") or {}))
+        for attachment in data.get("attachments") or []:
+            mailable.attach(attachment.get("name"), attachment.get("path"))
+        return mailable
 
     def set_application(self, application) -> Mailable:
         """

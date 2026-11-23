@@ -298,10 +298,33 @@ class MakesBodyParsing:
         Enhanced with Laravel-like validation and error handling.
         """
         if self._files is not None:
+            self._raise_multipart_failure()
             return
 
         self._files = {}
         self._form_params = {}
+        try:
+            await self._parse_form_body()
+        except Exception as exc:
+            # The parse is cached by ``_files`` being set, so a failure has
+            # to be cached with it. It was not: the first ``files()`` raised
+            # "Too many files uploaded" and the SECOND returned the files
+            # parsed before the limit, as if the upload had been accepted —
+            # and ``all()`` then forgave the first raise, so a handler reading
+            # ``all()`` then ``files()`` never saw the refusal at all. Keep
+            # nothing of a refused body and answer every later read the same.
+            self._files, self._form_params = {}, {}
+            self._multipart_failure = exc
+            raise
+
+    def _raise_multipart_failure(self) -> None:
+        """Re-raise the failure a previous form parse ended with, if any."""
+        failure = getattr(self, "_multipart_failure", None)
+        if failure is not None:
+            raise failure
+
+    async def _parse_form_body(self) -> None:
+        """Parse the form body into ``_files`` / ``_form_params`` (uncached)."""
         content_type = self.header("content-type", "")
 
         # application/x-www-form-urlencoded is a form body too — routing
@@ -470,6 +493,8 @@ class MakesBodyParsing:
         """
         if self._form_params is None:
             await self._parse_multipart()
+        else:
+            self._raise_multipart_failure()
         return self._form_params or {}
 
     async def files(self) -> dict[str, UploadedFile]:
@@ -480,6 +505,8 @@ class MakesBodyParsing:
         """
         if self._files is None:
             await self._parse_multipart()
+        else:
+            self._raise_multipart_failure()
         return self._files or {}
 
     async def file(self, name: str) -> UploadedFile | None:
@@ -559,27 +586,15 @@ class MakesBodyParsing:
             "multipart/form-data" in content_type
             or "application/x-www-form-urlencoded" in content_type
         ):
-            # Handle as form data. A parse failure here (bad
-            # boundary, oversize multipart, etc.) is deliberately
-            # NOT propagated — ``request.input()`` callers should
-            # see whatever query params were valid even when the
-            # body is malformed. But the swallow MUST be logged:
-            # pre-fix this was a bare ``pass`` with a comment that
-            # claimed we'd log, which made every "where did my form
-            # field go?" investigation start by re-reading the
-            # source to confirm the bug had no telemetry.
-            try:
-                form_data = await self.form()
-                if form_data:
-                    result.update(form_data)
-            except BadRequestException as exc:
-                logging.getLogger("cara.http.body").debug(
-                    "MakesBodyParsing.all(): form parse swallowed "
-                    "for content-type %r — caller will see query "
-                    "params only. Cause: %s",
-                    content_type,
-                    exc,
-                )
+            # Handle as form data. A refused body (bad boundary, too many
+            # files, an oversized upload) fails here exactly as it fails
+            # ``files()``: forgiving it ran a handler that only reads
+            # ``all()`` on the query alone, and it answered 200 for an upload
+            # it had silently dropped. ``form()`` re-raises the cached failure
+            # on every later read too, so no reader sees a partial body.
+            form_data = await self.form()
+            if form_data:
+                result.update(form_data)
         elif self._is_json_media_type(content_type):
             # Handle as JSON data. The previous version swallowed
             # invalid-JSON errors silently which made

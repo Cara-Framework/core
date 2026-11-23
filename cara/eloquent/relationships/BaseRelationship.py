@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from cara.support import Collection
+
 
 class BaseRelationship:
     def __init__(self, fn, local_key=None, foreign_key=None):
@@ -258,6 +260,15 @@ class BaseRelationship:
             return related_record.create(related_record.all_attributes(), cast=True)
 
         return related_record.update({self.foreign_key: local_key_value})
+
+    def _eager_keys(self, parents):
+        """The distinct, non-NULL ``local_key`` values an eager load matches.
+
+        Empty when no parent carries a key (a page whose nullable foreign
+        keys are all NULL): there is nothing to fetch, and ``get_related``
+        answers without a query instead of sending ``WHERE 0 = 1``.
+        """
+        return Collection(parents._get_value(self.local_key)).unique()
 
     def get_related(self, query, relation, eagers=None, callback=None):
         klass = self.__class__.__name__

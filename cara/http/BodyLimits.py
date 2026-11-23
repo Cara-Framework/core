@@ -22,18 +22,34 @@ class BodyLimits:
 
     @classmethod
     def configured(cls) -> BodyLimits:
+        # ``EnforceBodySizeLimit`` asks on every request. The three limits
+        # live in one ``server`` section, so it is fetched once and read as a
+        # dict instead of walking the configuration tree three times; a reader
+        # that does not return the section (a test double keyed by full
+        # paths) is asked limit by limit.
+        section = config("server", None)
+        if isinstance(section, dict):
+
+            def read(name: str, default: int) -> object:
+                return section.get(name, default)
+
+        else:
+
+            def read(name: str, default: int) -> object:
+                return config(f"server.{name}", default)
+
         return cls(
             body_bytes=cls._positive(
                 "server.max_body_size",
-                config("server.max_body_size", cls.DEFAULT_BODY_BYTES),
+                read("max_body_size", cls.DEFAULT_BODY_BYTES),
             ),
             file_bytes=cls._positive(
                 "server.max_file_size",
-                config("server.max_file_size", cls.DEFAULT_FILE_BYTES),
+                read("max_file_size", cls.DEFAULT_FILE_BYTES),
             ),
             files=cls._positive(
                 "server.max_files",
-                config("server.max_files", cls.DEFAULT_FILES),
+                read("max_files", cls.DEFAULT_FILES),
             ),
         )
 

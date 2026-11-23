@@ -121,6 +121,7 @@ class Response(BaseResponse):
                     status=status,
                     content_type=content_type,
                     headers=headers,
+                    receive=receive,
                 )
                 return
 
@@ -527,8 +528,12 @@ class Response(BaseResponse):
         """Stream JSON Lines (JSONL) format."""
 
         async def chunks() -> AsyncGenerator[bytes]:
-            async for data in data_generator:
-                yield (json_dumps(data) + "\n").encode("utf-8")
+            try:
+                async for data in data_generator:
+                    yield (json_dumps(data) + "\n").encode("utf-8")
+            finally:
+                # The source is closed with its wrapper (StreamingResponse._close).
+                await self.streaming._close(data_generator)
 
         return self.stream(
             chunks(),
@@ -546,8 +551,11 @@ class Response(BaseResponse):
         """Stream Server-Sent Events."""
 
         async def chunks() -> AsyncGenerator[bytes]:
-            async for event in event_generator:
-                yield self.streaming._format_sse_event(event).encode("utf-8")
+            try:
+                async for event in event_generator:
+                    yield self.streaming._format_sse_event(event).encode("utf-8")
+            finally:
+                await self.streaming._close(event_generator)
 
         # No CORS here: ``HandleCors`` stamps the configured policy. A
         # hardcoded ``Access-Control-Allow-Origin: *`` survived for the

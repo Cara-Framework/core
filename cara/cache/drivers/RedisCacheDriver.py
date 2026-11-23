@@ -11,6 +11,7 @@ import logging
 
 # Payloads above the configured driver threshold emit a one-time warning per
 # key so operators notice runaway cache-as-blob patterns.
+from collections.abc import Iterable
 from typing import Any
 
 from cara.cache.codecs import JsonCacheCodec
@@ -18,6 +19,8 @@ from cara.cache.contracts import CacheContract
 from cara.cache.Observer import notify_cache_event
 from cara.exceptions import CacheConfigurationException
 from cara.facades import Log
+
+from . import _RedisKeyRemoval
 
 _logger = logging.getLogger("cara.cache.redis")
 
@@ -34,6 +37,16 @@ class RedisCacheDriver(CacheContract):
     """
 
     driver_name = "redis"
+
+    #: Keys one SCAN step asks the server to examine. SCAN walks the WHOLE
+    #: keyspace whatever it matches, so the step size alone sets the number of
+    #: round trips: at 100, sweeping a 500k-key database took 5,000 of them.
+    _SCAN_COUNT = 1000
+
+    #: Keys remembered as "already warned about" before the memory starts
+    #: over. Version-stamped keys change name on every bump, so an unbounded
+    #: set grew by one entry per large key ever written, for the process's life.
+    _LARGE_VALUE_WARNED_LIMIT = 1024
 
     def __init__(
         self,
@@ -204,6 +217,47 @@ class RedisCacheDriver(CacheContract):
                 raise
             return default
 
+        return self._read_value(key, redis_key, raw_data, default, strict)
+
+    def many(
+        self, keys: Iterable[str], default: Any = None, *, strict: bool = True
+    ) -> dict[str, Any]:
+        """Read several keys with ONE ``MGET`` — see ``CacheContract.many``.
+
+        Each value goes through the same decode, self-heal and observer path
+        as :meth:`get`, so a corrupt entry is deleted and (``strict``) raises
+        exactly as a single read of that key would.
+        """
+        names = list(dict.fromkeys(keys))
+        if not names:
+            return {}
+        redis_keys = [self._value_key(key) for key in names]
+        try:
+            raw_values = self._client.mget(redis_keys)
+        except Exception as exc:
+            Log.warning(
+                "[RedisCacheDriver] MGET failed for %s keys: %s",
+                len(names),
+                exc,
+                category="cache",
+            )
+            for key in names:
+                notify_cache_event("get", "error", key, None)
+            if strict:
+                raise
+            return dict.fromkeys(names, default)
+
+        return {
+            key: self._read_value(key, redis_key, raw_data, default, strict)
+            for key, redis_key, raw_data in zip(
+                names, redis_keys, raw_values, strict=True
+            )
+        }
+
+    def _read_value(
+        self, key: str, redis_key: str, raw_data: Any, default: Any, strict: bool
+    ) -> Any:
+        """One fetched payload as a value: miss, hit, or a corrupt entry."""
         if raw_data is None:
             notify_cache_event("get", "miss", key, None)
             return default
@@ -260,6 +314,8 @@ class RedisCacheDriver(CacheContract):
         ttl_seconds = self._resolve_ttl(ttl, self._default_ttl)
         payload_size = len(payload)
         if payload_size > self._large_value_bytes and key not in self._large_value_warned:
+            if len(self._large_value_warned) >= self._LARGE_VALUE_WARNED_LIMIT:
+                self._large_value_warned.clear()
             self._large_value_warned.add(key)
             Log.warning(
                 "[RedisCacheDriver] large cache value: key='%s' size=%sB threshold=%sB — consider normalising or sharding the payload",
@@ -337,32 +393,6 @@ class RedisCacheDriver(CacheContract):
 
         notify_cache_event("pull", "hit", key, len(raw_data))
         return value
-
-    def flush(self) -> None:
-        """Flush every cache entry under our prefix.
-
-        SECURITY — must NOT call ``flushdb()``: cara namespaces cache
-        keys with ``self._prefix`` but Redis databases are typically
-        shared with broadcasting state, queue jobs, sessions, rate
-        limit counters, etc. Wiping the whole DB on a routine flush
-        was wiping co-tenant data. We now SCAN+DEL only keys under
-        our prefix.
-
-        The codec namespace is always non-empty, even when the configured base
-        prefix is empty, so the scan can never expand to every key in the DB.
-        """
-        try:
-            cursor = 0
-            pattern = f"{self._prefix}*"
-            while True:
-                cursor, keys = self._client.scan(cursor=cursor, match=pattern, count=200)
-                if keys:
-                    self._client.delete(*keys)
-                if cursor == 0:
-                    break
-        except Exception as e:
-            Log.warning("[RedisCacheDriver] flush failed: %s", e, category="cache")
-            raise
 
     def has(self, key: str) -> bool:
         """Check if a key exists in cache."""
@@ -599,34 +629,6 @@ class RedisCacheDriver(CacheContract):
             return None
         return int(t)
 
-    def forget_pattern(self, pattern: str) -> int:
-        """
-        Delete multiple keys matching a glob pattern.
-
-        Uses Redis SCAN to find keys matching the pattern, then DEL to remove them.
-        This is non-blocking and safe for large key sets.
-
-        Args:
-            pattern: Glob pattern (e.g., "home:*", "products:featured:*")
-
-        Returns:
-            Number of keys deleted
-        """
-        deleted_count = 0
-
-        for namespace_prefix in (self._value_prefix, self._counter_prefix):
-            cursor = 0
-            while True:
-                cursor, keys = self._client.scan(
-                    cursor=cursor,
-                    match=f"{namespace_prefix}{pattern}",
-                    count=100,
-                )
-
-                if keys:
-                    deleted_count += self._client.delete(*keys)
-
-                if cursor == 0:
-                    break
-
-        return deleted_count
+    # Bulk removal (SCAN + UNLINK) lives in ``_RedisKeyRemoval``.
+    flush = _RedisKeyRemoval._flush
+    forget_pattern = _RedisKeyRemoval._forget_pattern

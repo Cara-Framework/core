@@ -23,7 +23,17 @@ def _iter_sources(
     ``directories=None`` means the whole tree; a named directory that does
     not exist is skipped, so one declaration can serve deployables that do
     not all carry the same layers.
+
+    ``root`` itself must exist. A root that is not a directory (a renamed
+    ``app/``, a ``parents[n]`` off by one) used to yield nothing, so every
+    audit over it returned no findings and its guard test stayed green over
+    a tree it never read.
     """
+    if not root.is_dir():
+        raise NotADirectoryError(
+            f"audit root {root} is not a directory — nothing would be scanned "
+            f"and the audit would pass without reading a single file"
+        )
     targets = [root] if directories is None else [root / name for name in directories]
     for target in targets:
         if not target.is_dir():

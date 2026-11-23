@@ -67,8 +67,16 @@ class NotificationProvider(DeferredProvider):
         partially registered manager would only defer the outage until the
         first notification asks for the absent channel.
         """
+        # Hand the channel the MANAGER, never ``make("DB").query()``: that is
+        # one QueryBuilder built at boot, and ``table()``/``where()`` mutate
+        # and return it, so every notification read and write of the process
+        # shared one builder — a call that raised left its ``notifiable_id``
+        # predicate behind for the next user, and two threads interleaved
+        # each other's rows. ``DatabaseManager.table()`` builds a fresh
+        # builder per call, which is the "manager with table()" the channel
+        # asks for.
         channel = DatabaseChannel(
-            database_manager=self.application.make("DB").query(),
+            database_manager=self.application.make("DB"),
             table_name=config(
                 "notifications.channels.database.table",
                 "notifications",

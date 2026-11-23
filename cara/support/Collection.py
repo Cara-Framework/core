@@ -217,6 +217,7 @@ class Collection:
     zip = _CollectionFiltering._collection_zip
     set_appends = _CollectionFiltering._collection_set_appends
     _get_value = _CollectionFiltering._get_value
+    _member_test = _CollectionFiltering._member_test
     _data_get = _CollectionFiltering._data_get
     _data_get_with_wildcards = _CollectionFiltering._data_get_with_wildcards
     _extract_wildcard_path = _CollectionFiltering._extract_wildcard_path

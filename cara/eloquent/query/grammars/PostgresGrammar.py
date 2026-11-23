@@ -114,6 +114,16 @@ class PostgresGrammar(BaseGrammar):
     def where_not_like_string(self):
         return "{keyword} {column} NOT ILIKE {value}"
 
+    # PostgreSQL has no ``REGEXP`` keyword: the inherited template made
+    # ``where(col, "regexp", pattern)`` a syntax error in production while
+    # the SQLite tests passed (the SQLite connection registers a ``REGEXP``
+    # function). ``~`` / ``!~`` are its POSIX match operators.
+    def where_regexp_string(self):
+        return "{keyword} {column} ~ {value}"
+
+    def where_not_regexp_string(self):
+        return "{keyword} {column} !~ {value}"
+
     def subquery_alias_string(self):
         return "AS {alias}"
 
@@ -148,6 +158,27 @@ class PostgresGrammar(BaseGrammar):
 
     def value_string(self):
         return "'{value}'{separator}"
+
+    def expression_literal(self, text: str) -> str:
+        r"""A literal holding ``?`` or ``%`` is written as an escape string
+        (``E'50\x25'``): the statement text then carries neither character,
+        so the ``'?'`` placeholder rewrite and psycopg2's ``%`` parsing have
+        nothing to act on. An escape string is still an untyped string
+        constant — it resolves against a ``jsonb``, numeric or timestamp
+        operand exactly as ``'…'`` does, which a ``||``-concatenation (type
+        ``text``) would not. Any other literal keeps the plain form, byte
+        for byte.
+        """
+        if "?" not in text and "%" not in text:
+            return super().expression_literal(text)
+        escaped = (
+            # Backslash first: it is the escape character of this form only.
+            text.replace("\\", "\\\\")
+            .replace("'", "''")
+            .replace("?", "\\x3F")
+            .replace("%", "\\x25")
+        )
+        return f"E'{escaped}'"
 
     def join_string(self):
         return "{keyword} {foreign_table}{alias} {on}"

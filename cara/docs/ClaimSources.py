@@ -148,11 +148,19 @@ def strip_fences(text: str) -> list[str]:
 def _resolve_path(token: str, roots: list[Path]) -> bool:
     token = token.strip("/")
     basename = token.rsplit("/", 1)[-1]
-    return any(
+    if any(
         relative == token or relative.endswith("/" + token)
         for root in roots
         for relative in path_index(root)[0].get(basename, ())
-    )
+    ):
+        return True
+    # The index does not descend into a symlinked directory, so a path
+    # spelled the way a deployable sees its kernel (``api/commons/models/X.py``
+    # through ``api/commons -> ../commons``) read "path does not exist" while
+    # opening in every editor. A path that exists under the root as written
+    # is not broken. Only as written: no suffix match, so a stale copy in a
+    # pruned directory still certifies nothing it does not literally name.
+    return ".." not in token.split("/") and any((root / token).exists() for root in roots)
 
 
 def check_path_claim(token: str, roots: list[Path]) -> tuple[str, str] | None:

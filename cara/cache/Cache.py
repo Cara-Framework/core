@@ -13,7 +13,7 @@ import logging
 import os
 import time as _time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from cara.exceptions import DriverNotRegisteredException
@@ -67,6 +67,24 @@ class Cache:
     ) -> Any:
         """Retrieve a value from cache via the given driver (or default)."""
         return self.driver(driver_name).get(key, default, strict=strict)
+
+    def many(
+        self,
+        keys: Iterable[str],
+        default: Any = None,
+        driver_name: str | None = None,
+        *,
+        strict: bool = True,
+    ) -> dict[str, Any]:
+        """Read several keys in one backend round trip (Redis ``MGET``).
+
+        Returns ``{key: value}`` in the order given, ``default`` standing in
+        for each absent key. Same failure contract as :meth:`get`:
+        ``strict=True`` raises on a backend or integrity failure. A caller
+        that reads N keys per request (a token's blacklist, family and user
+        revocation entries) pays one round trip instead of N.
+        """
+        return self.driver(driver_name).many(keys, default, strict=strict)
 
     def put(
         self,

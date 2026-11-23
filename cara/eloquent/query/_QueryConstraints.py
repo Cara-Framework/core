@@ -13,6 +13,8 @@ from cara.eloquent.expressions import (
     SubSelectExpression,
 )
 
+from ._QueryRelations import _relation_exists, _require_model
+
 _logger = logging.getLogger("cara.eloquent.query")
 QueryBuilder: type
 
@@ -23,173 +25,40 @@ def _bind_query_builder(builder_type: type) -> None:
 
 
 def _qb_doesnt_have(self, *relationships) -> Self:
-    if not self._model:
-        raise AttributeError(
-            "You must specify a model in order to use the 'doesnt_have' relationship methods"
-        )
-
+    _require_model(self, "the 'doesnt_have'")
     for relationship in relationships:
-        if "." in relationship:
-            last_builder = self._model.builder
-            split_count = len(relationship.split("."))
-            for index, split_relationship in enumerate(relationship.split(".")):
-                related = last_builder.get_relation(split_relationship)
-                if index + 1 == split_count:
-                    last_builder = related.query_has(
-                        last_builder,
-                        method="where_exists",
-                    )
-                    continue
-
-                last_builder = related.query_has(
-                    last_builder,
-                    method="where_not_exists",
-                )
-        else:
-            related = self._resolve_relation_descriptor(relationship)
-            related.query_has(self, method="where_not_exists")
+        _relation_exists(self, relationship, "where_not_exists")
     return self
 
 
 def _qb_or_doesnt_have(self, *relationships) -> Self:
-    if not self._model:
-        raise AttributeError(
-            "You must specify a model in order to use the 'doesnt_have' relationship methods"
-        )
-
+    _require_model(self, "the 'doesnt_have'")
     for relationship in relationships:
-        if "." in relationship:
-            last_builder = self._model.builder
-            split_count = len(relationship.split("."))
-            for index, split_relationship in enumerate(relationship.split(".")):
-                related = last_builder.get_relation(split_relationship)
-                if index + 1 == split_count:
-                    last_builder = related.query_has(
-                        last_builder,
-                        method="where_exists",
-                    )
-                    continue
-
-                last_builder = related.query_has(
-                    last_builder,
-                    method="or_where_not_exists",
-                )
-        else:
-            related = self._resolve_relation_descriptor(relationship)
-            related.query_has(self, method="or_where_not_exists")
+        _relation_exists(self, relationship, "or_where_not_exists")
     return self
 
 
 def _qb_where_has(self, relationship, callback) -> Self:
-    if not self._model:
-        raise AttributeError(
-            "You must specify a model in order to use 'has' relationship methods"
-        )
-
-    if "." in relationship:
-        last_builder = self._model.builder
-        splits = relationship.split(".")
-        split_count = len(splits)
-        for index, split_relationship in enumerate(splits):
-            related = last_builder.get_relation(split_relationship)
-
-            if index + 1 == split_count:
-                last_builder = related.query_where_exists(
-                    last_builder,
-                    callback,
-                    method="where_exists",
-                )
-                continue
-            last_builder = related.query_has(last_builder, method="where_exists")
-    else:
-        related = self._resolve_relation_descriptor(relationship)
-        related.query_where_exists(self, callback, method="where_exists")
+    _require_model(self, "'has'")
+    _relation_exists(self, relationship, "where_exists", callback)
     return self
 
 
 def _qb_or_where_has(self, relationship, callback) -> Self:
-    if not self._model:
-        raise AttributeError(
-            "You must specify a model in order to use 'has' relationship methods"
-        )
-
-    if "." in relationship:
-        last_builder = self._model.builder
-        splits = relationship.split(".")
-        split_count = len(splits)
-        for index, split_relationship in enumerate(splits):
-            related = last_builder.get_relation(split_relationship)
-            if index + 1 == split_count:
-                last_builder = related.query_where_exists(
-                    last_builder,
-                    callback,
-                    method="where_exists",
-                )
-                continue
-
-            last_builder = related.query_has(last_builder, method="or_where_exists")
-    else:
-        related = self._resolve_relation_descriptor(relationship)
-        related.query_where_exists(self, callback, method="or_where_exists")
+    _require_model(self, "'has'")
+    _relation_exists(self, relationship, "or_where_exists", callback)
     return self
 
 
 def _qb_where_doesnt_have(self, relationship, callback) -> Self:
-    if not self._model:
-        raise AttributeError(
-            "You must specify a model in order to use the 'doesnt_have' relationship methods"
-        )
-
-    if "." in relationship:
-        last_builder = self._model.builder
-        split_count = len(relationship.split("."))
-        for index, split_relationship in enumerate(relationship.split(".")):
-            related = last_builder.get_relation(split_relationship)
-            if index + 1 == split_count:
-                last_builder = last_builder.get_relation(
-                    split_relationship
-                ).query_where_exists(
-                    last_builder,
-                    callback,
-                    method="where_not_exists",
-                )
-                continue
-
-            last_builder = related.query_has(last_builder, method="where_not_exists")
-    else:
-        related = self._resolve_relation_descriptor(relationship)
-        related.query_where_exists(self, callback, method="where_not_exists")
+    _require_model(self, "the 'doesnt_have'")
+    _relation_exists(self, relationship, "where_not_exists", callback)
     return self
 
 
 def _qb_or_where_doesnt_have(self, relationship, callback) -> Self:
-    if not self._model:
-        raise AttributeError(
-            "You must specify a model in order to use the 'doesnt_have' relationship methods"
-        )
-
-    if "." in relationship:
-        last_builder = self._model.builder
-        split_count = len(relationship.split("."))
-        for index, split_relationship in enumerate(relationship.split(".")):
-            related = last_builder.get_relation(split_relationship)
-            if index + 1 == split_count:
-                last_builder = last_builder.get_relation(
-                    split_relationship
-                ).query_where_exists(
-                    last_builder,
-                    callback,
-                    method="or_where_not_exists",
-                )
-                continue
-
-            last_builder = related.query_has(
-                last_builder,
-                method="or_where_not_exists",
-            )
-    else:
-        related = self._resolve_relation_descriptor(relationship)
-        related.query_where_exists(self, callback, method="or_where_not_exists")
+    _require_model(self, "the 'doesnt_have'")
+    _relation_exists(self, relationship, "or_where_not_exists", callback)
     return self
 
 

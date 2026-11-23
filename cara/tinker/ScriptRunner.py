@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.syntax import Syntax
@@ -97,7 +98,11 @@ class ScriptRunner:
     def _execute_line(self, line: str, line_num: int) -> dict[str, Any]:
         """Execute a single line and return result info."""
         try:
-            result = self.repl.execute(line)
+            # ``evaluate``, not ``execute``: the latter swallows the error and
+            # returns None, so this ``except`` never ran — every line was
+            # recorded as a success and a script whose every line raised
+            # ended with "Successful: N" and no failed-commands table.
+            result = self.repl.evaluate(line)
             return {
                 "line": line_num,
                 "command": line,
@@ -106,6 +111,7 @@ class ScriptRunner:
                 "error": None,
             }
         except Exception as e:
+            self.repl.print_error(e, line)
             return {
                 "line": line_num,
                 "command": line,
@@ -150,14 +156,21 @@ class ScriptRunner:
         table.add_column("Error", style="red")
 
         for result in failed_results:
+            # Escaped: a cell is markup, and the command and its error are
+            # the user's text (``rows[i]`` lost its ``[i]``; a ``[/x]``
+            # raised ``MarkupError`` while reporting the failure).
             table.add_row(
                 str(result["line"]),
-                f"{result['command'][:50]}..."
-                if len(result["command"]) > 50
-                else result["command"],
-                f"{result['error'][:100]}..."
-                if len(result["error"]) > 100
-                else result["error"],
+                escape(
+                    f"{result['command'][:50]}..."
+                    if len(result["command"]) > 50
+                    else result["command"]
+                ),
+                escape(
+                    f"{result['error'][:100]}..."
+                    if len(result["error"]) > 100
+                    else result["error"]
+                ),
             )
 
         self.console.print(table)

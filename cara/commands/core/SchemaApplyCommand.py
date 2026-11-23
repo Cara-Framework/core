@@ -91,6 +91,7 @@ from cara.schema import (
     from_dict,
     migration_to_run,
     plan_id,
+    review_contract,
 )
 from cara.support import paths
 
@@ -367,15 +368,18 @@ class SchemaApplyCommand(CommandBase):
             return False
         derived = self._resumed_builds(reviewed, derived, applied)
         # A REINDEX standing in for a reviewed build is that build: its key
-        # matches, its SQL by construction does not.
+        # matches, its statements by construction do not.
         rebuilt = {op.key for op in derived if op.kind == _REBUILD_KIND}
 
+        # Compared on the whole review contract, not the forward SQL alone:
+        # a resumed plan whose remaining reverse, safety class or preflight
+        # changed since review is as unapproved as a fresh one would be.
         def same(pairs: set) -> set:
-            return {(key, None if key in rebuilt else sql) for key, sql in pairs}
+            return {(key, None if key in rebuilt else terms) for key, terms in pairs}
 
-        named = {(op.key, op.forward_sql) for op in reviewed}
+        named = {(op.key, review_contract(op)) for op in reviewed}
         ran_fill = {
-            (op.key, op.forward_sql)
+            (op.key, review_contract(op))
             for op in derived
             if op.kind == _FILL_KIND and op.key in applied
         }
@@ -383,7 +387,7 @@ class SchemaApplyCommand(CommandBase):
             return False
         remaining = {pair for pair in named if pair[0] not in applied}
         return same(remaining) == same(
-            {(op.key, op.forward_sql) for op in derived} - ran_fill
+            {(op.key, review_contract(op)) for op in derived} - ran_fill
         )
 
     @staticmethod

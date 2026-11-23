@@ -110,18 +110,22 @@ class Container:
         # (4) If remember=True, cache constructor arguments for repeated resolutions
         self.remember: bool = False
 
-        # (5) Lock guarding deferred-provider resolution. Without this,
-        # two concurrent ``make("cache")`` calls race: Thread A pops the
-        # entry out of ``_deferred`` and enters ``register()``; Thread B
-        # arrives in the narrow window after A's pop and before A's
-        # ``bind("cache", ...)`` completes, sees the key absent from both
-        # ``_deferred`` (A popped it) and ``objects`` (A hasn't bound
-        # yet), and raises ``MissingContainerBindingException``. Under
-        # the queue worker's threaded consumer this shows up as sporadic
-        # "'cache' key was not found" errors that vanish on retry. A
-        # lock around the pop+register+bind block is the minimum-footprint
-        # fix; the path runs once per service, so contention is nil.
+        # (5) The registry lock: held around reads and writes of the tables
+        # below (bindings, deferred providers, the two that follow) and never
+        # across a constructor, a factory or a provider's ``register()`` —
+        # see ``make``. Two concurrent ``make("cache")`` calls used to race:
+        # Thread A pops the entry out of ``_deferred`` and enters
+        # ``register()``; Thread B arrives after A's pop and before A's
+        # ``bind("cache", ...)``, sees the key absent from both tables and
+        # raises ``MissingContainerBindingException``. ``load_deferred``
+        # closes that by making B wait for A's registration alone.
         self._deferred_lock = threading.RLock()
+
+        # Deferred providers being registered right now: binding key → the
+        # registration, and thread → the registration it waits for (what
+        # ``load_deferred`` reads to never wait in a circle).
+        self._loading: dict[Any, Any] = {}
+        self._waiting: dict[int, Any] = {}
 
         # (6) Temporary swap bindings for testing or mocking
         self.swaps: dict[Any, Any] = {}
@@ -154,18 +158,21 @@ class Container:
             raise StrictContainerException(
                 f"Cannot bind module '{class_obj}' with key '{name}'."
             )
-        if self.strict and name in self.objects:
-            (
-                GenericContainerException,
-                MissingContainerBindingException,
-                StrictContainerException,
-            ) = _ContainerResolution._get_container_exceptions()
-            raise StrictContainerException(
-                f"Cannot override '{name}' in strict container."
-            )
+        # One step under the registry lock: the check and the write, so two
+        # threads binding one key cannot both pass ``strict``/``override``.
+        with self._deferred_lock:
+            if self.strict and name in self.objects:
+                (
+                    GenericContainerException,
+                    MissingContainerBindingException,
+                    StrictContainerException,
+                ) = _ContainerResolution._get_container_exceptions()
+                raise StrictContainerException(
+                    f"Cannot override '{name}' in strict container."
+                )
 
-        if self.override or name not in self.objects:
-            self.objects[name] = class_obj
+            if self.override or name not in self.objects:
+                self.objects[name] = class_obj
 
         return self
 
@@ -185,14 +192,35 @@ class Container:
             # the caller already holds a reference to it. Costly when
             # the factory opens a DB pool, mounts a Playwright browser,
             # etc. — that orphan resource leaks for the process lifetime.
-            cached = {"instance": None}
-            init_lock = threading.Lock()
+            #
+            # This per-binding lock is what builds a singleton exactly once
+            # now that ``make`` no longer holds the container lock across
+            # the factory. It is released when the factory raises (nothing
+            # is cached, the next ``make`` builds again) and it is
+            # re-entrant, so a factory that resolves its OWN binding is told
+            # so instead of waiting for itself for ever.
+            cached = {"instance": None, "building": False}
+            init_lock = threading.RLock()
 
             def singleton_factory():
                 if cached["instance"] is None:
                     with init_lock:
                         if cached["instance"] is None:
-                            cached["instance"] = class_obj()
+                            if cached["building"]:
+                                (
+                                    GenericContainerException,
+                                    _,
+                                    _,
+                                ) = _ContainerResolution._get_container_exceptions()
+                                raise GenericContainerException(
+                                    f"Circular dependency detected: the singleton "
+                                    f"'{name}' resolves itself while it is being built"
+                                )
+                            cached["building"] = True
+                            try:
+                                cached["instance"] = class_obj()
+                            finally:
+                                cached["building"] = False
                 return cached["instance"]
 
             self.bind(name, singleton_factory)
@@ -207,10 +235,11 @@ class Container:
 
         Returns False if the key did not exist.
         """
-        if name not in self.objects:
-            return False
-        del self.objects[name]
-        return True
+        with self._deferred_lock:
+            if name not in self.objects:
+                return False
+            del self.objects[name]
+            return True
 
     def simple(self, obj: Any) -> Container:
         """Bind an object or class under its own class as the key."""
@@ -222,7 +251,9 @@ class Container:
         """Check if a given key (string) or class exists in the container (either as a direct
         binding or as a deferred provider)."""
         if isinstance(name, str):
-            return name in self.objects or name in self._deferred
+            # ``_loading``: a provider mid-registration has left ``_deferred``
+            # and may not have bound yet; its keys exist all the same.
+            return name in self.objects or name in self._deferred or name in self._loading
         # Lazy-import the exception class — the same circular-import
         # workaround the rest of this file uses. The bare reference
         # ``MissingContainerBindingException`` would NameError at
@@ -606,4 +637,5 @@ class Container:
         return self.has(obj)
 
     make = _ContainerResolution._container_make
+    load_deferred = _ContainerResolution._container_load_deferred
     _do_resolve = _ContainerResolution._container_do_resolve

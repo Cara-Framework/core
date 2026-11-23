@@ -1,19 +1,14 @@
 """``PostgresConnection`` — pool slot lifecycle pins.
 
-The connection pool has two concurrency primitives that have to
-stay in sync:
+Each configured connection has its own pool (``PostgresPool``): the idle
+psycopg2 sessions sitting ready to be popped, and the permits that count
+how many sessions are checked out. A caller MUST take a permit before
+opening / reusing a session and MUST hand exactly one back when done.
 
-  * ``CONNECTION_POOL`` (module-level list) — warm psycopg2
-    connections sitting idle, ready to be popped.
-  * ``_pool_semaphore`` (module-level semaphore) — counts how many
-    "active" connection slots are checked out. A caller MUST
-    acquire one before opening / reusing a connection, and MUST
-    release exactly one when done.
-
-Tracked on the wrapper via ``self._pool_slot_acquired`` so
-``close_connection`` knows whether it owns a release. Every
-acquire-without-release path leaks a slot; under burst load the
-semaphore drains to zero and the whole API hangs on
+The wrapper remembers the pool that issued its permit
+(``self._permit_pool``) so ``close_connection`` knows whether it owns a
+release, and where it goes. Every acquire-without-release path leaks a
+permit; under burst load the pool drains to zero and the whole API hangs on
 ``acquire()`` (or 503s after the 30s timeout).
 
 These tests pin three lifecycle invariants:
@@ -44,38 +39,33 @@ from __future__ import annotations
 
 import importlib
 import sys
-import threading
 from unittest.mock import MagicMock
 
 import pytest
 
-from ._fixtures import install_fake_psycopg2
+from cara.eloquent.connections import PostgresPool
+
+from ._fixtures import install_fake_psycopg2, pool_of
 
 PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
 PostgresConnection = PGModule.PostgresConnection
 DatabaseUnavailableException = PGModule.DatabaseUnavailableException
 
 
-def _fresh_pool(
-    monkeypatch, *, size: int, warm: list | None = None
-) -> threading.Semaphore:
-    """Reset the module-level pool state so each test is hermetic.
-
-    Returns the semaphore so tests can assert against the slot count.
-    """
-    sem = threading.Semaphore(size)
-    monkeypatch.setattr(PGModule, "_pool_initialized", True)
-    monkeypatch.setattr(PGModule, "_pool_semaphore", sem)
-    monkeypatch.setattr(PGModule, "CONNECTION_POOL", list(warm or []))
-    return sem
+@pytest.fixture(autouse=True)
+def _no_pools():
+    """Every test starts and ends with no pool registered."""
+    PostgresPool.reset_all(close=False)
+    yield
+    PostgresPool.reset_all(close=False)
 
 
-def _make_pc(**overrides):
+def _make_pc(size: int = 4, **overrides):
     """Build a PostgresConnection wired for pool-enabled mode with a
     small pool by default. Tests override individual full_details."""
     full_details = {
         "connection_pooling_enabled": True,
-        "connection_pooling_max_size": 4,
+        "connection_pooling_max_size": size,
         **overrides.pop("full_details", {}),
     }
     return PostgresConnection(
@@ -86,6 +76,11 @@ def _make_pc(**overrides):
         password="x",
         full_details=full_details,
     )
+
+
+def _in_use(pc) -> int:
+    """Permits of ``pc``'s pool currently checked out."""
+    return pool_of(pc).stats()["in_use"]
 
 
 def _mock_pg_connection() -> MagicMock:
@@ -110,12 +105,10 @@ class TestPoolExhaustionRaises503Shape:
     HTTP client only retries on the 503."""
 
     def test_exhausted_pool_raises_database_unavailable(self, monkeypatch):
-        sem = _fresh_pool(monkeypatch, size=2)
-        # Drain both slots so the next acquire times out.
-        sem.acquire()
-        sem.acquire()
-
-        pc = _make_pc()
+        pc = _make_pc(size=2)
+        pool = pool_of(pc)
+        # Drain both permits so the next acquire times out.
+        assert pool.acquire(0) and pool.acquire(0)
         # Shorten the acquire timeout so the test finishes fast —
         # production default is 30s and we don't need to prove the
         # exact value here, just that the timeout fires.
@@ -130,13 +123,10 @@ class TestPoolExhaustionRaises503Shape:
             "DatabaseUnavailableException must set retry_after=1 so "
             "the exception handler produces a 503 with a retry hint"
         )
-        # Slot state must not have been mutated by a failed acquire —
+        # Permit state must not have been mutated by a failed acquire —
         # the wrapper had nothing to release.
-        assert (
-            pc._pool_slot_acquired is False
-            if hasattr(pc, "_pool_slot_acquired")
-            else True
-        )
+        assert pc._permit_pool is None
+        assert pool.stats()["in_use"] == 2
 
 
 # ── Slot leak on close_connection with _connection=None ─────────
@@ -152,29 +142,24 @@ class TestCloseConnectionReleasesOrphanSlot:
     slot held until process exit."""
 
     def test_release_when_connection_never_assigned(self, monkeypatch):
-        sem = _fresh_pool(monkeypatch, size=3)
-
-        pc = _make_pc()
-        # Simulate the post-acquire / pre-assign hole: flag set,
+        pc = _make_pc(size=3)
+        pool = pool_of(pc)
+        # Simulate the post-acquire / pre-assign hole: permit taken,
         # _connection still None.
+        assert pool.acquire(0)
         pc._connection = None
-        pc._pool_slot_acquired = True
-        sem.acquire()  # mimic the acquire that set the flag
+        pc._permit_pool = pool
 
-        # Two slots should be in use right now (the manual acquire
-        # above + the one we held implicitly when setting the flag).
-        # Pre-fix close_connection here would release ONE; the wrapper
-        # then gets garbage-collected with one slot still held.
-        before = sem._value
         pc.close_connection()
-        after = sem._value
-        assert after == before + 1, (
-            f"close_connection must release exactly one slot when the "
-            f"wrapper held one; semaphore went {before} → {after}"
+        assert pool.stats()["in_use"] == 0, (
+            "close_connection must release the permit the wrapper held "
+            "even when no session was ever assigned"
         )
-        # Flag clears so a future close_connection on the same
-        # wrapper doesn't double-release.
-        assert pc._pool_slot_acquired is False
+        # The wrapper forgets its pool so a second close_connection on
+        # the same wrapper doesn't double-release.
+        assert pc._permit_pool is None
+        pc.close_connection()
+        assert pool.stats()["in_use"] == 0
 
 
 class TestConnectFailureReleasesSlot:
@@ -186,32 +171,28 @@ class TestConnectFailureReleasesSlot:
     """
 
     def test_operational_error_on_fresh_connect_releases_slot(self, monkeypatch):
-        sem = _fresh_pool(monkeypatch, size=3)
-        before = sem._value
-
         fake = install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
 
         def _refused(**_kw):
             raise fake.OperationalError("connection refused")
 
         fake.connect = _refused
-        pc = _make_pc()
+        pc = _make_pc(size=3)
 
         with pytest.raises(fake.OperationalError, match="connection refused"):
             pc.create_connection()
 
-        assert sem._value == before, (
+        assert _in_use(pc) == 0, (
             "a failed psycopg2.connect drained a pool permit; repeated DB "
-            "outages would exhaust the process-wide pool"
+            "outages would exhaust the pool"
         )
-        assert getattr(pc, "_pool_slot_acquired", False) is False
+        assert pc._permit_pool is None
 
     def test_probe_and_replacement_errors_release_slot(self, monkeypatch):
         stale = _mock_pg_connection()
-        sem = _fresh_pool(monkeypatch, size=3, warm=[stale])
-        before = sem._value
-
         fake = install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
+        pc = _make_pc(size=3)
+        pool_of(pc).warm(lambda: stale, 1)  # pre-warmed: probed on checkout
         stale.cursor.return_value.execute.side_effect = fake.OperationalError(
             "idle connection dropped"
         )
@@ -220,34 +201,37 @@ class TestConnectFailureReleasesSlot:
             raise fake.OperationalError("replacement refused")
 
         fake.connect = _replacement_refused
-        pc = _make_pc()
 
         with pytest.raises(fake.OperationalError, match="replacement refused"):
             pc.create_connection()
 
         stale.cursor.return_value.close.assert_called_once_with()
         stale.close.assert_called_once_with()
-        assert sem._value == before
-        assert getattr(pc, "_pool_slot_acquired", False) is False
+        assert _in_use(pc) == 0
+        assert pc._permit_pool is None
 
     def test_operational_error_while_returning_connection_releases_slot(
         self, monkeypatch
     ):
-        sem = _fresh_pool(monkeypatch, size=2)
-        sem.acquire()
-
         fake = install_fake_psycopg2(monkeypatch, _mock_pg_connection)
         conn = _mock_pg_connection()
         conn.info.transaction_status = 1
         conn.rollback.side_effect = fake.OperationalError("connection reset")
 
-        pc = _make_pc()
+        pc = _make_pc(size=2)
+        pool = pool_of(pc)
+        assert pool.acquire(0)
         pc._connection = conn
-        pc._pool_slot_acquired = True
+        pc._permit_pool = pool
         pc.close_connection()
 
-        assert sem._value == 2
-        assert pc._pool_slot_acquired is False
+        assert pool.stats() | {"connection": None} == {
+            "connection": None,
+            "in_use": 0,
+            "idle": 0,  # a session that cannot be reset is not parked
+            "max": 2,
+        }
+        assert pc._permit_pool is None
         assert pc._connection is None
         conn.close.assert_called_once()
 
@@ -269,8 +253,6 @@ class TestSlotLeakOnMidLifeReconnect:
     """
 
     def test_reconnect_after_closed_releases_old_slot(self, monkeypatch):
-        sem = _fresh_pool(monkeypatch, size=4)
-
         # Stage 1: first make_connection mints a connection and
         # acquires slot 1. Stage 2: connection is marked closed.
         # Stage 3: caller invokes make_connection again (mimicking
@@ -288,7 +270,7 @@ class TestSlotLeakOnMidLifeReconnect:
 
         pc = _make_pc()
         pc.make_connection()
-        slots_before = 4 - sem._value
+        slots_before = _in_use(pc)
         assert slots_before == 1, (
             f"first make_connection should hold one slot; held {slots_before}"
         )
@@ -300,7 +282,7 @@ class TestSlotLeakOnMidLifeReconnect:
         # first. Post-fix the wrapper releases the orphaned slot
         # before re-acquiring, so slot count stays at 1.
         pc.make_connection()
-        slots_after = 4 - sem._value
+        slots_after = _in_use(pc)
         assert slots_after == 1, (
             f"mid-life reconnect leaked a slot: held {slots_before} "
             f"before, {slots_after} after — invariant says ≤1 slot "
@@ -336,9 +318,6 @@ class TestMakeConnectionSetupFailureReleasesSlot:
     """
 
     def test_enable_foreign_keys_failure_releases_slot(self, monkeypatch):
-        sem = _fresh_pool(monkeypatch, size=3)
-        before = sem._value
-
         install_fake_psycopg2(monkeypatch, _mock_pg_connection)
 
         # ``foreign_keys=True`` forces ``enable_disable_foreign_keys`` to issue
@@ -363,19 +342,17 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         with pytest.raises(RuntimeError, match="socket closed"):
             pc.make_connection()
 
-        after = sem._value
-        assert after == before, (
-            f"make_connection setup failure leaked a slot: "
-            f"semaphore {before} → {after}. The fix routes through "
-            f"close_connection on the exception path so the slot is "
-            f"released before the exception bubbles."
+        assert _in_use(pc) == 0, (
+            "make_connection setup failure leaked a permit. The fix routes "
+            "through close_connection on the exception path so the permit "
+            "is released before the exception bubbles."
         )
-        # ``_pool_slot_acquired`` must be cleared so a subsequent
+        # The permit's pool must be forgotten so a subsequent
         # close_connection on the (abandoned) wrapper doesn't
         # double-release.
-        assert getattr(pc, "_pool_slot_acquired", False) is False, (
-            "_pool_slot_acquired flag must be cleared by the cleanup "
-            "path so a stray close_connection can't double-release"
+        assert pc._permit_pool is None, (
+            "the cleanup path must forget the permit's pool so a stray "
+            "close_connection can't double-release"
         )
 
     def test_autocommit_assign_failure_releases_slot(self, monkeypatch):
@@ -383,9 +360,6 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         ``connection.autocommit = True`` setter can raise
         ``OperationalError`` if the underlying socket died between
         ``create_connection`` and this assignment."""
-        sem = _fresh_pool(monkeypatch, size=3)
-        before = sem._value
-
         # Use a connection whose autocommit setter raises. MagicMock's
         # default behaviour accepts any property assign; override via
         # PropertyMock so the setter side-effect fires.
@@ -404,15 +378,9 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         with pytest.raises(RuntimeError, match="TCP RST"):
             pc.make_connection()
 
-        after = sem._value
-        assert after == before, (
-            f"autocommit-assign failure leaked a slot: {before} → {after}"
-        )
+        assert _in_use(pc) == 0, "autocommit-assign failure leaked a permit"
 
     def test_operational_error_during_setup_releases_slot(self, monkeypatch):
-        sem = _fresh_pool(monkeypatch, size=3)
-        before = sem._value
-
         fake = install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
 
         def _connection_with_failed_setup(**_kw):
@@ -428,15 +396,14 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         with pytest.raises(fake.OperationalError, match="restarted during setup"):
             pc.make_connection()
 
-        assert sem._value == before
-        assert getattr(pc, "_pool_slot_acquired", False) is False
+        assert _in_use(pc) == 0
+        assert pc._permit_pool is None
 
     def test_repeated_setup_failures_do_not_drain_pool(self, monkeypatch):
         """Belt-and-braces: 10 consecutive setup failures must leave
         the pool with EVERY slot still available. Pre-fix this would
         drain a 4-slot pool in 4 iterations and 503 every caller for
         the rest of the process lifetime."""
-        sem = _fresh_pool(monkeypatch, size=4)
 
         def _broken_mock_pg_connection(**_kw):
             conn = _mock_pg_connection()
@@ -450,9 +417,9 @@ class TestMakeConnectionSetupFailureReleasesSlot:
             with pytest.raises(RuntimeError):
                 pc.make_connection()
 
-        assert sem._value == 4, (
-            f"10 setup failures drained the pool: {sem._value}/4 slots "
-            f"available. The fix must release on every failed setup."
+        assert _in_use(pc) == 0, (
+            f"10 setup failures drained the pool: {_in_use(pc)}/4 permits "
+            f"out. The fix must release on every failed setup."
         )
 
 
@@ -463,21 +430,19 @@ class TestRepeatReconnectsDoNotAccumulate:
     would 503 every subsequent caller."""
 
     def test_ten_reconnects(self, monkeypatch):
-        sem = _fresh_pool(monkeypatch, size=20)
-
         def _factory(**_kw):
             return _mock_pg_connection()
 
         install_fake_psycopg2(monkeypatch, connect_factory=_factory)
 
-        pc = _make_pc()
+        pc = _make_pc(size=20)
         for _ in range(10):
             pc.make_connection()
             # Mark this connection as closed so the next iteration
             # hits the reconnect path.
             pc._connection.closed = True
 
-        held = 20 - sem._value
+        held = _in_use(pc)
         assert held == 1, (
             f"10 reconnects held {held} slots; expected 1 — slots are "
             f"leaking on the closed-connection re-acquire path"
@@ -491,7 +456,6 @@ def _pooled_manager(monkeypatch, *, size: int):
     """A real DatabaseManager on a fake driver and a fresh ``size``-permit pool."""
     from cara.eloquent import DatabaseManager
 
-    sem = _fresh_pool(monkeypatch, size=size)
     fake = install_fake_psycopg2(
         monkeypatch, connect_factory=lambda **kw: _mock_pg_connection()
     )
@@ -514,7 +478,8 @@ def _pooled_manager(monkeypatch, *, size: int):
             }
         },
     )
-    return manager, sem
+    probe = manager.create_connection_instance("app", connect=False)
+    return manager, pool_of(probe)
 
 
 class TestBuilderConnectionsHoldNoPermitWhileCompiling:
@@ -532,7 +497,7 @@ class TestBuilderConnectionsHoldNoPermitWhileCompiling:
     def test_a_compile_failure_leaves_every_permit_in_the_pool(self, monkeypatch):
         from cara.eloquent.query import QueryBuilder
 
-        manager, sem = _pooled_manager(monkeypatch, size=2)
+        manager, pool = _pooled_manager(monkeypatch, size=2)
         builder = QueryBuilder(connection="app", database_manager=manager).table("users")
 
         def refuse():
@@ -543,26 +508,27 @@ class TestBuilderConnectionsHoldNoPermitWhileCompiling:
             with pytest.raises(RuntimeError, match="scope refused"):
                 builder.get()
 
-        assert sem._value == 2, "a failed compile kept a pool permit"
+        assert pool.stats()["in_use"] == 0, "a failed compile kept a pool permit"
 
     def test_an_unopened_connection_takes_its_permit_inside_query(self, monkeypatch):
-        manager, sem = _pooled_manager(monkeypatch, size=2)
+        manager, pool = _pooled_manager(monkeypatch, size=2)
 
         connection = manager.create_connection_instance("app", connect=False)
         assert connection._connection is None
-        assert sem._value == 2
+        assert pool.stats()["in_use"] == 0
 
         connection.query("SELECT 1")
-        assert sem._value == 2, "query() must return the permit it took"
+        assert pool.stats()["in_use"] == 0, "query() must return the permit it took"
+        assert pool.stats()["idle"] == 1, "the session was parked in its own pool"
 
     def test_begin_opens_an_unopened_connection_and_close_returns_it(self, monkeypatch):
-        manager, sem = _pooled_manager(monkeypatch, size=2)
+        manager, pool = _pooled_manager(monkeypatch, size=2)
 
         connection = manager.create_connection_instance("app", connect=False)
         connection.begin()
         assert connection.transaction_level == 1
-        assert sem._value == 1
+        assert pool.stats()["in_use"] == 1
 
         connection.rollback()
         connection.close_connection()
-        assert sem._value == 2
+        assert pool.stats()["in_use"] == 0

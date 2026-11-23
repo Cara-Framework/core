@@ -102,7 +102,8 @@ def _body_recorder() -> tuple[list[int], object]:
 @pytest.mark.parametrize(
     ("operation", "fault"),
     [
-        ("has", _OUTAGE),
+        # The gate's first ask: the result read (one GET since 2026-11-23).
+        ("get", _OUTAGE),
         ("add", _OUTAGE),
         # noeviction at maxmemory: reads still work, every write refuses.
         ("add", _OOM),
@@ -134,6 +135,30 @@ def test_a_fault_reading_a_completed_result_throttles(monkeypatch):
     with pytest.raises(IdempotencyGateFaultException):
         asyncio.run(_Job().wrap_with_idempotency(again))
     assert ran == []
+
+
+def test_a_fault_at_the_lease_winners_reread_throttles_and_frees_the_lease(monkeypatch):
+    """The re-read after the acquire is still the gate: nothing ran, so the
+    fault is a throttle, and the lease it had just taken is handed back so the
+    redelivery does not wait out a lease nobody is using."""
+    cache = _install(monkeypatch, _BrokenCache({}))
+    job = _Job()
+    original_add = cache.add
+
+    def _add_then_lose_the_cache(*args, **kwargs):
+        won = original_add(*args, **kwargs)
+        cache.broken["get"] = _OUTAGE
+        return won
+
+    cache.add = _add_then_lose_the_cache
+    ran, body = _body_recorder()
+
+    with pytest.raises(IdempotencyGateFaultException) as refused:
+        asyncio.run(job.wrap_with_idempotency(body))
+
+    assert refused.value.is_throttle
+    assert ran == []
+    assert cache.has(job._lock_key()) is False, "the lease outlived the refusal"
 
 
 def test_a_fault_at_the_cooldown_claim_throttles(monkeypatch):
@@ -191,7 +216,7 @@ def test_a_fault_while_waiting_on_another_owner_throttles(monkeypatch):
 
 def test_an_inline_dispatch_fails_at_its_caller_instead_of_skipping(monkeypatch):
     """``Bus`` settles a ``JobThrottledException`` as a quiet ``None``."""
-    _install(monkeypatch, _BrokenCache({"has": _OUTAGE}))
+    _install(monkeypatch, _BrokenCache({"get": _OUTAGE}))
     monkeypatch.setattr(
         _bus.facades,
         "DB",

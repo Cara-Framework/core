@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from cara.facades import Log
 
 _logger = logging.getLogger("cara.eloquent.observers")
+
+#: The model classes whose observers are muted in THIS execution context
+#: (``save_quietly`` / ``delete_quietly``). A ``ContextVar``, the way the
+#: connection registry isolates request state: the quiet saves used to flip
+#: the CLASS flag ``__has_events__``, so while one thread or task saved
+#: quietly every concurrent save of that model class lost its observer events.
+#: Each thread starts from the empty default and each asyncio task from a copy
+#: of its creator's context, so the mute reaches only the quiet call's own
+#: work. An immutable tuple, reset by token, so no context shares a mutation.
+_MUTED_CLASSES: ContextVar[tuple[type, ...]] = ContextVar(
+    "cara_muted_model_events", default=()
+)
 
 
 class ObservesEvents:
@@ -16,6 +30,12 @@ class ObservesEvents:
 
     def observe_events(self, model, event):
         if getattr(model, "_events_disabled", False):
+            return
+        muted = _MUTED_CLASSES.get()
+        # ``isinstance`` mirrors the class flag it replaces, which subclasses
+        # inherited; it also covers the fresh instance ``save()`` creates a
+        # new record through (``Model.create``), not just ``self``.
+        if muted and isinstance(model, muted):
             return
         if model.__has_events__:
             for observer in model.__observers__.get(model.__class__, []):
@@ -48,6 +68,16 @@ class ObservesEvents:
             cls.__observers__[cls].append(observer)
         else:
             cls.__observers__.update({cls: [observer]})
+
+    @classmethod
+    @contextmanager
+    def muted_events(cls):
+        """Mute this class's observers for the enclosed work, in this context only."""
+        token = _MUTED_CLASSES.set((*_MUTED_CLASSES.get(), cls))
+        try:
+            yield cls
+        finally:
+            _MUTED_CLASSES.reset(token)
 
     @classmethod
     def without_events(cls):

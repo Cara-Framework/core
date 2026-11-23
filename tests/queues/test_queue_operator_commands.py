@@ -76,6 +76,21 @@ class _FakeDB:
         bindings = list(bindings)
         self.calls.append(("select", query, bindings))
         if " FROM job " in query:
+            if "GROUP BY 1, 2" in query:
+                # The monitor's one grouped count: (queue, status) -> all, recent.
+                cutoff, queues = bindings
+                grouped: dict[tuple[str, str], list[int]] = {}
+                for row in self.jobs:
+                    queue = row["queue"] or "default"
+                    if queue not in queues:
+                        continue
+                    cell = grouped.setdefault((queue, row["status"]), [0, 0])
+                    cell[0] += 1
+                    cell[1] += int(row["created_at"] >= cutoff)
+                return [
+                    {"queue": queue, "status": status, "total": total, "recent": recent}
+                    for (queue, status), (total, recent) in grouped.items()
+                ]
             if "SELECT DISTINCT" in query:
                 rows = [row for row in self.jobs if row["created_at"] >= bindings[0]]
                 return [{"queue": row["queue"] or "default"} for row in rows]
@@ -115,7 +130,11 @@ class _FakeDB:
             if "AND queue = %s" in query:
                 rows = [row for row in rows if row["queue"] == bindings[index]]
                 index += 1
-            if "AND status = %s" in query:
+            if "AND status IN (%s, %s)" in query:
+                family = {bindings[index], bindings[index + 1]}
+                rows = [row for row in rows if row["status"] in family]
+                index += 2
+            elif "AND status = %s" in query:
                 rows = [row for row in rows if row["status"] == bindings[index]]
                 index += 1
             if "AND created_at >= %s" in query:
@@ -231,6 +250,42 @@ def test_monitor_counts_every_status_and_degrades_without_a_broker(
     assert store.count_jobs(queue="alpha", status="retrying") == 1
     # No application -> the probe raises -> swallowed, never failing the command.
     assert command._broker_dead_letter_depth() is None
+
+
+def test_monitor_completed_counts_what_worker_settlement_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker settlement writes ``completed``; an inline run's hook writes
+    ``success``. The monitor counted ``success`` alone, so a queue whose jobs
+    all ran on workers showed "Completed: 0" and a 100% failure rate."""
+    now = pendulum.now("UTC")
+    jobs = [
+        _job(1, queue="alpha", status="completed", created_at=now),
+        _job(2, queue="alpha", status="completed", created_at=now),
+        _job(3, queue="alpha", status="success", created_at=now),
+        _job(4, queue="alpha", status="failed", created_at=now, error="ValueError: x"),
+        _job(5, queue="beta", status="completed", created_at=now),
+        _job(6, queue="alpha", status="completed", created_at=now.subtract(days=2)),
+    ]
+    store, _db = _store(monkeypatch, jobs=jobs)
+    command = QueueMonitorCommand(application=None)
+    lines: list[str] = []
+    monkeypatch.setattr(command, "line", lambda text="", *_a, **_k: lines.append(text))
+
+    assert command.handle(queue="alpha", limit=20, store=store) == 0
+
+    printed = "\n".join(lines)
+    assert "Completed:     3" in printed, printed
+    assert "(1/4)" in printed, printed
+    # Either word asks for the one outcome; the other statuses stay exact.
+    assert store.count_jobs(queue="alpha", status=store.TRACKER_STATUS_SUCCESS) == 4
+    assert store.count_jobs(queue="alpha", status="completed") == 4
+    assert store.count_jobs(queue="alpha", status="failed") == 1
+    assert store.count_jobs(status="completed", created_at_gte=now) == 4
+    # Binding order is queue, the success family, then the cutoff.
+    _kind, query, bindings = _db.calls[-1]
+    assert "status IN (%s, %s)" in query
+    assert bindings == ["completed", "success", now]
 
 
 def test_monitor_dead_letter_figure_comes_from_the_ledger_not_failed_tracker_rows(

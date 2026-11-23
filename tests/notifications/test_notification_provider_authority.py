@@ -21,8 +21,14 @@ class _Application:
         if name == self.fail:
             raise RuntimeError(f"{name} unavailable")
         if name == "DB":
-            query = SimpleNamespace(table=lambda _name: object())
-            return SimpleNamespace(query=lambda: query)
+            # Shaped like ``DatabaseManager``: ``query()`` hands out ONE
+            # builder object here so a provider that captured it at boot is
+            # caught, while ``table()`` builds a fresh one per call.
+            self.shared_builder = SimpleNamespace(table=lambda _name: "shared")
+            return SimpleNamespace(
+                query=lambda: self.shared_builder,
+                table=lambda _name: object(),
+            )
         if name == "mail":
             return SimpleNamespace(to=lambda _recipient: object())
         raise KeyError(name)
@@ -44,6 +50,27 @@ def test_provider_registers_every_required_channel(monkeypatch) -> None:
     name, manager = application.bound
     assert name == "notification"
     assert set(manager._channels) == {"database", "log", "mail"}
+
+
+def test_database_channel_gets_a_fresh_builder_per_operation(monkeypatch) -> None:
+    """One process-wide QueryBuilder bled predicates between notifiables.
+
+    ``make("DB").query()`` is a single builder whose ``table()``/``where()``
+    mutate and return it: a call that raised left its ``notifiable_id``
+    filter for the next user, and concurrent sends lost rows. The channel
+    must hold the manager, whose ``table()`` builds a new builder each time.
+    """
+    monkeypatch.setattr(provider_module, "config", _config)
+    application = _Application()
+
+    NotificationProvider(application).register()
+
+    _, manager = application.bound
+    database = manager._channels["database"].database_manager
+    assert database is not application.shared_builder
+    first, second = database.table("notifications"), database.table("notifications")
+    assert first is not second
+    assert "shared" not in (first, second)
 
 
 def test_provider_treats_blank_optional_link_settings_as_unconfigured(

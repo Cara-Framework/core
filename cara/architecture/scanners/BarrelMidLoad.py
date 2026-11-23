@@ -36,7 +36,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import (
+    IMPORT_NODE_TYPES,
+    nodes_of,
+    parse,
+    python_files,
+    relpath,
+)
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -100,6 +106,20 @@ def _pinned_first_reexports(package: Path, dotted: str) -> set[str]:
     return pinned
 
 
+def _is_test_file(path: Path, root: Path, rel: str) -> bool:
+    """Whether ``path`` sits under a ``tests`` directory OF THE PRODUCT.
+
+    This used to ask ``"tests" in path.parts`` — every component of the
+    ABSOLUTE path, the ones above the deployable included. A checkout that
+    happened to live under any directory called ``tests`` (a CI workspace, a
+    fixtures tree, a sandbox) therefore skipped every file and reported a
+    clean pass over code the scanner never read: the vacuously green guard §9
+    forbids. Only the part of the path the product owns is judged — below the
+    declared scan root, and along the deployable-relative path.
+    """
+    return "tests" in path.relative_to(root).parts or "tests" in Path(rel).parts
+
+
 def _absolute_module(node: ast.ImportFrom, own_package: str) -> str | None:
     """The dotted absolute module an ``ImportFrom`` targets."""
     if node.level == 0:
@@ -139,14 +159,16 @@ class BarrelMidLoad:
         findings: list[Finding] = []
         for root in manifest.roots.scan_dirs("barrel_mid_load"):
             for path in python_files(root):
-                if path.name == "__init__.py" or "tests" in path.parts:
+                if path.name == "__init__.py":
                     continue
                 rel = relpath(path, deployable)
+                if _is_test_file(path, root, rel):
+                    continue
                 tree = parse(path)
                 if tree is None:
                     continue
                 own_package = ".".join(Path(rel).with_suffix("").parts[:-1])
-                for node in ast.walk(tree):
+                for node in nodes_of(tree, IMPORT_NODE_TYPES):
                     if not isinstance(node, ast.ImportFrom):
                         continue
                     module = _absolute_module(node, own_package)

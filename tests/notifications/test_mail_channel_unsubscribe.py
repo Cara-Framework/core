@@ -198,3 +198,30 @@ def test_one_click_is_dropped_when_the_notification_supplies_its_own_link() -> N
     assert view_data["unsubscribe_url"] == "https://app.example/custom?u=1"
     assert "unsubscribe_one_click_url" not in view_data
     assert "List-Unsubscribe" not in manager.message.headers_value
+
+
+def test_a_padded_secret_signs_links_the_verifier_accepts() -> None:
+    """The secret was stripped before signing but not before verifying, so
+    with surrounding whitespace every link this channel sent failed."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from cara.notifications.UnsubscribeToken import matches
+
+    padded = f"{SECRET}\n"
+    manager = _MailManager()
+    notifiable = SimpleNamespace(
+        id=41, public_id=USER_PUBLIC_ID, email="user@example.com"
+    )
+    channel = MailChannel(
+        manager,
+        link_settings={
+            "app.unsubscribe_url": "https://app.example/api/unsubscribe",
+            "app.unsubscribe_secret": padded,
+        },
+    )
+    assert channel.send(notifiable, _Notification()) is True
+
+    query = parse_qs(urlsplit(manager.message.view_data["unsubscribe_url"]).query)
+    token = query["token"][0]
+    # A product verifier passes the raw configured value, padding included.
+    assert matches(token, USER_PUBLIC_ID, "user@example.com", padded)

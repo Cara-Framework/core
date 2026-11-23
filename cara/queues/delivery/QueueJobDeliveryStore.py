@@ -486,22 +486,29 @@ class QueueJobDeliveryStore:
             ),
         }
 
-    def abandon_execution(self, job_id: str, lease_token: str) -> None:
+    def abandon_execution(
+        self, job_id: str, lease_token: str, *, refund_attempt: bool = True
+    ) -> None:
         """Release an interrupted lease and hand its claim back.
 
         Graceful release is not a crash, so it must not spend the row's
-        :attr:`CRASH_RECLAIM_CEILING`.
+        :attr:`CRASH_RECLAIM_CEILING`. ``refund_attempt=False`` is the forced
+        exit of a run already past its own timeout: the timeout could not
+        stop it, so it is a hang, and refunding it let a job that hangs
+        deterministically dodge the ceiling whenever its hang met a worker
+        stop. Everything else about the release is the same.
         """
         database = self._db()
         with database.transaction():
             # Before the release and on the lease itself: the release also
             # answers a row already released, which has nothing to hand back.
-            database.statement(
-                f"UPDATE {self.table} SET attempts = attempts - 1 "
-                "WHERE job_id = %s AND status = %s AND lease_token = %s "
-                "AND attempts > 0",
-                [job_id, self.STATUS_PROCESSING, lease_token],
-            )
+            if refund_attempt:
+                database.statement(
+                    f"UPDATE {self.table} SET attempts = attempts - 1 "
+                    "WHERE job_id = %s AND status = %s AND lease_token = %s "
+                    "AND attempts > 0",
+                    [job_id, self.STATUS_PROCESSING, lease_token],
+                )
             _DeliverySettlement._delivery_abandon_execution(self, job_id, lease_token)
 
     @staticmethod

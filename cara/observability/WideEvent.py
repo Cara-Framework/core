@@ -103,17 +103,37 @@ def _run() -> None:
         if buf and due:
             batch, buf = buf, []
             last = time.monotonic()
-            try:
-                body = "\n".join(json.dumps(r, default=str) for r in batch)
+            body = _encode_rows(batch)
+            if not body:
+                continue
+            # ClickHouse down / transient → drop the batch. Broad on purpose:
+            # this is the writer thread's own loop, and anything that escapes
+            # it ends the thread for the life of the process while ``emit``
+            # keeps filling a queue nobody drains.
+            with contextlib.suppress(Exception):
                 requests.post(
                     url,
                     params={"query": insert_sql},
-                    data=body.encode("utf-8"),
+                    data=body,
                     auth=(user, password),
                     timeout=5,
                 )
-            except OSError, RuntimeError, AttributeError, ConnectionError:
-                pass  # ClickHouse down / transient → drop the batch
+
+
+def _encode_rows(batch: list[dict]) -> bytes:
+    """``batch`` as JSONEachRow, leaving out any row that cannot be encoded.
+
+    ``default=str`` covers unknown VALUES, not a non-string key or a circular
+    reference: one such event raised out of the writer loop, killed the
+    thread, and every later event of the process was dropped.
+    """
+    rows: list[str] = []
+    for row in batch:
+        try:
+            rows.append(json.dumps(row, default=str))
+        except TypeError, ValueError, RecursionError:
+            continue
+    return "\n".join(rows).encode("utf-8")
 
 
 __all__ = ["emit", "enabled"]

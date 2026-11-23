@@ -79,7 +79,10 @@ def test_a_lease_that_is_no_longer_ours_stops_the_heartbeat_for_good():
     assert heartbeat not in LeaseHeartbeat.live()
 
 
-def test_a_transient_renewal_fault_keeps_the_cadence():
+def test_a_transient_renewal_fault_keeps_the_cadence(monkeypatch):
+    # A 30 ms lease is shorter than a scheduler hiccup; the lapse check reads
+    # this clock, so the blip stays "well inside the lease" whatever the load.
+    monkeypatch.setattr(LeaseHeartbeat, "_clock", staticmethod(lambda: 0.0))
     outcomes = iter([ConnectionError("redis blip"), True, True])
     renewed = threading.Event()
 
@@ -93,6 +96,54 @@ def test_a_transient_renewal_fault_keeps_the_cadence():
     heartbeat = LeaseHeartbeat("lease:c", lease_seconds=0.03, renew=_renew).start()
 
     assert renewed.wait(2.0)
+    assert heartbeat.lost is False
+    heartbeat.stop()
+
+
+def test_a_lease_that_cannot_be_renewed_for_its_whole_length_is_lost(monkeypatch):
+    """Live risk, 2026-11-23: with the database unreachable the heartbeat
+    retried for ever and never fenced, so the cut-off worker kept writing to
+    the marketplace while the relay handed its delivery row to another."""
+    now = [100.0]
+    monkeypatch.setattr(LeaseHeartbeat, "_clock", staticmethod(lambda: now[0]))
+    attempts: list[float] = []
+
+    def _renew() -> bool:
+        attempts.append(now[0])
+        # Each failed renewal finds the clock a third of a lease further on.
+        now[0] += 0.01
+        raise ConnectionError("database unreachable")
+
+    heartbeat = LeaseHeartbeat("lease:lapsed", lease_seconds=0.03, renew=_renew).start()
+
+    assert _wait_until(lambda: heartbeat.lost)
+    assert heartbeat.stopped
+    assert heartbeat not in LeaseHeartbeat.live()
+    # Two misses are headroom; the third finds a whole lease gone.
+    assert len(attempts) == 3
+    time.sleep(0.05)
+    assert len(attempts) == 3, "a lapsed lease must never be renewed again"
+
+
+def test_a_renewal_that_lands_restarts_the_lapse_clock(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(LeaseHeartbeat, "_clock", staticmethod(lambda: now[0]))
+    outcomes = iter(["fail", "fail", "ok", "fail", "fail", "ok"])
+    done = threading.Event()
+
+    def _renew() -> bool:
+        now[0] += 0.009
+        outcome = next(outcomes, None)
+        if outcome is None:
+            done.set()
+            return True
+        if outcome == "fail":
+            raise ConnectionError("redis blip")
+        return True
+
+    heartbeat = LeaseHeartbeat("lease:rides", lease_seconds=0.03, renew=_renew).start()
+
+    assert done.wait(2.0)
     assert heartbeat.lost is False
     heartbeat.stop()
 

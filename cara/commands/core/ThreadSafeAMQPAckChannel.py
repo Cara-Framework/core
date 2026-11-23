@@ -46,12 +46,23 @@ class ThreadSafeAMQPAckChannel:
 
         def _run() -> None:
             try:
-                callback()
+                # Refused BEFORE the frame goes out. The check used to follow
+                # ``callback()``, so the second ACK/NACK of one delivery tag
+                # was already on the wire when this raised: RabbitMQ answers
+                # an unknown tag with a channel-level PRECONDITION_FAILED,
+                # which closes the consumer's channel and returns every
+                # delivery it still holds as a failed delivery, spending the
+                # quorum queue's delivery limit. Every ``_run`` executes on
+                # the connection's own I/O thread, one after another, so the
+                # check and the frame cannot interleave with another settle;
+                # a frame that fails leaves the delivery unsettled.
                 with self._settled_lock:
                     if self._settled:
                         raise RuntimeError(
                             "RabbitMQ delivery was settled more than once."
                         )
+                callback()
+                with self._settled_lock:
                     self._settled = True
                 if self._on_settled is not None:
                     self._on_settled()

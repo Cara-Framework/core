@@ -23,9 +23,10 @@ The implementation mirrors ``ThrottleRequests`` for parity:
     (``_is_trusted_proxy`` from ``cara.http.request.Request``) — an
     attacker who can set ``X-Forwarded-For`` but isn't behind a
     trusted proxy is still bucketed under their real peer IP.
-  * The bucket key includes the resolved route path so different
+  * The bucket key includes the matched route's PATTERN so different
     public channels (``/ws/deals`` vs ``/ws/live/products``) don't
-    starve each other.
+    starve each other, while every parameter value of one channel
+    (``/ws/products/@product_id``) spends the same bucket.
   * Per-bucket limits come from ``rate.<name>`` config keys
     (e.g. ``rate.ws_connect``) so ops can tune without a code change.
   * The handshake spends from the same GCRA authority HTTP does. A cache
@@ -48,6 +49,7 @@ from collections.abc import Callable
 from typing import Any
 
 from cara.configuration import config
+from cara.context import ExecutionContext
 from cara.exceptions import ServiceUnavailableException, WebSocketException
 from cara.facades import Log
 from cara.http.request.Request import _is_trusted_proxy
@@ -78,7 +80,9 @@ class Throttle(Middleware):
         limit = Limit(count, window).by(f"ws:{self.name}:{principal}:{path}")
 
         try:
-            decision = attempt_rate_limit(limit)
+            # A synchronous Redis EVAL: run off the event loop so a slow Redis
+            # stalls this handshake only, not the worker (see ThrottleRequests).
+            decision = await ExecutionContext.run_in_thread(attempt_rate_limit, limit)
         except ServiceUnavailableException as e:
             Log.warning(
                 "WebSocket throttle cache failure for key %s; failing closed. %s",
@@ -171,11 +175,16 @@ class Throttle(Middleware):
         peer_ip = client[0] if client and client[0] else ""
 
         if peer_ip and _is_trusted_proxy(peer_ip):
-            fwd_header = ""
-            for k, v in scope.get("headers", []):
-                if k == b"x-forwarded-for":
-                    fwd_header = v.decode("latin-1", errors="replace")
-                    break
+            # EVERY ``X-Forwarded-For`` line, in order, as the one list RFC 9110
+            # §5.3 says repeated lines are. A proxy that adds its own line
+            # (HAProxy ``option forwardfor``) leaves the client's line FIRST;
+            # reading only that one let the client name its own bucket and
+            # never run out of handshakes.
+            fwd_header = ",".join(
+                v.decode("latin-1", errors="replace")
+                for k, v in scope.get("headers", [])
+                if k == b"x-forwarded-for"
+            )
             if fwd_header:
                 # Right-to-left walk picks the closest non-trusted hop.
                 for candidate in (h.strip() for h in reversed(fwd_header.split(","))):
@@ -187,8 +196,19 @@ class Throttle(Middleware):
 
     @staticmethod
     def _path(scope_or_socket: Socket) -> str:
-        """ASGI scope path — included in the bucket key so a single
-        public channel can't drain another channel's quota."""
+        """The channel a handshake spends from — its ROUTE PATTERN.
+
+        Included in the bucket key so a single public channel can't drain
+        another channel's quota. It used to be the raw request path, which
+        made every value of a route parameter a bucket of its own: on
+        ``/ws/products/@product_id`` one address opened unlimited handshakes
+        by counting the id upward. The pattern of the route the conductor
+        matched (``socket.route.url``) is one bucket per channel; the raw
+        path is the key only for a socket no route was attached to.
+        """
+        pattern = getattr(getattr(scope_or_socket, "route", None), "url", None)
+        if isinstance(pattern, str) and pattern:
+            return pattern
         try:
             return str(scope_or_socket.scope.get("path") or "/")
         except Exception:

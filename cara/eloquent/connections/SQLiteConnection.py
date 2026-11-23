@@ -89,6 +89,19 @@ class SQLiteConnection(BaseConnection):
     def reconnect(self):
         """No-op — SQLite connections are file-backed and always available."""
 
+    def close_connection(self) -> None:
+        """Close the handle; the next statement opens a new one.
+
+        The resolver hands every finished transaction's wrapper to
+        ``close_connection()`` (``ConnectionResolver._safe_close``). SQLite
+        had none, so each transaction ended in a swallowed ``AttributeError``
+        logged as "Connection close failed (potential pool leak)".
+        """
+        if self._connection is not None:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
+                self._connection.close()
+        self.open = 0
+
     def commit(self) -> Self:
         """Commit the current transaction level or release its savepoint."""
         if self.transaction_level <= 0:

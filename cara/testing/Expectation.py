@@ -76,11 +76,16 @@ class Expectation:
 
     def _fail(self, condition: bool, message: str) -> Expectation:
         """Apply negation and raise on failure."""
-        passed = condition if not self._negated else not condition
+        # ``not_`` negates the NEXT assertion only, so it is spent here. Left
+        # set, it inverted every later link of the chain too:
+        # ``expect(5).not_.to_be_none().to_equal(6)`` passed, and the correct
+        # ``.to_equal(5)`` failed with "Expected NOT value to equal 5".
+        negated, self._negated = self._negated, False
+        passed = condition if not negated else not condition
         if passed:
             return self
         prefix = f"[{self._label}] " if self._label else ""
-        negation = "NOT " if self._negated else ""
+        negation = "NOT " if negated else ""
         raise ExpectationFailed(f"{prefix}Expected {negation}{message}")
 
     # ── Identity / equality ──────────────────────────────────────────
@@ -155,9 +160,24 @@ class Expectation:
             f"value in [{_format(low)}, {_format(high)}], got {_format(self._subject)}",
         )
 
-    def to_be_close_to(self, target: float, tolerance: float = 1e-9) -> Expectation:
-        """Float-friendly equality (uses ``math.isclose``)."""
-        ok = math.isclose(self._subject, target, abs_tol=tolerance)
+    def to_be_close_to(
+        self, target: float, tolerance: float | None = None
+    ) -> Expectation:
+        """Float-friendly equality (uses ``math.isclose``).
+
+        A ``tolerance`` the caller states is an ABSOLUTE bound and the only
+        one. ``math.isclose`` also carries a relative tolerance of ``1e-9``
+        by default, which silently widened the stated bound for large
+        subjects: two epoch-millisecond stamps 1.5 s apart were "within 1",
+        and ``1_000_000_000.4`` was "within 0.01" of ``1_000_000_000.0``.
+        Without a ``tolerance`` the comparison stays float-noise equality
+        (``1e-9``, relative or absolute).
+        """
+        if tolerance is None:
+            tolerance = 1e-9
+            ok = math.isclose(self._subject, target, abs_tol=tolerance)
+        else:
+            ok = math.isclose(self._subject, target, rel_tol=0.0, abs_tol=tolerance)
         return self._fail(
             ok,
             f"value within {tolerance} of {_format(target)}, "
@@ -263,7 +283,10 @@ class Expectation:
                         f"raised {exc_type.__name__} matching /{compiled.pattern}/, "
                         f"got message {_format(str(e))}",
                     )
-            return self._fail(True, "")
+            # The message is read only under ``not_`` (the call DID raise).
+            return self._fail(
+                True, f"to raise {exc_type.__name__}, got {_format(str(e))}"
+            )
         except BaseException as e:
             return self._fail(
                 False,
@@ -283,7 +306,7 @@ class Expectation:
                 False,
                 f"no exception, got {type(e).__name__}: {_format(str(e))}",
             )
-        return self._fail(True, "")
+        return self._fail(True, "no exception, and none was raised")
 
     # ── Tuple convenience (services often return ``(ok, reason)``) ──
 

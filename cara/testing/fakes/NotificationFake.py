@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 from .SentNotification import SentNotification
@@ -17,23 +17,22 @@ class NotificationFake:
     # MUST exist here too, otherwise production code that calls the
     # missing method gets ``AttributeError`` only in tests. Real
     # methods all return ``bool`` — the fake mirrors that.
-    def send(
-        self,
-        notifiable: Any | Iterable[Any],
-        notification: Any,
-        channels: list[str] | None = None,
-    ) -> bool:
-        targets = (
-            list(notifiable)
-            if isinstance(notifiable, (list, tuple, set))
-            else [notifiable]
+    #
+    # The reverse holds too: the fake answers NOTHING the real facade does
+    # not. It used to take ``send(..., channels=[...])`` and expose
+    # ``route(...)`` / ``notify(...)``, none of which ``Notification`` has
+    # (channels come from the notification's own ``via()``), so a call spelled
+    # that way passed its test and raised on the first real send — the
+    # ``Mail.raw`` outage in another facade (see ``MailFake``).
+    def send(self, notifiable: Any, notification: Any) -> bool:
+        # ONE notifiable, recorded as given. ``Notification.send`` does not fan
+        # a list out (it hands the list to ``via()`` and the channels as one
+        # notifiable), so the fake no longer does either: a test that passed a
+        # list used to see one send per element and pass, while production
+        # delivered to none of them.
+        self.sent.append(
+            SentNotification(notifiable=notifiable, notification=notification)
         )
-        for target in targets:
-            self.sent.append(
-                SentNotification(
-                    notifiable=target, notification=notification, channels=channels
-                )
-            )
         return True
 
     def send_now(self, notifiable: Any, notification: Any) -> bool:
@@ -66,15 +65,6 @@ class NotificationFake:
         round-trips through the same recorder.
         """
         return self
-
-    def route(self, *args: Any, **kwargs: Any) -> NotificationFake:
-        # ``Notification.route('mail', 'foo@x').notify(...)`` — return self
-        # so chained ``.notify`` lands here.
-        return self
-
-    def notify(self, notification: Any) -> bool:
-        self.sent.append(SentNotification(notifiable=None, notification=notification))
-        return True
 
     # ── Assertions ───────────────────────────────────────────────────
 

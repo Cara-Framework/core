@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from ...schema import Schema
 from ..HashPartitioning import PartitionDeclarationError
-from ..Table import Table
+from . import _PostgresPlatformCatalog
 from .Platform import Platform
 
 
@@ -612,11 +611,6 @@ class PostgresPlatform(Platform):
     def table_information_string(self):
         return "SELECT * FROM information_schema.columns WHERE table_schema = '{schema}' AND table_name = '{table}'"
 
-    def compile_table_exists(self, table, database=None, schema=None):
-        table = self._validate_identifier(table, "table name")
-        schema = self._validate_identifier(schema or "public", "schema name")
-        return f"SELECT * from information_schema.tables where table_name='{table}' AND table_schema = '{schema}'"
-
     def compile_truncate(self, table, foreign_keys=False):
         if not foreign_keys:
             return f"TRUNCATE {self.wrap_table(table)}"
@@ -636,60 +630,6 @@ class PostgresPlatform(Platform):
     def compile_drop_table(self, table):
         return f"DROP TABLE {self.wrap_table(table)}"
 
-    def compile_column_exists(self, table, column):
-        table = self._validate_identifier(table, "table name")
-        column = self._validate_identifier(column, "column name")
-        return f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' and column_name='{column}'"
-
-    def compile_get_all_tables(self, database=None, schema=None):
-        database = (
-            self._validate_identifier(database, "database name")
-            if database
-            else "postgres"
-        )
-        return f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_catalog = '{database}'"
-
-    def get_current_schema(self, connection, table_name, schema=None):
-        self._validate_identifier(table_name, "table name")
-        self._validate_identifier(schema or "public", "schema name")
-        sql = self.table_information_string().format(
-            table=table_name, schema=schema or "public"
-        )
-
-        reversed_type_map = {v: k for k, v in self.type_map.items()}
-        reversed_type_map.update(self.table_info_map)
-        table = Table(table_name)
-
-        result = connection.query(sql, ())
-        for column in result:
-            column_type = reversed_type_map.get(column["data_type"].upper())
-
-            # find length
-            if column.get("character_maximum_length", None):
-                length = column.get("character_maximum_length")
-            elif column.get("numeric_precision", None):
-                length = column.get("numeric_precision")
-            elif column.get("datetime_precision", None):
-                length = column.get("datetime_precision")
-            else:
-                length = None
-
-            # find default
-            default_val = column.get("dflt_value", "") or column.get("column_default", "")
-            if default_val and default_val.startswith("nextval"):
-                table.set_primary_key(column["column_name"])
-                default_val = None
-
-            table.add_column(
-                column["column_name"],
-                column_type,
-                default=default_val,
-                column_python_type=Schema._type_hints_map.get(column_type, str),
-                length=length,
-            )
-
-        return table
-
     def enable_foreign_key_constraints(self):
         """Postgres does not allow a global way to enable foreign key constraints."""
         return ""
@@ -697,3 +637,9 @@ class PostgresPlatform(Platform):
     def disable_foreign_key_constraints(self):
         """Postgres does not allow a global way to disable foreign key constraints."""
         return ""
+
+    # Catalogue reads live in ``_PostgresPlatformCatalog`` (file budget).
+    compile_table_exists = _PostgresPlatformCatalog._compile_table_exists
+    compile_column_exists = _PostgresPlatformCatalog._compile_column_exists
+    compile_get_all_tables = _PostgresPlatformCatalog._compile_get_all_tables
+    get_current_schema = _PostgresPlatformCatalog._get_current_schema

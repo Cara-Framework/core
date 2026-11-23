@@ -19,13 +19,29 @@ class Scheduling:
     def __init__(self, application: Any, default_driver: str):
         self.application = application
         self._default_driver = default_driver
+        # The driver this process runs (``schedule:work --driver X``); None
+        # means the configured default.
+        self._active_driver: str | None = None
         self._drivers: dict[str, Scheduling] = {}
 
     def add_driver(self, name: str, driver: Scheduling) -> None:
         self._drivers[name] = driver
 
+    def use(self, name: str | None) -> Scheduling:
+        """Make ``name`` the driver this process registers on and runs.
+
+        ``schedule:work --driver X`` runs X, but every ``call()`` registered
+        on the DEFAULT driver, so X started with nothing on it. Selecting X
+        here first sends every later registration to X. ``None`` returns to
+        the configured default.
+        """
+        if name is not None:
+            self.driver(name)  # refuse an unregistered name now, not at start
+        self._active_driver = name
+        return self
+
     def driver(self, name: str | None = None) -> Scheduling:
-        chosen = name or self._default_driver
+        chosen = name or self._active_driver or self._default_driver
         inst = self._drivers.get(chosen)
         if not inst:
             raise DriverNotRegisteredException(
@@ -33,13 +49,16 @@ class Scheduling:
             )
         return inst
 
-    def call(self, callback: Any) -> ScheduleBuilder:
+    def call(self, callback: Any, *, driver: str | None = None) -> ScheduleBuilder:
+        """Schedule ``callback`` on ``driver``, else on the driver in use."""
         if not callable(callback):
             raise InvalidArgumentException("call requires a callable.")
         unique_id = f"call_{uuid.uuid4().hex}"
 
+        # The result is handed on: a coroutine dropped here never ran, while
+        # the driver (which runs an awaitable result) counted a success.
         def job_callback():
-            callback()
+            return callback()
 
-        drv = self.driver()
+        drv = self.driver(driver)
         return ScheduleBuilder(drv, unique_id, job_callback, options={})

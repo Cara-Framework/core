@@ -74,21 +74,34 @@ def _queue_work_run_worker(self, config: dict[str, Any]) -> None:
         )
     threads: list[threading.Thread] = []
     self._consumer_threads = threads
+    # Read on the main thread, before any slot starts: a ``poll`` config that
+    # is not a number raised inside every slot thread instead, which ended
+    # them all and left a live worker that consumed nothing.
+    reconnect_delay = min(max(int(config.get("timeout", 5)), 1), 10)
 
     def _consumer_loop(slot_idx: int) -> None:
-        """One durable consumer slot with bounded reconnect backoff."""
-        reconnect_delay = min(max(int(config.get("timeout", 5)), 1), 10)
+        """One durable consumer slot with bounded reconnect backoff.
+
+        Nothing one cycle raises may end this thread: nothing respawns a
+        slot, so a dead one leaves the worker alive, not ready and deaf.
+        """
         assigned_queue = queue_names[(slot_idx - 1) % len(queue_names)]
         while not self.shutdown_requested:
-            mgr = AMQPConnectionManager(global_config, queue_driver)
+            mgr: AMQPConnectionManager | None = None
             try:
+                mgr = AMQPConnectionManager(global_config, queue_driver)
                 self._consume_queue_stream(
                     queue_names=[assigned_queue],
                     connection_manager=mgr,
                     job_processor=job_processor,
                     config=config,
                 )
-            except Exception as exc:
+            # BaseException, not Exception: a job thread's re-raised
+            # CancelledError comes back through ``future.result()``, and so
+            # does anything else a job lets escape (``SystemExit``). Caught
+            # as ``Exception`` alone it ended this thread for good — the slot
+            # was gone and nothing respawned it.
+            except BaseException as exc:
                 if not self.shutdown_requested:
                     Log.warning(
                         "[worker-%s] AMQP consumer disconnected: %s",
@@ -96,7 +109,20 @@ def _queue_work_run_worker(self, config: dict[str, Any]) -> None:
                         exc,
                     )
             finally:
-                mgr.close()
+                # pika's own errors (``StreamLostError``, ``ConnectionWrong
+                # StateError``) are neither OSError nor RuntimeError, so the
+                # manager's close does not absorb them: closing a half-dead
+                # connection raised out of this ``finally`` and ended the
+                # slot during exactly the outage it should ride out.
+                if mgr is not None:
+                    try:
+                        mgr.close()
+                    except Exception as close_error:
+                        Log.warning(
+                            "[worker-%s] AMQP connection close failed: %s",
+                            slot_idx,
+                            close_error,
+                        )
             if not self.shutdown_requested:
                 time.sleep(reconnect_delay)
 
@@ -299,6 +325,14 @@ def _queue_work_consume_queue_stream(
     settled_futures: deque[concurrent.futures.Future] = deque()
     subscribed = False
     consumers_cancelled = False
+    # Set when the BROKER cancels the subscription (Basic.Cancel: the queue
+    # was deleted, its leader failed over). pika only drops the consumer, so
+    # the loop below kept servicing a channel nothing would ever deliver on
+    # — a slot still counted as ready. The flag makes it resubscribe.
+    broker_cancelled = threading.Event()
+    register_cancel_callback = getattr(channel, "add_on_cancel_callback", None)
+    if callable(register_cancel_callback):
+        register_cancel_callback(lambda _frame: broker_cancelled.set())
     try:
         for queue_name in queue_names:
 
@@ -392,10 +426,34 @@ def _queue_work_consume_queue_stream(
                     for future in (in_flight, *settled_futures)
                     if future is not None and not future.done()
                 ]
-                if pending:
+                # Only a lost CONNECTION ends the worker. pika >= 1.5 also
+                # raises here when the broker closes just the CHANNEL — its
+                # delivery-ack timeout, under a job that outlives it — and
+                # setting the process-wide flag for that started the drain
+                # budget on a healthy job: cancelled, handed back, started
+                # over, cancelled again at the same minute. The job runs to
+                # its end on the live connection (kept serviced, so its
+                # heartbeats and the job's settlement callback still run);
+                # the raise below then has the slot reopen its channel.
+                serviced = not connection.is_closed
+                if pending and not serviced:
                     self.shutdown_requested = True
-                    while any(not future.done() for future in pending):
+                while any(not future.done() for future in pending):
+                    if not serviced:
                         time.sleep(0.1)
+                        continue
+                    try:
+                        connection.process_data_events(time_limit=0.25)
+                    except Exception:
+                        serviced = False
+                        if connection.is_closed:
+                            self.shutdown_requested = True
+                        continue
+                    concurrent.futures.wait(
+                        pending,
+                        timeout=0.01,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
                 raise
             pending_settlements = [
                 future
@@ -424,6 +482,14 @@ def _queue_work_consume_queue_stream(
                 self._record_worker_outcome(outcome, config)
             if not self.shutdown_requested and self._should_stop(config):
                 self.shutdown_requested = True
+            if (
+                broker_cancelled.is_set()
+                and in_flight is None
+                and not settled_futures
+                and not self.shutdown_requested
+            ):
+                # Nothing in flight: leave, so the slot loop resubscribes.
+                raise ConnectionError("RabbitMQ cancelled the consumer subscription")
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
         if subscribed:

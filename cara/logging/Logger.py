@@ -297,11 +297,6 @@ class Logger(LoggerContract):
                 ``Log.x("...%s...", val)`` call across the codebase logged the
                 literal template and lost ``val``.
         """
-        # Interpolate printf-style args first so every downstream step
-        # (HTTP colorizer, context suffix, exception append) operates on
-        # the final user-facing text.
-        message = self._interpolate(message, message_args)
-
         # Check if we should log this based on category filters
         if category and not CategoryFilter.should_log(level, category):
             return
@@ -309,6 +304,13 @@ class Logger(LoggerContract):
         # For non-categorized logs, check against console log level
         if not category and not self._should_log_level(level):
             return
+
+        # Interpolate printf-style args before every downstream step (HTTP
+        # colorizer, context suffix, exception append) so they operate on the
+        # final user-facing text — but AFTER the filters above: formatting
+        # first rendered every argument of every ``Log.debug("…%s", payload)``
+        # that the level then discarded, on each request in production.
+        message = self._interpolate(message, message_args)
 
         # Get caller info
         if _module_override:

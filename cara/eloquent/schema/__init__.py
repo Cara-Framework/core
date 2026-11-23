@@ -31,7 +31,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "Table": (".Table", "Table"),
     "TableDiff": (".TableDiff", "TableDiff"),
     "migration_partition_drift": (".HashPartitioning", "migration_partition_drift"),
-    "partitioning_from_declaration": (".HashPartitioning", "partitioning_from_declaration"),
+    "partitioning_from_declaration": (
+        ".HashPartitioning",
+        "partitioning_from_declaration",
+    ),
     "validate_model_partitioning": (".HashPartitioning", "validate_model_partitioning"),
 }
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 from typing import Any
 
 from cara.configuration import config
@@ -193,8 +194,15 @@ class BaseResponse:
                     }
                 )
                 self._sent = True
-            except Exception:  # the connection is already dead
-                pass
+            except Exception as exc:
+                # The last resort must not raise: the connection is already
+                # dead. It stays broad for that, but it is not silent — the
+                # line names why the client got no 500.
+                logging.getLogger("cara.http.response").warning(
+                    "Could not send the fallback 500 (%s: %s); connection lost",
+                    type(exc).__name__,
+                    exc,
+                )
 
     # =============================================================================
     # BASIC PROPERTIES AND METHODS

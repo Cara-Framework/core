@@ -61,6 +61,37 @@ class TestDiscardedDispatch:
         )
         assert len(findings) == 2
 
+    def test_a_dispatch_imported_under_another_name_is_the_same_call(self):
+        """``import ... as`` renames the receiver itself, so no suffix of the
+        written call matches a watched name; it slipped through whole."""
+        findings = _scan(
+            """
+            from cara.facades import Bus as Jobs, Event as Ev
+            from cara.support import safe_dispatch as fire_and_forget
+
+            async def handle(self):
+                Ev.fire(ProductSaved(1))
+                Jobs.dispatch(job)
+                fire_and_forget(job)
+                await Ev.fire(ProductSaved(2))
+            """
+        )
+        assert len(findings) == 3
+        assert "`Event.fire(...)`" in findings[0]
+        assert "`Bus.dispatch(...)`" in findings[1]
+        assert "`safe_dispatch(...)`" in findings[2]
+
+    def test_an_unrelated_import_alias_is_not_a_dispatch(self):
+        findings = _scan(
+            """
+            from app.support import Notifier as Event
+
+            async def handle(self):
+                Recorder.fire(thing)
+            """
+        )
+        assert findings == []
+
 
 class TestConsumersAreNotFindings:
     def test_await_is_a_consumer(self):

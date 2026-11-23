@@ -213,6 +213,12 @@ def slice_page_with_lookahead(
     pk_value = _extract_field(last, primary_key)
     if pk_value is None:
         raise ValueError("Cursor page row is missing its canonical id.")
+    # A NULL sort value has no keyset to seek past: ``col > NULL`` is never
+    # true, so on PostgreSQL the next page silently came back empty and the
+    # listing ended early. Refused exactly as the ORM's ``cursor_paginate``
+    # refuses it (``_QueryCursorPagination``): keyset only over NOT NULL.
+    if sort_value is None:
+        raise ValueError("cursor column must be NOT NULL")
     return (
         visible,
         encode_cursor(

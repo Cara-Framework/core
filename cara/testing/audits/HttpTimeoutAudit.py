@@ -9,10 +9,13 @@ libraries, not of a product, so it lives here; a product points it at its
 runtime roots.
 
 Recognised, alias-aware: ``requests.<verb>(...)`` and ``from requests import
-get``; a ``requests.Session()`` bound to a name and then called; ``httpx.Client``
-/ ``httpx.AsyncClient`` construction (the client's timeout covers its calls);
-``asyncio.to_thread(requests.<verb>, ...)``. A ``timeout=`` keyword anywhere on
-the call (or on ``to_thread`` itself, which forwards it) satisfies it.
+get``; a ``requests.Session()`` bound to a name and then called — by
+assignment (``s = ...``, ``self.session = ...``) or by ``with ... as s``;
+``httpx.Client`` / ``httpx.AsyncClient`` construction (the client's timeout
+covers its calls); ``asyncio.to_thread(requests.<verb>, ...)``. A ``timeout=``
+keyword anywhere on the call (or on ``to_thread`` itself, which forwards it)
+satisfies it — unless it is the literal ``None``, which is how both libraries
+spell "wait forever".
 """
 
 from __future__ import annotations
@@ -65,12 +68,36 @@ def _aliases(tree: ast.Module) -> _Aliases:
                 elif node.module == "requests" and alias.name == "Session":
                     found.session_classes.add(bound)
     for node in ast.walk(tree):
+        bound: list[ast.expr] = []
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and _is_session(
             node.value, found
         ):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            found.sessions.update(t.id for t in targets if isinstance(t, ast.Name))
+            bound = node.targets if isinstance(node, ast.Assign) else [node.target]
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            # ``with requests.Session() as s:`` binds a session too; read as
+            # an assignment only, the calls made on ``s`` were never checked.
+            bound = [
+                item.optional_vars
+                for item in node.items
+                if item.optional_vars is not None
+                and _is_session(item.context_expr, found)
+            ]
+        # Dotted, so a session kept on the instance (``self.session = ...``)
+        # is the same binding as a local one.
+        found.sessions.update(name for target in bound if (name := _dotted(target)))
     return found
+
+
+def _dotted(node: ast.expr) -> str | None:
+    """``s`` / ``self.session`` for a name or an attribute chain rooted in one."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
 
 
 def _is_session(value: ast.expr | None, aliases: _Aliases) -> bool:
@@ -86,7 +113,17 @@ def _is_session(value: ast.expr | None, aliases: _Aliases) -> bool:
 
 
 def _has_timeout(call: ast.Call) -> bool:
-    return any(keyword.arg == "timeout" for keyword in call.keywords)
+    """A ``timeout=`` keyword that can bound the wait.
+
+    The literal ``None`` cannot: ``requests`` and ``httpx`` both read it as
+    "no timeout", so ``timeout=None`` is the unbounded call spelled out — it
+    used to satisfy the audit because only the keyword's presence was read.
+    """
+    return any(
+        keyword.arg == "timeout"
+        and not (isinstance(keyword.value, ast.Constant) and keyword.value.value is None)
+        for keyword in call.keywords
+    )
 
 
 def call_kind(call: ast.Call, aliases: _Aliases) -> str | None:
@@ -98,9 +135,9 @@ def call_kind(call: ast.Call, aliases: _Aliases) -> str | None:
         if func.id in aliases.request_functions:
             return f"requests.{func.id}"
         return None
-    if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
+    owner = _dotted(func.value) if isinstance(func, ast.Attribute) else None
+    if owner is None:
         return None
-    owner = func.value.id
     if func.attr in HTTPX_CLIENTS and owner in aliases.httpx_modules:
         return f"httpx.{func.attr}"
     if func.attr == "to_thread" and owner in aliases.asyncio_modules and call.args:
@@ -142,8 +179,11 @@ class HttpTimeoutAudit:
                     continue
                 kind = call_kind(node, aliases)
                 if kind:
+                    # Reaching here WITH the keyword means it was ``None``.
+                    stated = any(keyword.arg == "timeout" for keyword in node.keywords)
+                    problem = "passes timeout=None" if stated else "lacks timeout="
                     findings.append(
-                        RuntimeSafetyFinding(path, node.lineno, f"{kind} lacks timeout=")
+                        RuntimeSafetyFinding(path, node.lineno, f"{kind} {problem}")
                     )
         return sorted(findings, key=lambda f: (f.path, f.line))
 

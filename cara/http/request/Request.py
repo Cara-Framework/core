@@ -13,7 +13,8 @@ from collections.abc import Iterator
 from typing import Any
 from urllib.parse import parse_qs
 
-from cara.exceptions import BadRequestException
+from cara.configuration import config
+from cara.exceptions import BadRequestException, InvalidConfigurationSetupException
 from cara.http.request.Context import current_request
 from cara.http.request.HeaderBag import HeaderBag
 from cara.http.request.InputBag import InputBag
@@ -23,7 +24,7 @@ from cara.http.request.mixins import (
     MakesValidationHelpers,
 )
 from cara.http.request.UploadedFile import UploadedFile
-from cara.security import is_trusted_proxy
+from cara.security import is_trusted_proxy, trusts_every_peer
 
 
 def _is_trusted_proxy(addr: str) -> bool:
@@ -43,6 +44,19 @@ def _is_trusted_proxy(addr: str) -> bool:
     """
 
     return is_trusted_proxy(addr)
+
+
+def _trusts_every_hop() -> bool:
+    """Whether ``app.trusted_proxies`` carries the ``"*"`` trust-all sentinel.
+
+    Read through the same key and sentinel parser as
+    :mod:`cara.security.TrustedProxies`; a configuration that cannot be read
+    yet trusts no one there, so it is not trust-all here either.
+    """
+    try:
+        return trusts_every_peer(config("app.trusted_proxies", "") or "")
+    except InvalidConfigurationSetupException:
+        return False
 
 
 #: Text no database or wire encoding can carry: a NUL (PostgreSQL text refuses
@@ -104,6 +118,9 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
         self._json_data: dict[str, Any] | None = None
         self._files: dict[str, UploadedFile] | None = None
         self._form_refused = False
+        # What a form body that could not be PARSED raised (too many files, a
+        # bad boundary, an oversized upload); every later read re-raises it.
+        self._multipart_failure: Exception | None = None
 
         self.validated: dict[str, Any] = {}
         self._request_id = str(uuid.uuid4())
@@ -195,7 +212,16 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
                     if not _is_trusted_proxy(candidate):
                         self._ip = candidate
                         return self._ip
-                # All hops trusted — first entry is as good as any.
+                if hops and _trusts_every_hop():
+                    # ``TRUSTED_PROXIES=*`` makes every hop "trusted", so the
+                    # walk above never stops and the leftmost entry — which
+                    # the CLIENT wrote — became the address every per-IP
+                    # limit and audit row keyed on. Under trust-all the only
+                    # entry not attacker-chosen is the one our peer appended.
+                    self._ip = hops[-1]
+                    return self._ip
+                # Every hop inside an explicit proxy list: the first entry is
+                # as good as any (unchanged).
                 if hops:
                     self._ip = hops[0]
                     return self._ip
@@ -275,12 +301,16 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
     async def _parse_multipart(self) -> None:
         """Parse a form body, refusing unstorable text in fields and filenames."""
         if self._files is not None:
+            self._raise_multipart_failure()
             return
         await super()._parse_multipart()
         filenames = [upload.filename for upload in self._files.values()]
         try:
             self._refuse_unstorable_text([self._form_params, filenames])
         except BadRequestException:
+            # Not recorded as a parse failure: a refused form reads as EMPTY
+            # afterwards (and ``all()`` keeps refusing it), which is the
+            # contract products pin for this refusal.
             self._files, self._form_params = {}, {}
             self._form_refused = True
             raise
@@ -288,9 +318,10 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
     async def all(self) -> dict[str, Any]:
         """Every input merged, with a form refused for unstorable text refused here too.
 
-        The base method forgives a form it can't parse and carries on with the
-        query. Forgiving this refusal would run the handler on what's left and
-        answer 200 for a save that dropped every field.
+        The first read raises from the parse itself. This refusal is not a
+        cached parse failure (the form reads as empty afterwards), so every
+        LATER ``all()`` is refused here: forgiving it would run the handler on
+        what's left and answer 200 for a save that dropped every field.
         """
         data = await super().all()
         if self._form_refused:

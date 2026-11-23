@@ -9,10 +9,80 @@ imports the code it reads.
 from __future__ import annotations
 
 import ast
+import atexit
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 _FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+# What a statement can sit in. A lambda or a comprehension holds expressions
+# only, so every ancestor of a statement is one of these.
+_STATEMENT_HOLDERS = (ast.stmt, ast.ExceptHandler, ast.match_case)
+
+# ``path -> (source, tree)``. One spec build reads a controller through six
+# extractors and the call follower (Synkronus: 8,735 parses of some 3,300
+# files); the tree depends on nothing but the text, so each file is parsed
+# once per content. Compared by content, not by mtime: a file rewritten
+# within one clock tick is still re-read.
+_PARSED: dict[Path, tuple[str, ast.Module]] = {}
+# Far above one build's file count; a long-lived process that keeps reading
+# new trees (a test session) starts over instead of growing without bound.
+_PARSED_LIMIT = 16384
+# The interpreter runs its cycle collector several times while it shuts down,
+# each time over everything still alive: with a build's three million AST
+# nodes that was four seconds of a twelve-second ``generate_openapi.py``. The
+# trees are only a cache, so they are dropped before that starts.
+atexit.register(_PARSED.clear)
+
+
+def _parse_source(path: Path) -> ast.Module:
+    """``path`` parsed — the same tree for the same text. Nothing in this
+    package changes a tree it reads, so the extractors can share one."""
+    source = path.read_text(encoding="utf-8")
+    cached = _PARSED.get(path)
+    if cached is not None and cached[0] == source:
+        return cached[1]
+    tree = ast.parse(source, filename=str(path))
+    if len(_PARSED) >= _PARSED_LIMIT:
+        _PARSED.clear()
+    _PARSED[path] = (source, tree)
+    return tree
+
+
+def _walk(node: ast.AST):
+    """``ast.walk``: the same nodes in the same order, without the two
+    generators it resumes per node (about 1.7x faster; the call follower
+    visits some twenty million nodes on Synkronus)."""
+    todo = deque((node,))
+    while todo:
+        node = todo.popleft()
+        for name in node._fields:
+            value = getattr(node, name, None)
+            if isinstance(value, ast.AST):
+                todo.append(value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        todo.append(item)
+        yield node
+
+
+def _statements(node: ast.AST):
+    """``node`` and every statement (``except`` handler, ``case``) under it,
+    in ``ast.walk`` order: the walk for a reader that only looks at
+    statements — imports, assignments, definitions — which need not visit
+    the expressions that make up nine nodes in ten."""
+    todo = deque((node,))
+    while todo:
+        node = todo.popleft()
+        for name in node._fields:
+            value = getattr(node, name, None)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, _STATEMENT_HOLDERS):
+                        todo.append(item)
+        yield node
 
 
 def _import_root(directory: Path) -> Path:
@@ -96,7 +166,7 @@ def _imports(tree: ast.Module, package: str) -> dict[str, tuple[str, str | None]
     bindings: dict[str, tuple[str, str | None]] = {}
     local: dict[str, tuple[str, str | None]] = {}
     top = set(map(id, _top_level(tree.body)))
-    for node in ast.walk(tree):
+    for node in _statements(tree):
         target = bindings if id(node) in top else local
         if isinstance(node, ast.Import):
             for alias in node.names:

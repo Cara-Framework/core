@@ -109,11 +109,13 @@ class QueuePurgeCommand(CommandBase):
         # Re-query: the ledger delete above may have freed tracker jobs that
         # were previously blocked by the db_job_id foreign key.
         deleted_tracker = 0
+        failed_tracker = 0
         for job in store.list_failed_jobs_older_than(cutoff=cutoff, queue=queue):
             identifier = job.get("public_id") or job.get("id")
             try:
                 deleted_tracker += store.delete_job(job["id"])
             except Exception as exc:  # reported below, sweep continues
+                failed_tracker += 1
                 Log.warning(
                     "queue:purge failed to delete tracker job %s: %s",
                     identifier,
@@ -147,7 +149,10 @@ class QueuePurgeCommand(CommandBase):
             )
 
         self.line("")
-        return 0
+        # A sweep that left rows it was asked to delete is not a success: the
+        # per-row errors above scroll away, the exit status is what a deploy
+        # script or a cron reads. It used to be 0 whatever failed.
+        return 1 if failed_tracker else 0
 
     def _purge_broker_dead_letter_queue(self) -> int | None:
         connection = None

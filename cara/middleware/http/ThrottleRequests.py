@@ -8,6 +8,7 @@ from contextlib import suppress
 from typing import Any
 
 import cara.facades as facades
+from cara.context import ExecutionContext
 from cara.exceptions import RateLimitConfigurationException, TooManyRequestsException
 from cara.http import Request, Response
 from cara.middleware.Middleware import Middleware
@@ -57,7 +58,13 @@ class ThrottleRequests(Middleware):
         if limit.unlimited:
             return await next_fn(request)
 
-        decision = facades.RateLimiter.attempt(limit)
+        # The spend is a synchronous Redis EVAL. Inline, one slow Redis
+        # round trip stalled every request on this worker's event loop; on a
+        # worker thread (context vars copied in) it stalls only this request.
+        # Outcomes are unchanged: an outage still raises the same 503 here.
+        decision = await ExecutionContext.run_in_thread(
+            facades.RateLimiter.attempt, limit
+        )
         self._count(decision)
         headers = self._headers(decision)
         if not decision.allowed:

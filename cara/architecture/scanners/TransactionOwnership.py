@@ -8,6 +8,12 @@ primitive only when the product manifest names that exact method.
 Cara's ``atomic()`` (``with atomic():``, ``@atomic()``, ``atomic().run``)
 opens the same transaction as ``DB.transaction()``, so it counts too.
 
+The receiver need not be the ``DB`` facade: a manager INJECTED into the class
+or function (``self.db.transaction()``, ``db.transaction()`` on a parameter,
+``connection.commit()``, a name resolved from the container as ``"DB"``, or a
+parameter annotated with a database/connection type) opens the same
+transaction and counts the same.
+
 Existing violations are counted per file in the exact, shrink-only
 ``seam_allowlists["transaction_ownership"]`` census.
 """
@@ -18,7 +24,13 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import (
+    IMPORT_NODE_TYPES,
+    nodes_of,
+    parse,
+    python_files,
+    relpath,
+)
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -75,6 +87,55 @@ def _call_name(node: ast.AST) -> str:
     return ""
 
 
+#: Receiver names that conventionally hold an injected database manager or
+#: connection (compared without leading underscores, case-insensitively).
+_DB_RECEIVER_NAMES = frozenset(
+    {
+        "db",
+        "database",
+        "connection",
+        "conn",
+        "db_manager",
+        "database_manager",
+        "connection_manager",
+        "db_connection",
+        "database_connection",
+    }
+)
+#: An annotation naming one of these types marks the annotated name a manager.
+_DB_ANNOTATION_TOKENS = ("DatabaseManager", "Connection", "ConnectionResolver")
+_CONTAINER_LOOKUPS = frozenset({"make", "resolve"})
+
+
+def _is_db_receiver_name(name: str) -> bool:
+    bare = name.lstrip("_").lower()
+    return (
+        bare in _DB_RECEIVER_NAMES
+        or bare.endswith(("_db", "_connection"))
+        or bare.startswith("db_")
+    )
+
+
+def _resolves_db(node: ast.AST) -> bool:
+    """``app().make("DB")`` / ``resolve("DB")`` / ``container.make("DB")``."""
+    if not isinstance(node, ast.Call) or not node.args:
+        return False
+    name = _call_name(node.func).rsplit(".", 1)[-1]
+    target = node.args[0]
+    return (
+        name in _CONTAINER_LOOKUPS
+        and isinstance(target, ast.Constant)
+        and target.value == "DB"
+    )
+
+
+def _annotated_db(annotation: ast.AST | None) -> bool:
+    if annotation is None:
+        return False
+    text = ast.unparse(annotation)
+    return any(token in text for token in _DB_ANNOTATION_TOKENS) or text == "DB"
+
+
 def _db_names(tree: ast.Module) -> set[str]:
     names = {"DB"}
     for node in tree.body:
@@ -85,7 +146,28 @@ def _db_names(tree: ast.Module) -> set[str]:
         for alias in node.names:
             if alias.name == "DB":
                 names.add(alias.asname or alias.name)
+    # Injected managers: parameters / attributes annotated with a database
+    # type, and names bound to a container lookup of ``"DB"``.
+    for node in nodes_of(tree, (ast.arg, ast.AnnAssign, ast.Assign)):
+        if isinstance(node, ast.arg) and _annotated_db(node.annotation):
+            names.add(node.arg)
+        elif isinstance(node, ast.AnnAssign) and (
+            _annotated_db(node.annotation)
+            or (node.value is not None and _resolves_db(node.value))
+        ):
+            names.add(_target_name(node.target))
+        elif isinstance(node, ast.Assign) and _resolves_db(node.value):
+            names.update(_target_name(target) for target in node.targets)
+    names.discard("")
     return names
+
+
+def _target_name(target: ast.AST) -> str:
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    return ""
 
 
 _ATOMIC_MODULES = frozenset({"cara.eloquent", "cara.eloquent.Atomic"})
@@ -94,7 +176,7 @@ _ATOMIC_MODULES = frozenset({"cara.eloquent", "cara.eloquent.Atomic"})
 def _atomic_names(tree: ast.Module) -> set[str]:
     """Local names bound to Cara's ``atomic`` (aliases included)."""
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes_of(tree, IMPORT_NODE_TYPES):
         if isinstance(node, ast.ImportFrom) and node.module in _ATOMIC_MODULES:
             for alias in node.names:
                 if alias.name == "atomic":
@@ -113,6 +195,17 @@ def _db_operation(
         return None
     parts = name.split(".")
     if any(part in db_names for part in parts) or "DB" in parts:
+        return operation
+    receiver = call.func.value if isinstance(call.func, ast.Attribute) else None
+    if receiver is None:
+        return None
+    if _resolves_db(receiver):
+        return operation
+    # The object the method is called on: ``self.db`` -> ``db``,
+    # ``db`` -> ``db``, ``self.db.connection("x")`` -> ``connection``.
+    owner = receiver.func if isinstance(receiver, ast.Call) else receiver
+    owner_name = _call_name(owner).rsplit(".", 1)[-1]
+    if owner_name and _is_db_receiver_name(owner_name):
         return operation
     return None
 

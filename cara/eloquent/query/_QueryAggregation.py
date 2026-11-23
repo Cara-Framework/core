@@ -207,7 +207,13 @@ def _qb_to_qmark(self):
 
     self.run_scopes()
     grammar = self.get_grammar()
-    sql = grammar.compile(self._action, qmark=True).to_sql()
+    # ``to_qmark()``, not ``to_sql()``: the display cleanup rewrites every
+    # ``,)`` in the statement to ``)`` — inside the caller's raw fragments
+    # too, so the EXECUTED form of ``where_raw("code = 'a,)b'")`` compared
+    # against ``'a)b'`` and ``regexp_replace(name, '[(,)]', '')`` ran with a
+    # different character class. A qmark statement holds no such artefact
+    # of its own (its values are placeholders).
+    sql = grammar.compile(self._action, qmark=True).to_qmark()
 
     self._bindings = grammar._bindings
 
@@ -228,7 +234,10 @@ def _qb_append_unions_sql(self, base_sql, qmark=False):
         cloned = deepcopy(child)
         cloned.run_scopes()
         child_grammar = cloned.get_grammar()
-        child_sql = child_grammar.compile(cloned._action, qmark=qmark).to_sql()
+        compiled = child_grammar.compile(cloned._action, qmark=qmark)
+        # The executed form keeps the caller's raw fragments byte for byte
+        # (see ``_qb_to_qmark``).
+        child_sql = compiled.to_qmark() if qmark else compiled.to_sql()
         kw = "UNION ALL" if all_flag else "UNION"
         parts.append(f"{kw} ({child_sql})")
         if qmark:
@@ -428,10 +437,16 @@ def _qb_exists(self):
     self._columns = (SelectExpression("1", raw=True),)
     self._limit = 1
     try:
-        result = self.new_connection().query(self.to_qmark(), self._bindings, results=1)
-    finally:
+        sql = self.to_qmark()
+    except BaseException:
+        # Compiling failed before the builder was reset: hand it back as it
+        # was. After a successful ``to_qmark()`` the builder IS reset, and
+        # restoring the caller's columns and limit there (the old
+        # ``finally``) leaked them into the next query of a reused builder.
         self._columns = saved_columns
         self._limit = saved_limit
+        raise
+    result = self.new_connection().query(sql, self._bindings, results=1)
     return result is not None and result != {}
 
 

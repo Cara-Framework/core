@@ -26,6 +26,16 @@ class CaraPythonLoggerAdapter(logging.Logger):
 
     def _get_category_for_library(self, library_name: str) -> str:
         """Map external library names to Cara categories."""
+        return self.category_for(library_name)
+
+    @staticmethod
+    def category_for(library_name: str) -> str:
+        """The Cara category of a third-party stdlib logger name.
+
+        A static mapping so the root bridge in ``PythonLoggerAdapter`` files a
+        CHILD logger's record (``pika.channel``) under the same category as
+        its library's own logger (``pika``).
+        """
         library_category_map = {
             # External Web Server & HTTP
             "uvicorn.error": "external.uvicorn",
@@ -88,11 +98,39 @@ class CaraPythonLoggerAdapter(logging.Logger):
     @property
     def _display_name(self) -> str:
         """Return a human-friendly name for the log module column."""
-        name = self._LIBRARY_DISPLAY_NAMES.get(self.library_name)
+        return self.display_name_for(self.library_name)
+
+    @classmethod
+    def display_name_for(cls, library_name: str) -> str:
+        """The module-column name of a third-party stdlib logger name."""
+        name = cls._LIBRARY_DISPLAY_NAMES.get(library_name)
         if name:
             return name
-        # Fallback: capitalize the root library name
-        return self.library_name.split(".")[0].capitalize()
+        # A child logger (``pika.channel``) shows its library's name.
+        name = cls._LIBRARY_DISPLAY_NAMES.get(library_name.split(".")[0])
+        if name:
+            return name
+        return library_name.split(".")[0].capitalize()
+
+    #: Library categories whose INFO is chatter, demoted to DEBUG.
+    _EXTERNAL_DEBUG_CATEGORIES = frozenset(
+        {"external.httpx", "external.uvicorn", "external.eloquent"}
+    )
+
+    @classmethod
+    def cara_level_for(cls, levelno: int, category: str) -> str:
+        """The Cara level name of a stdlib level number for one category."""
+        if levelno >= logging.ERROR:
+            cara_level = "error"
+        elif levelno >= logging.WARNING:
+            cara_level = "warning"
+        elif levelno >= logging.INFO:
+            cara_level = "info"
+        else:
+            cara_level = "debug"
+        if category in cls._EXTERNAL_DEBUG_CATEGORIES and cara_level == "info":
+            cara_level = "debug"
+        return cara_level
 
     def _log(
         self,
@@ -107,25 +145,7 @@ class CaraPythonLoggerAdapter(logging.Logger):
         if not self.isEnabledFor(level):
             return
 
-        # Convert Python logging level to Cara level
-        level_mapping = {
-            logging.DEBUG: "debug",
-            logging.INFO: "info",
-            logging.WARNING: "warning",
-            logging.ERROR: "error",
-            logging.CRITICAL: "error",
-        }
-
-        cara_level = level_mapping.get(level, "info")
-
-        # Override level for specific external categories that should be DEBUG
-        external_debug_categories = {
-            "external.httpx",
-            "external.uvicorn",
-            "external.eloquent",
-        }
-        if self.category in external_debug_categories and cara_level == "info":
-            cara_level = "debug"
+        cara_level = self.cara_level_for(level, self.category)
 
         # Format message with args
         if args:
