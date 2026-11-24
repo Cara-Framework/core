@@ -14,12 +14,26 @@ class CastRegistry:
 
     def __init__(self):
         self._casts: dict[str, type[BaseCast]] = {}
+        # A cast holds its parameters and nothing about a value, so one
+        # instance per definition serves every read: a cast built per
+        # attribute read was a third of what reading a model's column cost.
+        self._instances: dict[str, BaseCast | None] = {}
 
     def register(self, name: str, cast_class: type[BaseCast]) -> None:
         """Register a cast type."""
         self._casts[name] = cast_class
+        self._instances.clear()
 
     def get_cast_instance(self, cast_definition: str) -> BaseCast | None:
+        """The cast a definition names, built once (``_build``)."""
+        try:
+            return self._instances[cast_definition]
+        except KeyError:
+            cast = self._build(cast_definition)
+            self._instances[cast_definition] = cast
+            return cast
+
+    def _build(self, cast_definition: str) -> BaseCast | None:
         """
         Create cast instance from definition string.
 

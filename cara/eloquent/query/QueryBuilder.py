@@ -279,6 +279,7 @@ class QueryBuilder(ObservesEvents):
     _map_related = _QueryResults._qb_map_related
     all = _QueryResults._qb_all
     get = _QueryResults._qb_get
+    get_rows = _QueryResults._qb_get_rows
     new_connection = _QueryResults._qb_new_connection
     get_connection = _QueryResults._qb_get_connection
     without_eager = _QueryResults._qb_without_eager

@@ -179,48 +179,27 @@ def _model_getattr(self, attribute):
         mixed: Could be anything that a method can return.
     """
 
-    # Check for @accessor decorated methods first
-    accessor_method_name = f"get_{attribute}_attribute"
-    # Use direct __dict__ access to avoid recursion
-    if accessor_method_name in self.__class__.__dict__:
-        accessor_method = self.__class__.__dict__[accessor_method_name]
-        if hasattr(accessor_method, "_is_accessor"):
-            # Dirty first, then stored, then None for virtual attributes.
-            raw_value = self.get_raw_attribute(attribute)
+    # An accessor (decorated with @accessor, or only named like one) first;
+    # the class's own ``__dict__``, never a lookup that could recurse here.
+    accessor_method = type(self).__dict__.get(f"get_{attribute}_attribute")
+    if accessor_method is not None:
+        # Dirty first, then stored, then None for virtual attributes.
+        return accessor_method(self, self.get_raw_attribute(attribute))
 
-            # Call the accessor with the raw value (bound method call)
-            return accessor_method(self, raw_value)
-
-    # Check for non-decorated accessor methods (Laravel-style naming convention)
-    non_decorated_accessor = f"get_{attribute}_attribute"
-    if non_decorated_accessor in self.__class__.__dict__:
-        accessor_method = self.__class__.__dict__[non_decorated_accessor]
-        # Same precedence, same owner.
-        raw_value = self.get_raw_attribute(attribute)
-
-        # Call the accessor method with raw value
-        return accessor_method(self, raw_value)
-
-    if (
-        "__dirty_attributes__" in self.__dict__
-        and attribute in self.__dict__["__dirty_attributes__"]
-    ):
-        # Always apply cast if defined for dirty attributes too
-        if attribute in self.__casts__:
-            return self.get_dirty_value(attribute)
+    # A column read is the hot path of every walk over rows: the two stores are
+    # read once each, and the date list is built only for an uncast column.
+    state = self.__dict__
+    dirty = state.get("__dirty_attributes__")
+    if dirty is not None and attribute in dirty:
         return self.get_dirty_value(attribute)
 
-    if "__attributes__" in self.__dict__ and attribute in self.__dict__["__attributes__"]:
-        # Always apply cast if defined, regardless of date type
-        if attribute in self.__casts__:
-            return self.get_value(attribute)
-        elif attribute in self.get_dates():
-            return (
-                self.get_new_date(self.get_value(attribute))
-                if self.get_value(attribute)
-                else None
-            )
-        return self.get_value(attribute)
+    stored = state.get("__attributes__")
+    if stored is not None and attribute in stored:
+        value = self.get_value(attribute)
+        # A cast owns its column, whatever its date type.
+        if attribute in self.__casts__ or attribute not in self.get_dates():
+            return value
+        return self.get_new_date(value) if value else None
 
     if attribute in self.__passthrough__:
         # Special warning for common dict-style usage mistake

@@ -66,12 +66,10 @@ class ModelMeta(type):
             cls._scopes[cls] = cls._class_scopes
         return cls
 
-    def __getattribute__(cls: type, attribute: str) -> Any:
-        try:
-            return super().__getattribute__(attribute)
-        except AttributeError:
-            pass
-
+    def __getattr__(cls: type, attribute: str) -> Any:
+        # Reached only when the normal lookup fails. As ``__getattribute__`` it
+        # ran for every class attribute a model read touches (``__dict__``,
+        # ``__dates__``): tens of millions of calls in one walk of 100k rows.
         if not attribute.startswith("_") and _is_delegated(cls, attribute):
             try:
                 return getattr(cls(), attribute)

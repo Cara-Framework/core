@@ -16,6 +16,8 @@ from cara.exceptions import (
 from cara.facades import Log
 from cara.support import Collection
 
+from ..models.ReadRow import read_rows
+
 QueryBuilder: type
 
 
@@ -491,6 +493,15 @@ def _qb_get(self, selects: list[str] | None = None) -> Any:
     result = self.new_connection().query(self.to_qmark(), self._bindings)
 
     return self.prepare_result(result, collection=True)
+
+
+def _qb_get_rows(self, *columns: str) -> list[Any]:
+    """The rows for READING only, each standing in for its model
+    (``ReadRow``): the named columns and nothing else. For a walk over many
+    rows; whatever saves, fires events or loads relations reads ``get``."""
+    self.select(*columns)
+    rows = self.new_connection().query(self.to_qmark(), self._bindings)
+    return read_rows(type(self._model), rows)
 
 
 def _qb_new_connection(self) -> Any:

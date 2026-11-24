@@ -45,6 +45,8 @@ class IntCast(BaseCast):
         deliberate asymmetry has a seam to land in — but until then they may
         not be two copies that can drift apart.
         """
+        if type(value) is int:  # every integer column the driver reads
+            return value
         if value is None or _is_blank(value):
             return None
         if isinstance(value, bool):
